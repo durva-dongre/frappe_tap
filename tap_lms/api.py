@@ -1015,6 +1015,7 @@ def verify_otp():
 @frappe.whitelist(allow_guest=True)
 def create_teacher_web():
     try:
+
         frappe.flags.ignore_permissions = True
         data = frappe.request.get_json()
 
@@ -1027,14 +1028,16 @@ def create_teacher_web():
         for field in required_fields:
             if field not in data:
                 return {"status": "failure", "message": f"Missing required field: {field}"}
+        
 
         # Check if the phone number is verified
         verification = frappe.db.get_value("OTP Verification",
             {"phone_number": data['phone'], "verified": 1}, "name")
         if not verification:
             return {"status": "failure", "message": "Phone number is not verified. Please verify your phone number first."}
-
-        # Check if the phone number already exists in Frappe
+        
+       
+        # Check for duplicate teacher i.e if the phone number already exists in Frappe
         existing_teacher = frappe.db.get_value("Teacher", {"phone_number": data['phone']}, "name")
         if existing_teacher:
             return {
@@ -1042,14 +1045,16 @@ def create_teacher_web():
                 "message": "A teacher with this phone number already exists",
                 "existing_teacher_id": existing_teacher
             }
-
+        
         # Get the school_id based on the School_name
         school = frappe.db.get_value("School", {"name1": data['School_name']}, "name")
         if not school:
             return {"status": "failure", "message": "School not found"}
-
+        
         # Get the appropriate model for the school
         model_name = get_model_for_school(school)
+    
+        frappe.logger().error((f"Model Name: {model_name}"))
 
         # Create new Teacher document
         new_teacher = frappe.get_doc({
@@ -1061,16 +1066,22 @@ def create_teacher_web():
             "school_id": school
         })
 
+        frappe.logger().error((f"Creating teacher inside frappe: {new_teacher.as_dict()}"))
         new_teacher.insert(ignore_permissions=True)
-
+        
+        # ! write ALGO from here
         # Get the school name
         school_name = frappe.db.get_value("School", school, "name1")
-
+        frappe.logger().error("School Name: " + school_name)
         # Get the language ID from TAP Language
         language_id = frappe.db.get_value("TAP Language", data.get('language'), "glific_language_id")
+        frappe.logger().error("Language ID: " + language_id)
+
         if not language_id:
+            frappe.logger().error(f"Language ID not found for {data.get('language')} ; Defaulting to English")
             language_id = frappe.db.get_value("TAP Language", {"language_name": "English"}, "glific_language_id")  # Default to English if not found
 
+        frappe.logger().error("🚀Starting Glific contact creation......\n")
         # Try to create contact in Glific
         glific_contact = create_contact(
             data['firstName'],
@@ -1080,13 +1091,23 @@ def create_teacher_web():
             language_id
         )
 
+        frappe.logger().error(f"✅Gliffic contact: {glific_contact}\n")
+
         # If creation fails, try to get existing contact
         if not glific_contact or 'id' not in glific_contact:
+            frappe.logger().error(f"Failed to create Glific contact for {data['firstName']}. Trying to get existing contact.\n")
             glific_contact = get_contact_by_phone(data['phone'])
+            frappe.logger().error(f"✅Existing Glific contact found: {glific_contact}\n")
+        
 
+
+        # continues to create teacher in glific by using the fetched glific contact
         if glific_contact and 'id' in glific_contact:
+            frappe.logger().error(f"✅Glific contact and ID found. Associating with teacher: {glific_contact['id']}")
             new_teacher.glific_id = glific_contact['id']
             new_teacher.save(ignore_permissions=True)
+
+            # frappe.logger().error("🚀 Starting Enqeue Glific Actions......")
 
             # Enqueue Glific actions (optin and flow start) as a background job
             enqueue_glific_actions(
@@ -1098,6 +1119,8 @@ def create_teacher_web():
                 data.get('language', ''),
                 model_name
             )
+
+            # frappe.logger().error("✅Completed Enqeue Glific Actions......")
 
             frappe.db.commit()
             return {
@@ -1253,7 +1276,7 @@ def get_course_level_api():
 
 
 
-
+@frappe.whitelist(allow_guest=True)
 def get_model_for_school(school_id):
     today = frappe.utils.today()
     
