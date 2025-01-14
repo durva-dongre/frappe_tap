@@ -303,7 +303,7 @@ def create_contact_old(name, phone):
 
 #! This function is used to initiate a Glific flow for a contact.
 def start_contact_flow(flow_id, contact_id, default_results):
-    frappe.logger().error(f"\n\n\nAttempting to start Glific flow. Flow ID: {flow_id}, Contact ID: {contact_id}, Default Results: {default_results}\n\n\n")
+    frappe.logger().error(f"\n\n\n----ATTEMPTING to start Glific flow. \nFlow ID: {flow_id}, \nContact ID: {contact_id}, \nDefault Results: {default_results}-----\n\n\n")
     # - flow_id: The ID of the Glific messaging flow to start (retrieved from Glific Flow doctype)
     # - contact_id: ID of the contact to start the flow for
     # - default_results: Initial data/variables for the flow
@@ -350,7 +350,7 @@ def start_contact_flow(flow_id, contact_id, default_results):
         if success:
             # frappe.logger().info(f"Glific flow started successfully")
             #! remove the below logging later, this is used for debugging purpose
-            frappe.logger().error(f"Glific flow started successfully")
+            frappe.logger().error(f"\nGlific flow started successfully🚀✅\n")
             return True
         else:
             frappe.logger().error(f"Failed to start Glific flow. Response: {data}")
