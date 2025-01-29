@@ -1,9 +1,13 @@
+# All these are APIs in glific
+# Handles communication between Frappe and Glific's API
+# Think of it as "Frappe reaching out to Glific"
+
 import frappe
 import requests
 import json
 from datetime import datetime, timedelta,timezone
 from dateutil.parser import isoparse
-
+import time
 
 
 def get_glific_settings():
@@ -12,6 +16,7 @@ def get_glific_settings():
 
 def get_glific_auth_headers():
     settings = get_glific_settings()
+    frappe.logger().error(f"\n\n Settings: {settings}\n\n")
     current_time = datetime.now(timezone.utc)
     
     # Convert token_expiry_time to datetime if it's a string
@@ -51,6 +56,8 @@ def get_glific_auth_headers():
             
             frappe.db.commit()
             
+            frappe.logger().error(f"\n\n Access Token: {data['access_token']}\n\nToken Expiry Time: {token_expiry_time}\n\n")
+
             return {
                 "authorization": data["access_token"],
                 "Content-Type": "application/json"
@@ -68,7 +75,7 @@ def get_glific_auth_headers():
 
 
 
-def create_contact(name, phone, school_name, model_name, language_id):
+def create_contact(name, phone, school_name, model_name, language_id, batch_id):
     settings = get_glific_settings()
     url = f"{settings.api_url}/api"
     headers = get_glific_auth_headers()
@@ -89,9 +96,16 @@ def create_contact(name, phone, school_name, model_name, language_id):
             "value": name,
             "type": "string",
             "inserted_at": datetime.now(timezone.utc).isoformat()
+        },
+        "batch_id": {
+            "value": batch_id,
+            "type": "string",
+            "inserted_at": datetime.now(timezone.utc).isoformat()
         }
 
     }
+
+
 
     payload = {
         "query": "mutation createContact($input:ContactInput!) { createContact(input: $input) { contact { id name phone } errors { key message } } }",
@@ -112,6 +126,7 @@ def create_contact(name, phone, school_name, model_name, language_id):
 
     try:
         response = requests.post(url, json=payload, headers=headers)
+        # response.raise_for_status()  # This will raise an exception for non-200 status codes
         frappe.logger().info(f"Glific API response status: {response.status_code}")
         frappe.logger().info(f"Glific API response content: {response.text}")
 
@@ -134,57 +149,100 @@ def create_contact(name, phone, school_name, model_name, language_id):
         frappe.logger().error(f"Exception occurred while creating Glific contact: {str(e)}", exc_info=True)
         return None
 
+#! Fetch a contact using phone number (with retries)
 def get_contact_by_phone(phone):
     settings = get_glific_settings()
     url = f"{settings.api_url}/api"
     headers = get_glific_auth_headers()
-    payload = {
-        "query": """
-        query contactByPhone($phone: String!) {
-          contactByPhone(phone: $phone) {
-            contact {
-              id
-              name
-              optinTime
-              optoutTime
-              phone
-              bspStatus
-              status
-              lastMessageAt
-              fields
-              settings
-            }
-          }
+    
+    query = """
+    query contactByPhone($phone: String!) {
+      contactByPhone(phone: $phone) {
+        contact {
+          id
+          name
+          optinTime
+          optoutTime
+          phone
+          bspStatus
+          status
+          lastMessageAt
+          fields
+          settings
         }
-        """,
+      }
+    }
+    """
+    
+    payload = {
+        "query": query,
         "variables": {
             "phone": phone
         }
     }
 
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        
-        if "errors" in data:
-            frappe.logger().error(f"Glific API Error in getting contact by phone: {data['errors']}")
-            return None
-        
-        contact = data.get("data", {}).get("contactByPhone", {}).get("contact")
-        if contact:
-            return contact
-        else:
-            frappe.logger().error(f"Contact not found for phone: {phone}")
-            return None
-    except requests.exceptions.RequestException as e:
-        frappe.logger().error(f"Error calling Glific API to get contact by phone: {str(e)}")
-        return None
+    max_retries = 3  # maximum 3 retries 
+    retry_delay = 2  # 2-seconds delay between retries
+    
+    for attempt in range(max_retries):
+        try:
+            frappe.logger().error(f"\n\nAttempting to fetch Glific contact (Attempt {attempt + 1}/{max_retries})\n\n")
+            
+            # Add timeout to the request
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
 
+            if response.status_code == 200:
+                frappe.logger().error(f"\n\nResponse Status: {response.status_code}\n\n")
+                data = response.json()
+                
+                frappe.logger().error(f"\n\nData from response 200: {data}\n\n")
+
+                if "errors" in data:
+                    frappe.logger().error(f"\n\n❌Glific API Error in getting contact by phone: {data['errors']}")
+                    return None
+                
+                contact = data.get("data", {}).get("contactByPhone", {}).get("contact")
+                if contact:
+                    frappe.logger().error(f"\n\n✅Contact found by phone: {contact}\n")
+                    return contact
+                else:
+                    frappe.logger().error(f"\n\n😈Existing Glific contact: None\n")
+                    return None
+                    
+            else:
+                frappe.logger().error(f"\n\n❌Unexpected status code: {response.status_code}")
+                if attempt < max_retries - 1:  # Don't sleep on the last attempt
+                    time.sleep(retry_delay)
+                # Continues until success or max retries reached
+                continue
+
+        except requests.exceptions.Timeout:
+            frappe.logger().error(f"\n\nTimeout error on attempt {attempt + 1}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            continue
+            
+        except requests.exceptions.RequestException as e:
+            frappe.logger().error(f"\n\nNetwork error on attempt {attempt + 1}: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            continue
+            
+        except Exception as e:
+            frappe.logger().error(f"\nUnexpected error: {str(e)}")
+            return None
+
+
+
+# Function takes two parameters: phone number and name of the contact
 def optin_contact(phone, name):
     settings = get_glific_settings()
     url = f"{settings.api_url}/api"
     headers = get_glific_auth_headers()
+    
+    # The payload includes a GraphQL mutation to opt in a contact
+    # It requests specific fields in return: id, phone, name, lastMessageAt, optinTime, and bspStatus
+    # Also includes error handling fields
     payload = {
         "query": """
         mutation optinContact($phone: String!, $name: String) {
@@ -210,6 +268,8 @@ def optin_contact(phone, name):
         }
     }
 
+    frappe.logger().error(f"\n\nAttempting to opt in Glific contact. Name: {name}, Phone: {phone}\n\n")
+
     try:
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
@@ -220,14 +280,17 @@ def optin_contact(phone, name):
             return False
         
         contact = data.get("data", {}).get("optinContact", {}).get("contact")
+        frappe.logger().error(f"\n\nContact OPTED: {contact}\n\n")
         if contact:
-            frappe.logger().info(f"Contact opted in successfully: {contact}")
+            # frappe.logger().info(f"\nContact opted in successfully: {contact}\n")
+            # remove the below logging later, this is used for debugging purpose
+            frappe.logger().error(f"\nContact opted in successfully: {contact}\n")
             return True
         else:
-            frappe.logger().error(f"Failed to opt in contact. Response: {data}")
+            frappe.logger().error(f"\nFailed to opt in contact. Response: {data}\n")
             return False
     except requests.exceptions.RequestException as e:
-        frappe.logger().error(f"Error calling Glific API to opt in contact: {str(e)}")
+        frappe.logger().error(f"\nError calling Glific API to opt in contact: {str(e)}\n")
         return False
 
 
@@ -281,11 +344,18 @@ def create_contact_old(name, phone):
 
 
 
-
+#! This function is used to initiate a Glific flow for a contact.
 def start_contact_flow(flow_id, contact_id, default_results):
+    frappe.logger().error(f"\n\n\n----ATTEMPTING to start Glific flow. \nFlow ID: {flow_id}, \nContact ID: {contact_id}, \nDefault Results: {default_results}-----\n\n\n")
+    # - flow_id: The ID of the Glific messaging flow to start (retrieved from Glific Flow doctype)
+    # - contact_id: ID of the contact to start the flow for
+    # - default_results: Initial data/variables for the flow
     settings = get_glific_settings()
     url = f"{settings.api_url}/api"
     headers = get_glific_auth_headers()
+
+    # The payload includes a GraphQL mutation to start a flow
+    # It expects a success boolean and potential errors in response
     payload = {
         "query": """
         mutation startContactFlow($flowId: ID!, $contactId: ID!, $defaultResults: Json!) {
@@ -307,19 +377,27 @@ def start_contact_flow(flow_id, contact_id, default_results):
 
     try:
         response = requests.post(url, json=payload, headers=headers)
+        frappe.logger().error(f"\n\n\nGlific API response status: {response}\n\n\n")
         response.raise_for_status()
         data = response.json()
         
+        frappe.logger().error(f"\n\nData: {data}\n\n")
+
         if "errors" in data:
             frappe.logger().error(f"Glific API Error in starting flow: {data['errors']}")
             return False
         
+        # Safely extracts success status from response
         success = data.get("data", {}).get("startContactFlow", {}).get("success")
+        frappe.logger().error(f"\nSafely extracts success status from response:\n\nSuccess: {success}\n\n")
         if success:
+            #! remove the below logging later, this is used for debugging purpose
+            frappe.logger().error(f"\nGlific flow started successfully🚀✅\n")
             return True
         else:
             frappe.logger().error(f"Failed to start Glific flow. Response: {data}")
             return False
+
     except requests.exceptions.RequestException as e:
         frappe.logger().error(f"Error calling Glific API to start flow: {str(e)}")
         return False
