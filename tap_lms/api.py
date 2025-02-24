@@ -1389,3 +1389,64 @@ def get_model_for_school(school_id):
 
     return model_name
 
+# ! API to fetch whatsapp keyword based on user type
+@frappe.whitelist(allow_guest=True)
+def get_whatsapp_keyword():
+    try:
+        # Get request data
+        data = frappe.request.get_json()
+
+        #! Validate API key 
+        if not data or 'api_key' not in data or not authenticate_api_key(data['api_key']):
+            frappe.response.http_status_code = 401
+            return {
+                "status": "failure",
+                "message": "Invalid API key"
+                }
+        user_type = data.get('user_type', 'teacher')  # Default to 'teacher' if not specified (since currently we only have teacher registration)
+        
+        #! below can be commented out since currently we are only dealing with teacher registration
+        # Validate user_type
+        valid_user_types = ['teacher', 'student', 'admin']
+        if user_type not in valid_user_types:
+            frappe.response.http_status_code = 400
+            return {
+                "status": "failure", 
+                "message": f"Invalid user_type. Must be one of {valid_user_types}"
+            }
+        # ! fn is calling succesfully when I removed api_key param from body and it returned "Invalid API key"
+        #! also invalid user_type error is working fine
+        #! ------------------------------------------------------------```commented out``` ends here
+            
+        use_case = data.get('use_case', 'teacher_failed')  # Default to 'teacher_failed' if not specified in the request body
+            
+        # Get keyword from WhatsApp Keywords doctype
+        keyword = frappe.get_value("WhatsApp Keywords", 
+            {
+                "user_type": user_type,
+                "use_case": use_case,
+                "is_active": 1,
+            }, 
+            "keyword"   
+        )
+        
+        if not keyword:
+            frappe.response.http_status_code = 404
+            return {
+                "status": "failure",
+                "message": f"No WhatsApp keyword found for user type: {user_type}"
+            }
+        
+        frappe.response.http_status_code = 200
+        return {
+            "status": "success",
+            "keyword": keyword
+        }
+            
+    except Exception as e:
+        frappe.log_error(f"WhatsApp Keyword Error: {str(e)}")
+        frappe.response.http_status_code = 500
+        return {
+            "status": "error",
+            "message": str(e)
+        }
