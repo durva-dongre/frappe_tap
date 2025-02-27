@@ -1021,8 +1021,9 @@ def create_teacher_web():
         if 'api_key' not in data or not authenticate_api_key(data['api_key']):
             return {"status": "failure", "message": "Invalid API key"}
 
-        # Validate required fields - removed batch_id since we'll get it from school
-        required_fields = ['firstName', 'phone', 'School_name']
+        # Validate required fields
+        #! added batch_id to the required fields
+        required_fields = ['firstName', 'phone', 'School_name','batch_id']
         for field in required_fields:
             if field not in data:
                 return {"status": "failure", "message": f"Missing required field: {field}"}
@@ -1046,21 +1047,6 @@ def create_teacher_web():
         school = frappe.db.get_value("School", {"name1": data['School_name']}, "name")
         if not school:
             return {"status": "failure", "message": "School not found"}
-        
-        ########################################################################!
-
-        # Get batch_id using get_active_batch_for_school function
-        batch_id = get_active_batch_for_school(school)
-        frappe.logger().error(f"\n\n✅ Active Batch ID fetched from school: {batch_id}\n\n")
-
-        if not batch_id:
-            return {"status": "failure", "message": "No Active Batch found for this School ❌", "school": school, "batch_id": batch_id}
-        
-        # Add batch_id to data dictionary for use in Glific contact creation/update
-        data['batch_id'] = batch_id
-
-        ########################################################################!
-        
         
         school_name = frappe.db.get_value("School", school, "name1")
         frappe.logger().error("\nSchool Name: " + school_name)
@@ -1114,9 +1100,9 @@ def create_teacher_web():
                     "inserted_at": frappe.utils.now_datetime().isoformat()
                 },
                 "batch_id": {
-                    "value": data['batch_id'], #! Using batch_id from get_active_batch_for_school fn.
+                    "value": batch_id, #! Using batch_id from request data
                     "type": "string",
-                    "inserted_at": frappe.utils.now_datetime().isoformat()
+                    "inserted_at": datetime.now(timezone.utc).isoformat()
                 }
             }
 
@@ -1133,8 +1119,13 @@ def create_teacher_web():
 
             if update_success:
                 # Fetch the updated contact
-                glific_contact = get_contact_by_phone(data['phone'])
+                # glific_contact = get_contact_by_phone(data['phone'])
                 frappe.logger().error(f"\n\n✅ Successfully updated Glific contact: {glific_contact}\n\n")
+                return {
+                    "status": "success",
+                    "message": "Successfully updated existing Glific contact",
+                    "glific_contact_id": glific_contact['id']
+                }
             else:
                 frappe.logger().error(f"\n\n❌ Failed to update Glific contact\n\n")
                 return {
@@ -1150,7 +1141,7 @@ def create_teacher_web():
                 school_name,
                 model_name,
                 language_id,
-                data['batch_id']       #! Using batch_id from request data to create a contact in glific (if batch_id is not required for glific contact remove it from here also )
+                data['batch_id']        #! Using batch_id from request data to create a contact in glific
             )
             
             if not glific_contact or 'id' not in glific_contact:
@@ -1398,35 +1389,3 @@ def get_model_for_school(school_id):
 
     return model_name
 
-
-#! funciton to get the batch ID using a school
-#? School -> Batch Onboarding -> Batch -> Batch ID 
-@frappe.whitelist(allow_guest=True)
-def get_active_batch_for_school(school_id):
-    current_date = getdate(today())
-    
-    # Get active batch onboarding for the school
-    active_batch = frappe.get_all( 
-        "Batch onboarding", 
-        filters={ 
-            "school": school_id, 
-            "batch": ["in", frappe.get_all("Batch",  
-                filters={ 
-                    "start_date": ["<=", current_date], 
-                    "end_date": [">=", current_date], 
-                    "active": 1 
-                }, 
-                pluck="name" 
-            )] 
-        }, 
-        fields=["batch"],  # This is the correct field name
-        order_by="creation desc",
-        limit=1 
-    )
-    
-    if active_batch:
-        # Get the batch_id from the Batch doctype using the batch reference
-        batch_id = frappe.db.get_value("Batch", active_batch[0].batch, "batch_id")
-        frappe.logger().error(f"\n\n🦑 Active Batch ID fetched from school: {batch_id}\n\n")
-        return batch_id
-    return None

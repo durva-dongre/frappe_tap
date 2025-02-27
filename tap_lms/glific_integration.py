@@ -98,7 +98,7 @@ def create_contact(name, phone, school_name, model_name, language_id, batch_id):
             "inserted_at": datetime.now(timezone.utc).isoformat()
         },
         "batch_id": {
-            "value": batch_id, #! newly added
+            "value": batch_id,
             "type": "string",
             "inserted_at": datetime.now(timezone.utc).isoformat()
         }
