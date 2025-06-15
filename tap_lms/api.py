@@ -41,14 +41,19 @@ def get_active_batch_for_school(school_id):
     )
 
     if active_batch_onboardings:
-        # Return batch_id from the Batch doctype
+        # Return both batch name and batch_id
         batch_name = active_batch_onboardings[0].batch
         batch_id = frappe.db.get_value("Batch", batch_name, "batch_id")
-        return batch_id
+        return {
+            "batch_name": batch_name,
+            "batch_id": batch_id
+        }
 
     frappe.logger().error(f"No active batch found for school {school_id}")
-    return ""  # Return empty string if no batch found, as batch_id is mandatory
-
+    return {
+        "batch_name": None,
+        "batch_id": "no_active_batch_id"
+    }
 
 
 
@@ -1096,7 +1101,10 @@ def create_teacher_web():
             language_id = frappe.db.get_value("TAP Language", {"language_name": "English"}, "glific_language_id")  # Default to English if not found
 
         # Get the active batch ID for this school
-        batch_id = get_active_batch_for_school(school)
+        batch_info = get_active_batch_for_school(school)
+        batch_id = batch_info["batch_id"]
+        batch_name = batch_info["batch_name"]
+
         if not batch_id:
             frappe.logger().warning(f"No active batch found for school {school}. Using empty string for batch_id.")
             batch_id = ""  # Fallback to empty string if no batch found
@@ -1131,7 +1139,9 @@ def create_teacher_web():
                 school,
                 school_name,
                 data.get('language', ''),
-                model_name
+                model_name,
+                batch_name,
+                batch_id
             )
             
             frappe.db.commit()

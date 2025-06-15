@@ -1,0 +1,122 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-04-19 13:24:23.949487",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "student",
+  "content_type",
+  "content",
+  "scheduled_time",
+  "delivery_status",
+  "adapted_parameters",
+  "glific_flow_id",
+  "delivery_attempt_count",
+  "effectiveness_rating",
+  "follow_up_scheduled",
+  "student_selected",
+  "project_related",
+  "peer_interaction_component"
+ ],
+ "fields": [
+  {
+   "fieldname": "student",
+   "fieldtype": "Link",
+   "label": "Student",
+   "options": "Student"
+  },
+  {
+   "fieldname": "content_type",
+   "fieldtype": "Select",
+   "label": "Content Type",
+   "options": "Course Module\nCourse Chapter\nCourse Lesson\nOnboardingStage"
+  },
+  {
+   "fieldname": "content",
+   "fieldtype": "Dynamic Link",
+   "label": "Content",
+   "options": "content_type"
+  },
+  {
+   "fieldname": "scheduled_time",
+   "fieldtype": "Datetime",
+   "label": "Scheduled Time"
+  },
+  {
+   "fieldname": "delivery_status",
+   "fieldtype": "Select",
+   "label": "Delivery Status",
+   "options": "scheduled\nsent\nfailed\nresponded"
+  },
+  {
+   "fieldname": "adapted_parameters",
+   "fieldtype": "JSON",
+   "label": "Adapted Parameters"
+  },
+  {
+   "fieldname": "glific_flow_id",
+   "fieldtype": "Data",
+   "label": "Glific flow id"
+  },
+  {
+   "fieldname": "delivery_attempt_count",
+   "fieldtype": "Int",
+   "label": "Delivery Attempt Count"
+  },
+  {
+   "fieldname": "effectiveness_rating",
+   "fieldtype": "Data",
+   "label": "Effectiveness Rating"
+  },
+  {
+   "fieldname": "follow_up_scheduled",
+   "fieldtype": "Datetime",
+   "label": "Follow_up Scheduled"
+  },
+  {
+   "default": "0",
+   "fieldname": "student_selected",
+   "fieldtype": "Check",
+   "label": "Student Selected"
+  },
+  {
+   "fieldname": "project_related",
+   "fieldtype": "Link",
+   "label": "Project Related",
+   "options": "ProjectChallenge"
+  },
+  {
+   "default": "0",
+   "fieldname": "peer_interaction_component",
+   "fieldtype": "Check",
+   "label": "Peer Interaction Component"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2025-04-21 13:07:53.141336",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "ContentDeliverySchedule",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

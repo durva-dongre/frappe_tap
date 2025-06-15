@@ -463,3 +463,458 @@ def update_student_glific_ids(batch_size=100):
 
     frappe.db.commit()
     return len(students)
+
+
+
+def check_glific_group_exists(group_label):
+    """Check if a group with the given label already exists in Glific"""
+    settings = get_glific_settings()
+    url = f"{settings.api_url}/api"
+    headers = get_glific_auth_headers()
+
+    payload = {
+        "query": """
+        query groups($filter: GroupFilter, $opts: Opts) {
+          groups(filter: $filter, opts: $opts) {
+            id
+            label
+          }
+        }
+        """,
+        "variables": {
+            "filter": {
+                "label": group_label
+            },
+            "opts": {}
+        }
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        if "errors" in data:
+            frappe.logger().error(f"Glific API Error in checking group: {data['errors']}")
+            return None
+
+        groups = data.get("data", {}).get("groups", [])
+        if groups:
+            return groups[0]  # Return the first matching group
+        return None
+    except Exception as e:
+        frappe.logger().error(f"Error checking Glific group: {str(e)}")
+        return None
+
+def create_glific_group(label, description=""):
+    """Create a new group in Glific"""
+    settings = get_glific_settings()
+    url = f"{settings.api_url}/api"
+    headers = get_glific_auth_headers()
+
+    payload = {
+        "query": """
+        mutation createGroup($input: GroupInput!) {
+          createGroup(input: $input) {
+            group {
+              id
+              label
+              description
+            }
+            errors {
+              key
+              message
+            }
+          }
+        }
+        """,
+        "variables": {
+            "input": {
+                "label": label,
+                "description": description
+            }
+        }
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        if "errors" in data:
+            frappe.logger().error(f"Glific API Error in creating group: {data['errors']}")
+            return None
+
+        if "data" in data and "createGroup" in data["data"]:
+            if "errors" in data["data"]["createGroup"] and data["data"]["createGroup"]["errors"]:
+                errors = data["data"]["createGroup"]["errors"]
+                frappe.logger().error(f"Glific API Error in creating group: {errors}")
+                return None
+
+            if "group" in data["data"]["createGroup"]:
+                return data["data"]["createGroup"]["group"]
+
+        frappe.logger().error(f"Unexpected response structure: {data}")
+        return None
+    except Exception as e:
+        frappe.logger().error(f"Error creating Glific group: {str(e)}")
+        return None
+
+def create_or_get_glific_group_for_batch(batch_id):
+    """Create a Glific group for a backend onboarding batch or get existing one"""
+    # Get the batch document
+    batch = frappe.get_doc("Backend Student Onboarding", batch_id)
+
+    # Check if we already have a mapping for this batch
+    existing_mapping = frappe.get_all("GlificContactGroup",
+                                   filters={"backend_onboarding_set": batch_id},
+                                   fields=["name", "group_id", "label"])
+
+    if existing_mapping:
+        return existing_mapping[0]
+
+    # Derive group label from batch name
+    group_label = f"Set: {batch.set_name}"
+
+    # Check if this group already exists in Glific
+    existing_group = check_glific_group_exists(group_label)
+
+    if existing_group:
+        # Group exists, create mapping
+        glific_group = frappe.new_doc("GlificContactGroup")
+        glific_group.group_id = existing_group["id"]
+        glific_group.label = existing_group["label"]
+        glific_group.description = f"Auto-created for backend onboarding batch {batch.set_name}"
+        glific_group.backend_onboarding_set = batch_id
+        glific_group.insert()
+        return {
+            "group_id": existing_group["id"],
+            "label": existing_group["label"]
+        }
+
+    # Group doesn't exist, create it in Glific
+    new_group = create_glific_group(group_label, f"Students from batch {batch.set_name}")
+
+    if new_group:
+        # Create mapping
+        glific_group = frappe.new_doc("GlificContactGroup")
+        glific_group.group_id = new_group["id"]
+        glific_group.label = new_group["label"]
+        glific_group.description = f"Auto-created for backend onboarding batch {batch.set_name}"
+        glific_group.backend_onboarding_set = batch_id
+        glific_group.insert()
+        return {
+            "group_id": new_group["id"],
+            "label": new_group["label"]
+        }
+
+    # Failed to create group
+    return None
+
+def add_contact_to_group(contact_id, group_id):
+    """Add a single contact to a single group"""
+    if not contact_id or not group_id:
+        return False
+
+    settings = get_glific_settings()
+    url = f"{settings.api_url}/api"
+    headers = get_glific_auth_headers()
+
+    payload = {
+        "query": """
+        mutation updateGroupContacts($input: GroupContactsInput!) {
+          updateGroupContacts(input: $input) {
+            groupContacts {
+              id
+            }
+            numberDeleted
+          }
+        }
+        """,
+        "variables": {
+            "input": {
+                "groupId": group_id,
+                "addContactIds": [contact_id],
+                "deleteContactIds": []
+            }
+        }
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        if "errors" in data:
+            frappe.logger().error(f"Glific API Error adding contact to group: {data['errors']}")
+            return False
+
+        if "data" in data and "updateGroupContacts" in data["data"]:
+            if "errors" in data["data"]["updateGroupContacts"] and data["data"]["updateGroupContacts"]["errors"]:
+                errors = data["data"]["updateGroupContacts"]["errors"]
+                frappe.logger().error(f"Glific API Error adding contact to group: {errors}")
+                return False
+
+            return True
+
+        return False
+    except Exception as e:
+        frappe.logger().error(f"Error adding contact to group: {str(e)}")
+        return False
+
+
+
+def add_student_to_glific_for_onboarding(student_name, phone, school_name, batch_name, group_id, language_id=None):
+    """
+    Function dedicated to backend onboarding that:
+    1. Formats the phone number correctly
+    2. Checks if contact already exists in Glific
+    3. Creates contact if needed or just adds to group if exists
+    4. ADDED: Opts in the contact for WhatsApp messaging
+    
+    Args:
+        student_name: Name of the student
+        phone: Phone number
+        school_name: Name of the school
+        batch_name: Name of the batch
+        group_id: Glific group ID to add contact to
+        language_id: Glific language ID from TAP Language
+        
+    Returns:
+        Contact information if successful, None otherwise
+    """
+    settings = get_glific_settings()
+
+    # Format phone number
+    phone = phone.strip().replace(' ', '')
+    if len(phone) == 10:
+        phone = f"91{phone}"
+    elif len(phone) == 12 and phone.startswith('91'):
+        pass  # Phone is already properly formatted
+    else:
+        frappe.logger().warning(f"Invalid phone number format: {phone}")
+        return None
+
+    # Check if contact already exists
+    existing_contact = get_contact_by_phone(phone)
+
+    if existing_contact and 'id' in existing_contact:
+        frappe.logger().info(f"Contact already exists in Glific. Using existing contact: {existing_contact['id']}")
+        
+        # ADDED: Check if contact is opted in and opt-in if needed
+        bsp_status = existing_contact.get('bspStatus', 'NONE')
+        if bsp_status not in ['SESSION', 'SESSION_AND_HSM']:
+            frappe.logger().info(f"Existing contact not opted in. Attempting opt-in...")
+            try:
+                optin_result = optin_contact(phone, student_name)
+                if optin_result:
+                    frappe.logger().info(f"Successfully opted in contact: {phone}")
+                else:
+                    frappe.logger().warning(f"Failed to opt-in contact: {phone}")
+            except Exception as e:
+                frappe.logger().warning(f"Error during opt-in: {str(e)}")
+                # Continue even if opt-in fails
+
+        # Add to group
+        if group_id:
+            add_contact_to_group(existing_contact['id'], group_id)
+
+        # Optionally update fields to ensure they're current
+        fields_to_update = {
+            "buddy_name": student_name,
+            "batch_id": batch_name
+        }
+        if school_name:
+            fields_to_update["school"] = school_name
+
+        update_contact_fields(existing_contact['id'], fields_to_update)
+
+        return existing_contact
+    else:
+        # Get language_id from the parameter or use default if not provided
+        if language_id is None or language_id == "":
+            # Try to get default language ID from Glific Settings
+            try:
+                language_id = frappe.db.get_single_value("Glific Settings", "default_language_id")
+            except Exception as e:
+                frappe.logger().warning(f"Error getting default_language_id: {str(e)}")
+                language_id = "1"  # Default to English if not found
+        
+        # Ensure language_id is an integer
+        try:
+            language_id = int(language_id)
+        except (ValueError, TypeError):
+            frappe.logger().warning(f"Invalid language_id format: {language_id}, using default (1)")
+            language_id = 1  # Default to English if not a valid integer
+        
+        frappe.logger().info(f"Creating Glific contact with language_id: {language_id}")
+
+        # Create new contact with minimal required fields
+        contact_data = {
+            "query": """
+            mutation createContact($input:ContactInput!) {
+                createContact(input: $input) {
+                    contact { id name phone }
+                    errors { key message }
+                }
+            }
+            """,
+            "variables": {
+                "input": {
+                    "name": student_name,
+                    "phone": phone,
+                    "languageId": language_id
+                }
+            }
+        }
+
+        # Add fields if available
+        fields = {}
+        # Always add buddy_name
+        fields["buddy_name"] = {
+            "value": student_name,
+            "type": "string",
+            "inserted_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        if school_name:
+            fields["school"] = {
+                "value": school_name,
+                "type": "string",
+                "inserted_at": datetime.now(timezone.utc).isoformat()
+            }
+
+        if batch_name:
+            fields["batch_id"] = {
+                "value": batch_name,
+                "type": "string",
+                "inserted_at": datetime.now(timezone.utc).isoformat()
+            }
+
+        if fields:
+            contact_data["variables"]["input"]["fields"] = json.dumps(fields)
+
+        # Execute request
+        try:
+            response = requests.post(
+                f"{settings.api_url}/api",
+                json=contact_data,
+                headers=get_glific_auth_headers()
+            )
+
+            if response.status_code != 200:
+                frappe.logger().error(f"Failed to create contact. Status: {response.status_code}, Response: {response.text}")
+                return None
+
+            result = response.json()
+
+            if "errors" in result:
+                frappe.logger().error(f"GraphQL errors: {result['errors']}")
+                return None
+
+            contact = result.get("data", {}).get("createContact", {}).get("contact")
+
+            if not contact:
+                frappe.logger().error(f"No contact in response: {result}")
+                return None
+
+            # ADDED: Opt-in the newly created contact
+            frappe.logger().info(f"Contact created. Now attempting opt-in...")
+            try:
+                optin_result = optin_contact(phone, student_name)
+                if optin_result:
+                    frappe.logger().info(f"Successfully opted in new contact: {phone}")
+                else:
+                    frappe.logger().warning(f"Failed to opt-in new contact: {phone}")
+            except Exception as e:
+                frappe.logger().warning(f"Error during opt-in for new contact: {str(e)}")
+                # Continue even if opt-in fails
+
+            # Add to group
+            if group_id and 'id' in contact:
+                add_contact_to_group(contact['id'], group_id)
+
+            return contact
+
+        except Exception as e:
+            frappe.logger().error(f"Exception in add_student_to_glific_for_onboarding: {str(e)}", exc_info=True)
+            return None
+
+
+
+
+def create_or_get_teacher_group_for_batch(batch_name, batch_id):
+    """
+    Create a Glific group for teachers in a batch or get existing one
+
+    Args:
+        batch_name: The Batch document name (link field)
+        batch_id: The batch_id field value from the Batch document
+    """
+
+    # Handle edge case for no active batch
+    if not batch_id or batch_id == "no_active_batch_id" or not batch_name:
+        frappe.logger().warning(f"Invalid batch for teacher group: batch_name={batch_name}, batch_id={batch_id}")
+        return None
+
+    # Check if we already have a mapping for this batch document
+    existing_mapping = frappe.get_all("Glific Teacher Group",
+                                   filters={"batch": batch_name},
+                                   fields=["name", "glific_group_id", "group_label"])
+
+    if existing_mapping:
+        frappe.logger().info(f"Found existing teacher group mapping for batch {batch_name}")
+        return {
+            "group_id": existing_mapping[0]["glific_group_id"],
+            "label": existing_mapping[0]["group_label"]
+        }
+
+    # Derive group label from batch_id
+    group_label = f"teacher_batch_{batch_id}"
+
+    # Check if this group already exists in Glific
+    existing_group = check_glific_group_exists(group_label)
+
+    if existing_group:
+        # Group exists in Glific, create mapping
+        frappe.logger().info(f"Found existing Glific group: {existing_group}")
+
+        teacher_group = frappe.new_doc("Glific Teacher Group")
+        teacher_group.batch = batch_name
+        teacher_group.batch_id = batch_id
+        teacher_group.glific_group_id = existing_group["id"]
+        teacher_group.group_label = existing_group["label"]
+        teacher_group.description = f"Teachers from batch {batch_id}"
+        teacher_group.created_date = frappe.utils.now_datetime()
+        teacher_group.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        return {
+            "group_id": existing_group["id"],
+            "label": existing_group["label"]
+        }
+
+    # Group doesn't exist, create it in Glific
+    frappe.logger().info(f"Creating new Glific group for teacher batch {batch_id}")
+    new_group = create_glific_group(group_label, f"Teachers from batch {batch_id}")
+
+    if new_group:
+        # Create mapping
+        teacher_group = frappe.new_doc("Glific Teacher Group")
+        teacher_group.batch = batch_name
+        teacher_group.batch_id = batch_id
+        teacher_group.glific_group_id = new_group["id"]
+        teacher_group.group_label = new_group["label"]
+        teacher_group.description = f"Teachers from batch {batch_id}"
+        teacher_group.created_date = frappe.utils.now_datetime()
+        teacher_group.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        return {
+            "group_id": new_group["id"],
+            "label": new_group["label"]
+        }
+
+    # Failed to create group
+    frappe.logger().error(f"Failed to create Glific group for batch {batch_id}")
+    return None

@@ -28,8 +28,7 @@
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Course",
-   "options": "Course Level",
-   "reqd": 1
+   "options": "Course Level"
   },
   {
    "fieldname": "grade",
@@ -52,7 +51,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2024-08-05 16:50:51.994690",
+ "modified": "2025-04-23 23:04:48.534651",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Enrollment",

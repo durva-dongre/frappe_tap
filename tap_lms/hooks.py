@@ -10,23 +10,32 @@ app_email = "tech4dev@gmail.com"
 app_license = "MIT"
 
 
-
-
-
-
+# Document Events
 doc_events = {
     "School": {
         "before_save": "tap_lms.tap_lms.doctype.school.school.before_save"
     },
-        "Teacher": {
+    "Teacher": {
         "on_update": "tap_lms.glific_webhook.update_glific_contact"
+    },
+    "StudentStageProgress": {
+        "after_insert": "tap_lms.tap_lms.doctype.studentonboardingprogress.studentonboardingprogress.update_student_progress",
+        "on_update": "tap_lms.tap_lms.doctype.studentonboardingprogress.studentonboardingprogress.update_student_progress"
     }
 }
 
+# Scheduled Tasks
+scheduler_events = {
+    "daily": [
+        "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages"
+    ]
+}
 
+# Page configurations
+page_js = {"onboarding-flow-trigger": "public/js/onboarding_flow_trigger.js"}
 
-
-
+# Reports
+report_script_custom_doctypes = ["StudentStageProgress"]
 
 
 # Includes in <head>
@@ -64,7 +73,7 @@ doc_events = {
 
 # website user home page (by Role)
 # role_home_page = {
-#	"Role": "home_page"
+#       "Role": "home_page"
 # }
 
 # Generators
@@ -78,8 +87,8 @@ doc_events = {
 
 # add methods and filters to jinja environment
 # jinja = {
-#	"methods": "tap_lms.utils.jinja_methods",
-#	"filters": "tap_lms.utils.jinja_filters"
+#       "methods": "tap_lms.utils.jinja_methods",
+#       "filters": "tap_lms.utils.jinja_filters"
 # }
 
 # Installation
@@ -105,11 +114,11 @@ doc_events = {
 # Permissions evaluated in scripted ways
 
 # permission_query_conditions = {
-#	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
+#       "Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
 # }
 #
 # has_permission = {
-#	"Event": "frappe.desk.doctype.event.event.has_permission",
+#       "Event": "frappe.desk.doctype.event.event.has_permission",
 # }
 
 # DocType Class
@@ -117,7 +126,7 @@ doc_events = {
 # Override standard doctype classes
 
 # override_doctype_class = {
-#	"ToDo": "custom_app.overrides.CustomToDo"
+#       "ToDo": "custom_app.overrides.CustomToDo"
 # }
 
 # Document Events
@@ -125,32 +134,32 @@ doc_events = {
 # Hook on document methods and events
 
 # doc_events = {
-#	"*": {
-#		"on_update": "method",
-#		"on_cancel": "method",
-#		"on_trash": "method"
-#	}
+#       "*": {
+#               "on_update": "method",
+#               "on_cancel": "method",
+#               "on_trash": "method"
+#       }
 # }
 
 # Scheduled Tasks
 # ---------------
 
 # scheduler_events = {
-#	"all": [
-#		"tap_lms.tasks.all"
-#	],
-#	"daily": [
-#		"tap_lms.tasks.daily"
-#	],
-#	"hourly": [
-#		"tap_lms.tasks.hourly"
-#	],
-#	"weekly": [
-#		"tap_lms.tasks.weekly"
-#	],
-#	"monthly": [
-#		"tap_lms.tasks.monthly"
-#	],
+#       "all": [
+#               "tap_lms.tasks.all"
+#       ],
+#       "daily": [
+#               "tap_lms.tasks.daily"
+#       ],
+#       "hourly": [
+#               "tap_lms.tasks.hourly"
+#       ],
+#       "weekly": [
+#               "tap_lms.tasks.weekly"
+#       ],
+#       "monthly": [
+#               "tap_lms.tasks.monthly"
+#       ],
 # }
 
 # Testing
@@ -162,14 +171,14 @@ doc_events = {
 # ------------------------------
 #
 # override_whitelisted_methods = {
-#	"frappe.desk.doctype.event.event.get_events": "tap_lms.event.get_events"
+#       "frappe.desk.doctype.event.event.get_events": "tap_lms.event.get_events"
 # }
 #
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
 # override_doctype_dashboards = {
-#	"Task": "tap_lms.task.get_dashboard_data"
+#       "Task": "tap_lms.task.get_dashboard_data"
 # }
 
 # exempt linked doctypes from being automatically cancelled
@@ -186,31 +195,31 @@ doc_events = {
 # --------------------
 
 # user_data_fields = [
-#	{
-#		"doctype": "{doctype_1}",
-#		"filter_by": "{filter_by}",
-#		"redact_fields": ["{field_1}", "{field_2}"],
-#		"partial": 1,
-#	},
-#	{
-#		"doctype": "{doctype_2}",
-#		"filter_by": "{filter_by}",
-#		"partial": 1,
-#	},
-#	{
-#		"doctype": "{doctype_3}",
-#		"strict": False,
-#	},
-#	{
-#		"doctype": "{doctype_4}"
-#	}
+#       {
+#               "doctype": "{doctype_1}",
+#               "filter_by": "{filter_by}",
+#               "redact_fields": ["{field_1}", "{field_2}"],
+#               "partial": 1,
+#       },
+#       {
+#               "doctype": "{doctype_2}",
+#               "filter_by": "{filter_by}",
+#               "partial": 1,
+#       },
+#       {
+#               "doctype": "{doctype_3}",
+#               "strict": False,
+#       },
+#       {
+#               "doctype": "{doctype_4}"
+#       }
 # ]
 
 # Authentication and authorization
 # --------------------------------
 
 # auth_hooks = [
-#	"tap_lms.auth.validate"
+#       "tap_lms.auth.validate"
 # ]
 
 fixtures = [{ "doctype": "Client Script", "filters": [ ["module", "in", ( "Tap Lms" )] ] }]

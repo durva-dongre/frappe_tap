@@ -10,7 +10,11 @@
   "module_name",
   "course_level",
   "description",
-  "order"
+  "order",
+  "is_project_based",
+  "competencies_addressed",
+  "real_world_connection",
+  "interdisciplinary_links"
  ],
  "fields": [
   {
@@ -33,11 +37,33 @@
    "fieldname": "order",
    "fieldtype": "Int",
    "label": "Order"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_project_based",
+   "fieldtype": "Check",
+   "label": "Is Project Based"
+  },
+  {
+   "fieldname": "competencies_addressed",
+   "fieldtype": "Table",
+   "label": "Competencies Addressed",
+   "options": "CompetencyList"
+  },
+  {
+   "fieldname": "real_world_connection",
+   "fieldtype": "Text",
+   "label": "Real World Connection"
+  },
+  {
+   "fieldname": "interdisciplinary_links",
+   "fieldtype": "JSON",
+   "label": "Interdisciplinary Links"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-10-17 15:33:35.751376",
+ "modified": "2025-04-19 14:45:18.668452",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Course Module",

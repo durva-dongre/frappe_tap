@@ -27,7 +27,11 @@
   "level",
   "rigour",
   "language",
-  "glific_id"
+  "glific_id",
+  "backend_onboarding",
+  "peer_groups",
+  "mentor_role",
+  "mentee_role"
  ],
  "fields": [
   {
@@ -132,11 +136,35 @@
    "fieldname": "glific_id",
    "fieldtype": "Data",
    "label": "Glific ID"
+  },
+  {
+   "fieldname": "backend_onboarding",
+   "fieldtype": "Link",
+   "label": "Backend Onboarding",
+   "options": "Backend Student Onboarding"
+  },
+  {
+   "fieldname": "peer_groups",
+   "fieldtype": "Table",
+   "label": "Peer Groups",
+   "options": "StudentPeerGroup"
+  },
+  {
+   "fieldname": "mentor_role",
+   "fieldtype": "Table",
+   "label": "Mentor Role",
+   "options": "StudentMentorRole"
+  },
+  {
+   "fieldname": "mentee_role",
+   "fieldtype": "Table",
+   "label": "Mentee Role",
+   "options": "StudentMenteeRole"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-08-05 13:28:17.838777",
+ "modified": "2025-05-04 21:20:16.520841",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Student",

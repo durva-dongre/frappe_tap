@@ -1,0 +1,31 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-04-19 14:49:36.850438",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "course_module"
+ ],
+ "fields": [
+  {
+   "fieldname": "course_module",
+   "fieldtype": "Link",
+   "label": "Course Module ",
+   "options": "Course Module"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-04-19 14:49:36.850438",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "CourseModuleList",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

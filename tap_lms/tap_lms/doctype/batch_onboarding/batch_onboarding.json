@@ -1,7 +1,6 @@
 {
  "actions": [],
  "allow_import": 1,
- "allow_rename": 1,
  "autoname": "format:{batch}-{school}BS{#####}",
  "creation": "2024-07-09 14:28:36.783841",
  "default_view": "List",
@@ -82,7 +81,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-10-04 17:45:37.209295",
+ "modified": "2025-04-09 22:06:05.738526",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Batch onboarding",

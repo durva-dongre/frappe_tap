@@ -26,7 +26,7 @@
    "fieldname": "name2",
    "fieldtype": "Select",
    "label": "Label",
-   "options": "Arts\nDance\nCoding\nScience\nElectronics\nFinancial Literacy",
+   "options": "Arts\nDance\nCoding\nScience Lab\nElectronics\nFinancial Literacy",
    "reqd": 1
   },
   {
@@ -39,7 +39,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-10-02 14:34:56.304373",
+ "modified": "2025-06-13 14:35:49.456365",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Course Verticals",
