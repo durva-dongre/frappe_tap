@@ -18,7 +18,8 @@
   "department",
   "glific_id",
   "phone_number",
-  "course_level"
+  "course_level",
+  "teacher_role"
  ],
  "fields": [
   {
@@ -74,11 +75,17 @@
    "fieldtype": "Select",
    "label": "Gender",
    "options": "Select\nMale\nFemale\nOthers\nNot Available"
+  },
+  {
+   "fieldname": "teacher_role",
+   "fieldtype": "Select",
+   "label": "Teacher Role",
+   "options": "HM\nNodal_Officer_POC\nTeacher\nMaster_Trainers"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-09-15 15:06:46.189994",
+ "modified": "2025-07-06 12:20:36.480091",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Teacher",

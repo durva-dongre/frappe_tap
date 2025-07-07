@@ -57,15 +57,13 @@
   },
   {
    "fieldname": "transition_rule",
-   "fieldtype": "Link",
-   "label": "Transition Rule",
-   "options": "StageTransitionRules"
+   "fieldtype": "Text",
+   "label": "Transition Rule"
   },
   {
    "fieldname": "evaluator_used",
-   "fieldtype": "Link",
-   "label": "Evaluator Used",
-   "options": "TransitionEvaluator"
+   "fieldtype": "Text",
+   "label": "Evaluator Used"
   },
   {
    "fieldname": "state_factors",
@@ -87,7 +85,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-04-21 13:04:46.446319",
+ "modified": "2025-06-22 16:50:22.920237",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "TransitionHistory",

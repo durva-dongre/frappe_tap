@@ -9,9 +9,9 @@
  "field_order": [
   "student_status",
   "glific_flow_id",
+  "next_stage",
   "flow_type",
-  "description",
-  "next_stage"
+  "description"
  ],
  "fields": [
   {
@@ -46,7 +46,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-06-06 23:30:03.813201",
+ "modified": "2025-06-20 00:25:18.108726",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "LearningStageFlows",

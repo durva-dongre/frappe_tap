@@ -6,7 +6,7 @@ import requests
 import random
 import string
 import urllib.parse
-from .glific_integration import create_contact, start_contact_flow, get_contact_by_phone, update_contact_fields
+from .glific_integration import create_contact, start_contact_flow, get_contact_by_phone, update_contact_fields, add_contact_to_group, create_or_get_teacher_group_for_batch
 from .background_jobs import enqueue_glific_actions
 
 
@@ -850,6 +850,7 @@ def send_otp_v0():
         }
 
 
+
 @frappe.whitelist(allow_guest=True)
 def send_otp():
     try:
@@ -866,24 +867,94 @@ def send_otp():
         phone_number = data['phone']
 
         # Check if the phone number is already registered
-        existing_teacher = frappe.get_all("Teacher", filters={"phone_number": phone_number}, fields=["name"])
+        existing_teacher = frappe.get_all("Teacher", 
+                                        filters={"phone_number": phone_number}, 
+                                        fields=["name", "school_id"])
+        
+        otp_context = {
+            "action_type": "new_teacher",
+            "teacher_id": None,
+            "school_name": None,
+            "batch_info": None
+        }
+        
         if existing_teacher:
-            frappe.response.http_status_code = 409
-            return {
-                "status": "failure",
-                "message": "A teacher with this phone number already exists",
-                "existing_teacher_id": existing_teacher[0].name
+            teacher = existing_teacher[0]
+            
+            # Get school from the teacher record
+            school = teacher.school_id
+            if not school:
+                frappe.response.http_status_code = 400
+                return {"status": "failure", "message": "Teacher has no school assigned"}
+            
+            # Get school name
+            school_name = frappe.db.get_value("School", school, "name1")
+            
+            # Check if there's an active batch for this school
+            batch_info = get_active_batch_for_school(school)
+            
+            if not batch_info["batch_id"] or batch_info["batch_id"] == "no_active_batch_id":
+                frappe.response.http_status_code = 409
+                return {
+                    "status": "failure",
+                    "message": "No active batch available for your school",
+                    "code": "NO_ACTIVE_BATCH"
+                }
+            
+            # Check if teacher is already in this batch's group
+            group_label = f"teacher_batch_{batch_info['batch_id']}"
+            existing_group_mapping = frappe.get_all(
+                "Glific Teacher Group",
+                filters={"batch": batch_info["batch_name"]},
+                fields=["glific_group_id"]
+            )
+            
+            if existing_group_mapping:
+                # Check if teacher's Glific contact is in this group
+                teacher_glific_id = frappe.db.get_value("Teacher", teacher.name, "glific_id")
+                if teacher_glific_id:
+                    # Optional: Check if they were part of this batch before
+                    teacher_batch_history = frappe.get_all(
+                        "Teacher Batch History",
+                        filters={
+                            "teacher": teacher.name,
+                            "batch": batch_info["batch_name"],
+                            "status": "Active"
+                        }
+                    )
+                    
+                    if teacher_batch_history:
+                        frappe.response.http_status_code = 409
+                        return {
+                            "status": "failure",
+                            "message": "You are already registered for this batch",
+                            "code": "ALREADY_IN_BATCH",
+                            "teacher_id": teacher.name,
+                            "batch_id": batch_info["batch_id"]
+                        }
+            
+            # Teacher exists but not in this batch - prepare for update
+            otp_context = {
+                "action_type": "update_batch",
+                "teacher_id": teacher.name,
+                "school_name": school_name,
+                "school_id": school,
+                "batch_info": batch_info
             }
+
+        # If teacher doesn't exist, we'll need school_name in create_teacher_web
+        # That will come from the web form after OTP verification
 
         otp = ''.join(random.choices(string.digits, k=4))
 
-        # Store OTP in the database
+        # Store OTP with context in the database
         try:
             otp_doc = frappe.get_doc({
                 "doctype": "OTP Verification",
                 "phone_number": phone_number,
                 "otp": otp,
-                "expiry": now_datetime() + timedelta(minutes=15)
+                "expiry": now_datetime() + timedelta(minutes=15),
+                "context": json.dumps(otp_context)  # Store context as JSON
             })
             otp_doc.insert(ignore_permissions=True)
             frappe.db.commit()
@@ -897,8 +968,8 @@ def send_otp():
             }
 
         # Send WhatsApp message using the API
-        whatsapp_api_key = "J3tuS4rCqzcLiqt2SjyeiqYxjVLICnWb"  # Replace with your actual API key
-        instance = "27715370"  # Replace with your actual instance ID
+        whatsapp_api_key = frappe.conf.get("whatsapp_api_key", "J3tuS4rCqzcLiqt2SjyeiqYxjVLICnWb")
+        instance = frappe.conf.get("whatsapp_instance", "27715370")
         message = f"Your OTP is: {otp}"
         
         api_url = f"https://chatspaz.com/api/v1/send/wa/message?api_key={whatsapp_api_key}&instance={instance}&to={phone_number}&type=text&message={message}"
@@ -912,6 +983,8 @@ def send_otp():
                 return {
                     "status": "success",
                     "message": "OTP sent successfully via WhatsApp",
+                    "action_type": otp_context["action_type"],
+                    "is_existing_teacher": bool(existing_teacher),
                     "whatsapp_message_id": response_data.get("id")
                 }
             else:
@@ -940,6 +1013,9 @@ def send_otp():
             "message": "An unexpected error occurred",
             "error": str(e)
         }
+
+
+
 
 
 @frappe.whitelist(allow_guest=True)
@@ -1005,9 +1081,9 @@ def verify_otp():
         phone_number = data['phone']
         otp = data['otp']
 
-        # Use a direct SQL query to bypass permission checks
+        # Use a direct SQL query to get OTP with context
         verification = frappe.db.sql("""
-            SELECT name, expiry
+            SELECT name, expiry, context, verified
             FROM `tabOTP Verification`
             WHERE phone_number = %s AND otp = %s
             ORDER BY creation DESC
@@ -1020,6 +1096,11 @@ def verify_otp():
 
         verification = verification[0]
 
+        # Check if already verified
+        if verification.verified:
+            frappe.response.http_status_code = 400
+            return {"status": "failure", "message": "OTP already used"}
+
         # Convert expiry to datetime and compare with current datetime
         if get_datetime(verification.expiry) < now_datetime():
             frappe.response.http_status_code = 400
@@ -1031,14 +1112,126 @@ def verify_otp():
             SET verified = 1
             WHERE name = %s
         """, (verification.name,))
-        frappe.db.commit()
-
-        frappe.response.http_status_code = 200
-        return {"status": "success", "message": "Phone number verified successfully"}
+        
+        # Parse the context
+        context = json.loads(verification.context) if verification.context else {}
+        action_type = context.get("action_type", "new_teacher")
+        
+        # Handle update_batch action directly in verify_otp
+        if action_type == "update_batch":
+            try:
+                teacher_id = context.get("teacher_id")
+                batch_info = context.get("batch_info")
+                school_id = context.get("school_id")
+                
+                if not all([teacher_id, batch_info, school_id]):
+                    frappe.response.http_status_code = 400
+                    return {"status": "failure", "message": "Invalid context data"}
+                
+                # Get teacher document
+                teacher = frappe.get_doc("Teacher", teacher_id)
+                
+                # Get model for the school (might have changed if batch has different model)
+                model_name = get_model_for_school(school_id)
+                
+                # Update only model and batch_id in Glific contact fields
+                if teacher.glific_id:
+                    fields_to_update = {
+                        "model": model_name,
+                        "batch_id": batch_info["batch_id"]
+                    }
+                    
+                    update_success = update_contact_fields(teacher.glific_id, fields_to_update)
+                    
+                    if not update_success:
+                        frappe.logger().warning(f"Failed to update Glific contact fields for teacher {teacher_id}")
+                else:
+                    frappe.logger().error(f"Teacher {teacher_id} does not have a Glific ID")
+                    frappe.response.http_status_code = 400
+                    return {"status": "failure", "message": "Teacher not linked to Glific"}
+                
+                # Add teacher to new batch group
+                teacher_group = create_or_get_teacher_group_for_batch(
+                    batch_info["batch_name"], 
+                    batch_info["batch_id"]
+                )
+                
+                if teacher_group and teacher.glific_id:
+                    group_added = add_contact_to_group(teacher.glific_id, teacher_group["group_id"])
+                    if group_added:
+                        frappe.logger().info(f"Teacher {teacher_id} added to group {teacher_group['label']}")
+                    else:
+                        frappe.logger().warning(f"Failed to add teacher {teacher_id} to group")
+                
+                # Optional: Create batch history record to track which batches teacher has joined
+                try:
+                    frappe.get_doc({
+                        "doctype": "Teacher Batch History",
+                        "teacher": teacher_id,
+                        "batch": batch_info["batch_name"],
+                        "batch_id": batch_info["batch_id"],
+                        "status": "Active",
+                        "joined_date": today()
+                    }).insert(ignore_permissions=True)
+                except Exception as e:
+                    frappe.logger().warning(f"Could not create batch history: {str(e)}")
+                
+                # Enqueue background job for flow
+                # Get school name from School doctype
+                school_name = frappe.db.get_value("School", school_id, "name1")
+                
+                enqueue_glific_actions(
+                    teacher.name,
+                    phone_number,
+                    teacher.first_name,
+                    school_id,
+                    school_name,
+                    teacher.language,
+                    model_name,
+                    batch_info["batch_name"],
+                    batch_info["batch_id"]
+                )
+                
+                frappe.db.commit()
+                
+                frappe.response.http_status_code = 200
+                return {
+                    "status": "success",
+                    "message": "Successfully added to new batch",
+                    "action_type": "update_batch",
+                    "teacher_id": teacher_id,
+                    "batch_id": batch_info["batch_id"],
+                    "model": model_name
+                }
+                
+            except Exception as e:
+                frappe.db.rollback()
+                frappe.log_error(f"Error updating teacher batch in verify_otp: {str(e)}", "Teacher Batch Update Error")
+                frappe.response.http_status_code = 500
+                return {
+                    "status": "failure",
+                    "message": "Failed to add teacher to new batch",
+                    "error": str(e)
+                }
+        
+        # For new teacher, just verify and return success
+        else:
+            frappe.db.commit()
+            frappe.response.http_status_code = 200
+            return {
+                "status": "success",
+                "message": "Phone number verified successfully",
+                "action_type": "new_teacher"
+            }
+            
     except Exception as e:
         frappe.log_error(f"OTP Verification Error: {str(e)}")
         frappe.response.http_status_code = 500
         return {"status": "failure", "message": "An error occurred during OTP verification"}
+
+
+
+
 
 
 @frappe.whitelist(allow_guest=True)
@@ -1382,4 +1575,211 @@ def get_model_for_school(school_id):
         raise ValueError(f"No model name found for school {school_id}")
 
     return model_name
+
+
+
+
+@frappe.whitelist(allow_guest=True)
+def update_teacher_role():
+    """
+    Update teacher role based on glific_id
+
+    Expected JSON payload:
+    {
+        "api_key": "your_api_key",
+        "glific_id": "teacher_glific_id",
+        "teacher_role": "HM|Nodal_Officer_POC|Teacher|Master_Trainers"
+    }
+    """
+    try:
+        # Get the JSON data from the request body
+        data = json.loads(frappe.request.data)
+        api_key = data.get('api_key')
+        glific_id = data.get('glific_id')
+        teacher_role = data.get('teacher_role')
+
+        # Validate API key
+        if not api_key:
+            frappe.response.http_status_code = 400
+            return {"status": "error", "message": "API key is required"}
+
+        if not authenticate_api_key(api_key):
+            frappe.response.http_status_code = 401
+            return {"status": "error", "message": "Invalid API key"}
+
+        # Validate required fields
+        if not glific_id:
+            frappe.response.http_status_code = 400
+            return {"status": "error", "message": "glific_id is required"}
+
+        if not teacher_role:
+            frappe.response.http_status_code = 400
+            return {"status": "error", "message": "teacher_role is required"}
+
+        # Validate teacher_role value
+        valid_roles = ["HM", "Nodal_Officer_POC", "Teacher", "Master_Trainers"]
+        if teacher_role not in valid_roles:
+            frappe.response.http_status_code = 400
+            return {
+                "status": "error",
+                "message": f"Invalid teacher_role. Must be one of: {', '.join(valid_roles)}"
+            }
+
+        # Find teacher by glific_id
+        teacher = frappe.get_all(
+            "Teacher",
+            filters={"glific_id": glific_id},
+            fields=["name", "first_name", "last_name", "teacher_role", "school_id"]
+        )
+
+        if not teacher:
+            frappe.response.http_status_code = 404
+            return {
+                "status": "error",
+                "message": f"No teacher found with glific_id: {glific_id}"
+            }
+
+        teacher_doc = frappe.get_doc("Teacher", teacher[0].name)
+        old_role = teacher_doc.teacher_role
+
+        # Update teacher role
+        teacher_doc.teacher_role = teacher_role
+        teacher_doc.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        # Get school name for response
+        school_name = frappe.db.get_value("School", teacher_doc.school_id, "name1") if teacher_doc.school_id else None
+
+        frappe.response.http_status_code = 200
+        return {
+            "status": "success",
+            "message": "Teacher role updated successfully",
+            "data": {
+                "teacher_id": teacher_doc.name,
+                "teacher_name": f"{teacher_doc.first_name} {teacher_doc.last_name}",
+                "glific_id": glific_id,
+                "old_role": old_role,
+                "new_role": teacher_role,
+                "school": school_name
+            }
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Update Teacher Role Error: {str(e)}", "Update Teacher Role API")
+        frappe.response.http_status_code = 500
+        return {
+            "status": "error",
+            "message": "An unexpected error occurred",
+            "error": str(e)
+        }
+
+
+@frappe.whitelist(allow_guest=True)
+def get_teacher_by_glific_id():
+    """
+    Get teacher details by glific_id
+
+    Expected JSON payload:
+    {
+        "api_key": "your_api_key",
+        "glific_id": "teacher_glific_id"
+    }
+    """
+    try:
+        # Get the JSON data from the request body
+        data = json.loads(frappe.request.data)
+        api_key = data.get('api_key')
+        glific_id = data.get('glific_id')
+
+        # Validate API key
+        if not api_key:
+            frappe.response.http_status_code = 400
+            return {"status": "error", "message": "API key is required"}
+
+        if not authenticate_api_key(api_key):
+            frappe.response.http_status_code = 401
+            return {"status": "error", "message": "Invalid API key"}
+
+        # Validate required fields
+        if not glific_id:
+            frappe.response.http_status_code = 400
+            return {"status": "error", "message": "glific_id is required"}
+
+        # Find teacher by glific_id
+        teacher = frappe.get_all(
+            "Teacher",
+            filters={"glific_id": glific_id},
+            fields=[
+                "name", "first_name", "last_name", "teacher_role",
+                "school_id", "phone_number", "email_id", "department",
+                "language", "gender", "course_level"
+            ]
+        )
+
+        if not teacher:
+            frappe.response.http_status_code = 404
+            return {
+                "status": "error",
+                "message": f"No teacher found with glific_id: {glific_id}"
+            }
+
+        teacher_data = teacher[0]
+
+        # Get related data
+        school_name = frappe.db.get_value("School", teacher_data.school_id, "name1") if teacher_data.school_id else None
+        language_name = frappe.db.get_value("TAP Language", teacher_data.language, "language_name") if teacher_data.language else None
+        course_level_name = frappe.db.get_value("Course Level", teacher_data.course_level, "name1") if teacher_data.course_level else None
+
+        # Get teacher's active batches
+        active_batches = frappe.db.sql("""
+            SELECT
+                tbh.batch,
+                b.name1 as batch_name,
+                b.batch_id,
+                tbh.joined_date,
+                tbh.status
+            FROM `tabTeacher Batch History` tbh
+            INNER JOIN `tabBatch` b ON b.name = tbh.batch
+            WHERE tbh.teacher = %s AND tbh.status = 'Active'
+            ORDER BY tbh.joined_date DESC
+        """, teacher_data.name, as_dict=True)
+
+        frappe.response.http_status_code = 200
+        return {
+            "status": "success",
+            "data": {
+                "teacher_id": teacher_data.name,
+                "first_name": teacher_data.first_name,
+                "last_name": teacher_data.last_name,
+                "full_name": f"{teacher_data.first_name} {teacher_data.last_name}",
+                "teacher_role": teacher_data.teacher_role,
+                "glific_id": glific_id,
+                "phone_number": teacher_data.phone_number,
+                "email_id": teacher_data.email_id,
+                "department": teacher_data.department,
+                "gender": teacher_data.gender,
+                "school": {
+                    "id": teacher_data.school_id,
+                    "name": school_name
+                },
+                "language": {
+                    "id": teacher_data.language,
+                    "name": language_name
+                },
+                "course_level": {
+                    "id": teacher_data.course_level,
+                    "name": course_level_name
+                },
+                "active_batches": active_batches
+            }
+        }
+
+    except Exception as e:
+        frappe.log_error(f"Get Teacher by Glific ID Error: {str(e)}", "Get Teacher API")
+        frappe.response.http_status_code = 500
+        return {
+            "status": "error",
+            "message": "An unexpected error occurred",
+            "error": str(e)
+        }
 

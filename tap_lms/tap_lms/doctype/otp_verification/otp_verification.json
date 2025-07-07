@@ -11,7 +11,8 @@
   "phone_number",
   "otp",
   "expiry",
-  "verified"
+  "verified",
+  "context"
  ],
  "fields": [
   {
@@ -34,11 +35,16 @@
    "fieldname": "verified",
    "fieldtype": "Check",
    "label": "Verified"
+  },
+  {
+   "fieldname": "context",
+   "fieldtype": "Text",
+   "label": "Context"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-07-22 13:13:22.248444",
+ "modified": "2025-06-15 15:11:35.833213",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "OTP Verification",
