@@ -373,18 +373,167 @@ def process_glific_contact(student, glific_group):
 
 
 
+
+def determine_student_type_backend(phone_number, student_name, course_vertical):
+    """
+    Determine if student is New or Old based on previous enrollment in same vertical
+    Uses phone + name1 combination to uniquely identify the student
+    (Same logic as API version but optimized for backend processing)
+    
+    Args:
+        phone_number: Student's phone number
+        student_name: Student's name (name1 field)
+        course_vertical: Course vertical name/ID
+    
+    Returns:
+        "Old" if student has previous enrollment in same vertical, "New" otherwise
+    """
+    try:
+        existing_enrollment = frappe.db.sql("""
+            SELECT s.name 
+            FROM `tabStudent` s
+            INNER JOIN `tabEnrollment` e ON e.parent = s.name  
+            INNER JOIN `tabCourse Level` cl ON cl.name = e.course
+            INNER JOIN `tabCourse Verticals` cv ON cv.name = cl.vertical
+            WHERE s.phone = %s AND s.name1 = %s AND cv.name = %s
+            LIMIT 1
+        """, (phone_number, student_name, course_vertical))
+        
+        student_type = "Old" if existing_enrollment else "New"
+        
+        # Log for bulk processing context
+        frappe.log_error(
+            f"Backend: Student type determination: phone={phone_number}, name={student_name}, vertical={course_vertical}, type={student_type}",
+            "Backend Student Type Classification"
+        )
+        
+        return student_type
+        
+    except Exception as e:
+        frappe.log_error(f"Backend: Error determining student type: {str(e)}", "Backend Student Type Error")
+        return "New"  # Default to New on error
+
+
+def get_current_academic_year_backend():
+    """
+    Get current academic year based on current date
+    Academic year runs from April to March
+    (Same logic as API version)
+    
+    Returns:
+        Academic year string in format "YYYY-YY" (e.g., "2025-26")
+    """
+    try:
+        current_date = frappe.utils.getdate()
+        
+        if current_date.month >= 4:  # April onwards = new academic year
+            academic_year = f"{current_date.year}-{str(current_date.year + 1)[-2:]}"
+        else:
+            academic_year = f"{current_date.year - 1}-{str(current_date.year)[-2:]}"
+        
+        frappe.log_error(f"Backend: Current academic year determined: {academic_year}", "Backend Academic Year Calculation")
+        
+        return academic_year
+        
+    except Exception as e:
+        frappe.log_error(f"Backend: Error calculating academic year: {str(e)}", "Backend Academic Year Error")
+        return None
+
+
+def get_course_level_with_mapping_backend(course_vertical, grade, phone_number, student_name, kitless):
+    """
+    Get course level using Grade Course Level Mapping with fallback to Stage Grades logic
+    (Same logic as API version but optimized for backend bulk processing)
+    
+    Args:
+        course_vertical: Course vertical name/ID
+        grade: Student grade
+        phone_number: Student phone number
+        student_name: Student name (for unique identification with phone)
+        kitless: School's kit capability (for fallback logic)
+    
+    Returns:
+        Course level name or raises exception
+    """
+    try:
+        # Step 1: Determine student type using phone + name combination
+        student_type = determine_student_type_backend(phone_number, student_name, course_vertical)
+        
+        # Step 2: Get current academic year
+        academic_year = get_current_academic_year_backend()
+        
+        frappe.log_error(
+            f"Backend: Course level mapping lookup: vertical={course_vertical}, grade={grade}, type={student_type}, year={academic_year}",
+            "Backend Course Level Mapping Lookup"
+        )
+        
+        # Step 3: Try manual mapping with current academic year
+        if academic_year:
+            mapping = frappe.get_all(
+                "Grade Course Level Mapping",
+                filters={
+                    "academic_year": academic_year,
+                    "course_vertical": course_vertical,
+                    "grade": grade,
+                    "student_type": student_type,
+                    "is_active": 1
+                },
+                fields=["assigned_course_level", "mapping_name"],
+                order_by="modified desc",  # Last modified takes priority
+                limit=1
+            )
+            
+            if mapping:
+                frappe.log_error(
+                    f"Backend: Found mapping: {mapping[0].mapping_name} -> {mapping[0].assigned_course_level}",
+                    "Backend Course Level Mapping Found"
+                )
+                return mapping[0].assigned_course_level
+        
+        # Step 4: Try mapping with academic_year = null (flexible mappings)
+        mapping_null = frappe.get_all(
+            "Grade Course Level Mapping",
+            filters={
+                "academic_year": ["is", "not set"],  # Null academic year
+                "course_vertical": course_vertical,
+                "grade": grade,
+                "student_type": student_type,
+                "is_active": 1
+            },
+            fields=["assigned_course_level", "mapping_name"],
+            order_by="modified desc",
+            limit=1
+        )
+        
+        if mapping_null:
+            frappe.log_error(
+                f"Backend: Found flexible mapping: {mapping_null[0].mapping_name} -> {mapping_null[0].assigned_course_level}",
+                "Backend Course Level Flexible Mapping Found"
+            )
+            return mapping_null[0].assigned_course_level
+        
+        # Step 5: Log that no mapping was found, falling back
+        frappe.log_error(
+            f"Backend: No mapping found for vertical={course_vertical}, grade={grade}, type={student_type}, year={academic_year}. Using Stage Grades fallback.",
+            "Backend Course Level Mapping Fallback"
+        )
+        
+        # Step 6: Fallback to current Stage Grades logic
+        return get_course_level(course_vertical, grade, kitless)
+        
+    except Exception as e:
+        frappe.log_error(f"Backend: Error in course level mapping: {str(e)}", "Backend Course Level Mapping Error")
+        # On any error, fallback to original logic
+        return get_course_level(course_vertical, grade, kitless)
+
+
+
+
+
 def process_student_record(student, glific_contact, batch_id, initial_stage):
     """
     Create or update student record based on duplicate handling logic
-    
-    Args:
-        student: Backend Students document
-        glific_contact: Glific contact information
-        batch_id: Backend Student Onboarding ID
-        initial_stage: Initial onboarding stage
-        
-    Returns:
-        Student document
+    UPDATED: Always adds new enrollment + shortened log messages + grade course mapping
     """
     # Check for duplicate - if phone AND name match, update existing student
     existing_student = None
@@ -396,20 +545,59 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
         # Phone and name match - update existing student
         existing_student = frappe.get_doc("Student", existing[0].name)
         
-        # Update relevant fields (careful not to overwrite existing data)
-        if not existing_student.batch:
-            existing_student.batch = student.batch
+        # SHORTENED LOG MESSAGE
+        frappe.log_error(
+            f"Existing: {student.student_name} | Grade: {existing_student.grade}→{student.grade}",
+            "Backend Student Found"
+        )
         
-        # Add new enrollment if it doesn't already exist
-        has_enrollment = False
-        if existing_student.enrollment:
-            for enrollment in existing_student.enrollment:
-                if enrollment.batch == student.batch:
-                    has_enrollment = True
-                    break
+        # Update student fields including grade
+        updated_fields = []
         
-        if not has_enrollment and student.batch:
-            # Get course level using batch_skeyword if available
+        # Update grade (allow both upgrade and downgrade)
+        if student.grade and str(student.grade) != str(existing_student.grade):
+            frappe.log_error(
+                f"Grade update: {student.student_name} | {existing_student.grade}→{student.grade}",
+                "Backend Grade Update"
+            )
+            existing_student.grade = student.grade
+            updated_fields.append(f"grade: {existing_student.grade}→{student.grade}")
+        
+        # Update school if changed
+        if student.school and student.school != existing_student.school_id:
+            frappe.log_error(
+                f"School update: {student.student_name} | {existing_student.school_id}→{student.school}",
+                "Backend School Update"
+            )
+            existing_student.school_id = student.school
+            updated_fields.append(f"school: {existing_student.school_id}→{student.school}")
+        
+        # Update language if changed
+        if student.language and student.language != existing_student.language:
+            frappe.log_error(
+                f"Language update: {student.student_name} | {existing_student.language}→{student.language}",
+                "Backend Language Update"
+            )
+            existing_student.language = student.language
+            updated_fields.append(f"language: {existing_student.language}→{student.language}")
+        
+        # Update gender if missing or changed
+        if student.gender and (not existing_student.gender or student.gender != existing_student.gender):
+            old_gender = existing_student.gender or "Not Set"
+            existing_student.gender = student.gender
+            updated_fields.append(f"gender: {old_gender}→{student.gender}")
+        
+        # Log all updates with shortened message
+        if updated_fields:
+            update_msg = f"Updated fields: {student.student_name} | {', '.join(updated_fields)}"
+            frappe.log_error(
+                update_msg[:140],  # Truncate to 140 chars
+                "Backend Fields Updated"
+            )
+        
+        # ALWAYS ADD NEW ENROLLMENT (regardless of existing enrollments)
+        if student.batch:
+            # Get course level using new mapping-based selection
             course_level = None
             if hasattr(student, 'batch_skeyword') and student.batch_skeyword and student.course_vertical and student.grade:
                 try:
@@ -422,16 +610,31 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
                     
                     if batch_onboarding:
                         kitless = batch_onboarding[0].kit_less
-                        # Use existing course level selection logic
-                        course_level = get_course_level(student.course_vertical, student.grade, kitless)
-                        frappe.logger().info(f"Selected course level {course_level} for student {student.student_name}")
+                        
+                        # Use new mapping-based course level selection
+                        course_level = get_course_level_with_mapping_backend(
+                            student.course_vertical,
+                            student.grade,
+                            student.phone,        # Phone number
+                            student.student_name, # Student name for unique identification
+                            kitless               # For fallback logic
+                        )
+                        
+                        # SHORTENED LOG MESSAGE
+                        frappe.log_error(
+                            f"Course selected: {student.student_name} | {course_level or 'None'}",
+                            "Backend Course Selection"
+                        )
+                        
                 except Exception as e:
-                    frappe.log_error(f"Error selecting course level: {str(e)}", "Backend Student Onboarding")
+                    frappe.log_error(f"Course selection error: {str(e)}", "Backend Course Error")
+                    # Continue without course level if selection fails
             
+            # Create new enrollment (always)
             enrollment = {
                 "doctype": "Enrollments",
                 "batch": student.batch,
-                "grade": student.grade,
+                "grade": student.grade,  # Use the updated grade
                 "date_joining": nowdate(),
                 "school": student.school
             }
@@ -441,16 +644,43 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
                 enrollment["course"] = course_level
             
             existing_student.append("enrollment", enrollment)
+            
+            # SHORTENED LOG MESSAGE
+            enrollment_msg = f"Enrollment added: {student.student_name} | Batch: {student.batch} | Grade: {student.grade} | Course: {course_level or 'None'}"
+            frappe.log_error(
+                enrollment_msg[:140],  # Truncate to 140 chars
+                "Backend Enrollment Added"
+            )
         
         # Update Glific ID if we have it and student doesn't
         if glific_contact and 'id' in glific_contact and not existing_student.glific_id:
             existing_student.glific_id = glific_contact['id']
+            frappe.log_error(
+                f"Glific ID added: {student.student_name} | ID: {glific_contact['id']}",
+                "Backend Glific Added"
+            )
         
+        # Update backend onboarding reference
         existing_student.backend_onboarding = batch_id
+        
+        # Save the existing student with all updates
         existing_student.save()
+        
+        # SHORTENED LOG MESSAGE
+        frappe.log_error(
+            f"Student updated: {student.student_name} (ID: {existing_student.name})",
+            "Backend Update Complete"
+        )
+        
         student_doc = existing_student
+        
     else:
         # Create new student
+        frappe.log_error(
+            f"Creating new: {student.student_name} | Grade: {student.grade}",
+            "Backend New Student"
+        )
+        
         student_doc = frappe.new_doc("Student")
         student_doc.name1 = student.student_name
         student_doc.phone = student.phone
@@ -458,7 +688,6 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
         student_doc.school_id = student.school
         student_doc.grade = student.grade
         student_doc.language = student.language
-        student_doc.batch = student.batch
         student_doc.backend_onboarding = batch_id
         student_doc.joined_on = nowdate()
         student_doc.status = "active"
@@ -467,9 +696,9 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
         if glific_contact and 'id' in glific_contact:
             student_doc.glific_id = glific_contact['id']
         
-        # Add enrollment with course level if possible
+        # Add enrollment with course level for new student
         if student.batch:
-            # Get course level using batch_skeyword if available
+            # Get course level using new mapping-based selection
             course_level = None
             if hasattr(student, 'batch_skeyword') and student.batch_skeyword and student.course_vertical and student.grade:
                 try:
@@ -482,11 +711,25 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
                     
                     if batch_onboarding:
                         kitless = batch_onboarding[0].kit_less
-                        # Use existing course level selection logic
-                        course_level = get_course_level(student.course_vertical, student.grade, kitless)
-                        frappe.logger().info(f"Selected course level {course_level} for student {student.student_name}")
+                        
+                        # Use new mapping-based course level selection
+                        course_level = get_course_level_with_mapping_backend(
+                            student.course_vertical,
+                            student.grade,
+                            student.phone,        # Phone number
+                            student.student_name, # Student name for unique identification
+                            kitless               # For fallback logic
+                        )
+                        
+                        # SHORTENED LOG MESSAGE
+                        frappe.log_error(
+                            f"Course selected: {student.student_name} | {course_level or 'None'}",
+                            "Backend Course Selection"
+                        )
+                        
                 except Exception as e:
-                    frappe.log_error(f"Error selecting course level: {str(e)}", "Backend Student Onboarding")
+                    frappe.log_error(f"Course selection error: {str(e)}", "Backend Course Error")
+                    # Continue without course level if selection fails
             
             enrollment = {
                 "doctype": "Enrollments",
@@ -501,8 +744,21 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
                 enrollment["course"] = course_level
             
             student_doc.append("enrollment", enrollment)
+            
+            # SHORTENED LOG MESSAGE
+            enrollment_msg = f"New enrollment: {student.student_name} | Batch: {student.batch} | Grade: {student.grade} | Course: {course_level or 'None'}"
+            frappe.log_error(
+                enrollment_msg[:140],  # Truncate to 140 chars
+                "Backend New Enrollment"
+            )
         
         student_doc.insert()
+        
+        # SHORTENED LOG MESSAGE
+        frappe.log_error(
+            f"Created: {student.student_name} (ID: {student_doc.name})",
+            "Backend Creation Complete"
+        )
     
     # Initialize LearningState if it doesn't exist
     if not frappe.db.exists("LearningState", {"student": student_doc.name}):
@@ -554,7 +810,6 @@ def process_student_record(student, glific_contact, batch_id, initial_stage):
             # Continue without creating StudentStageProgress if there's an error
     
     return student_doc
-
 
 
 
