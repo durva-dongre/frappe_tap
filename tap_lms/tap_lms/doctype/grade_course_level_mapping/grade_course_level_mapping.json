@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:{academic_year}-{course_vertical}-{grade}-{student_type}",
+ "autoname": "format:{academic_year}-{course_vertical}-{grade}-{student_type}-{assigned_course_level}}",
  "creation": "2025-07-19 11:11:38.835091",
  "default_view": "List",
  "doctype": "DocType",
@@ -81,7 +81,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-07-22 14:26:44.807172",
+ "modified": "2025-07-23 14:56:44.852381",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Grade Course Level Mapping",
