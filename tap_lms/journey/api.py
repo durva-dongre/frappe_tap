@@ -902,7 +902,8 @@ def create_interaction_log(student, stage, stage_type, event_type, message_data,
             "learning_choice_made": "help_request",
             "external_update": "message",
             "direct_stage_event": "message",
-            "manual_assignment": "message"
+            "manual_assignment": "message",
+            "stage_skipped": "message"
         }
         
         interaction_type = interaction_type_map.get(event_type, "message")

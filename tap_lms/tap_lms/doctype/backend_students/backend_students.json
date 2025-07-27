@@ -30,7 +30,7 @@
   {
    "fieldname": "phone",
    "fieldtype": "Data",
-   "label": "Phone ",
+   "label": "Phone",
    "reqd": 1
   },
   {
@@ -50,7 +50,7 @@
   {
    "fieldname": "course_vertical",
    "fieldtype": "Link",
-   "label": "Course Vertical ",
+   "label": "Course Vertical",
    "options": "Course Verticals"
   },
   {
@@ -104,7 +104,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-07-23 15:00:38.017119",
+ "modified": "2025-07-25 15:23:45.695051",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Backend Students",

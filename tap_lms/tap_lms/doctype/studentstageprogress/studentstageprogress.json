@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:{student}-{stage}-{status}-{###}",
  "creation": "2025-04-19 12:03:39.737144",
  "default_view": "List",
  "doctype": "DocType",
@@ -20,7 +21,8 @@
   "notes",
   "retry_scheduled",
   "mastery_level",
-  "course_context"
+  "course_context",
+  "stage_history"
  ],
  "fields": [
   {
@@ -98,14 +100,20 @@
    "fieldtype": "Link",
    "label": "Course Context",
    "options": "Course Level"
+  },
+  {
+   "fieldname": "stage_history",
+   "fieldtype": "Long Text",
+   "label": "Stage History"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-06-06 22:21:29.346310",
+ "modified": "2025-07-28 01:04:21.453921",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "StudentStageProgress",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
