@@ -216,91 +216,114 @@ def process_batch_job(batch_id):
         # Get initial stage
         initial_stage = get_initial_stage()
         
-        # Process each student
+        # Process students in batches for better performance
         total_students = len(students)
-        for index, student_entry in enumerate(students):
-            try:
-                # Update job progress (if this is a background job)
-                update_job_progress(index, total_students)
-                
-                student = frappe.get_doc("Backend Students", student_entry.name)
-                
-                # 1. First, handle Glific contact creation/retrieval
-                try:
-                    # Get course level for Glific (will be reused for enrollment)
-                    course_level_for_glific = None
-                    if hasattr(student, 'batch_skeyword') and student.batch_skeyword and student.course_vertical and student.grade:
-                        batch_onboarding = frappe.get_all(
-                            "Batch onboarding",
-                            filters={"batch_skeyword": student.batch_skeyword},
-                            fields=["name", "kit_less"]
-                        )
-                        
-                        if batch_onboarding:
-                            kitless = batch_onboarding[0].kit_less
-                            course_level_for_glific = get_course_level_with_validation_backend(
-                                student.course_vertical,
-                                student.grade,
-                                student.phone,
-                                student.student_name,
-                                kitless
-                            )
-                    
-                    glific_contact = process_glific_contact(student, glific_group, course_level_for_glific)
-                except Exception as e:
-                    frappe.log_error(f"Error processing Glific contact for {student.student_name}: {str(e)}", 
-                                   "Backend Student Onboarding")
-                    glific_contact = None
-                
-                # 2. Then create/update student record
-                student_doc = process_student_record(student, glific_contact, batch_id, initial_stage, course_level_for_glific)
-                
-                # 3. Update Backend Students record
-                update_backend_student_status(student, "Success", student_doc)
-                
-                success_count += 1
-                success_data = {
-                    "backend_id": student.name,
-                    "student_id": student_doc.name,
-                    "student_name": student_doc.name1,
-                    "phone": student.phone
-                }
-                # Only add glific_id if it exists in the doctype
-                if glific_contact and 'id' in glific_contact:
-                    success_data["glific_id"] = glific_contact['id']
-                
-                results["success"].append(success_data)
-                
-                # Commit after each successful student to avoid losing progress
-                frappe.db.commit()
-                
-            except Exception as e:
-                frappe.db.rollback() # Rollback the failed transaction
-                
-                failure_count += 1
-                try:
-                    student = frappe.get_doc("Backend Students", student_entry.name)
-                    update_backend_student_status(student, "Failed", error=str(e))
-                    
-                    results["failed"].append({
-                        "backend_id": student.name,
-                        "student_name": student.student_name,
-                        "error": str(e)
-                    })
-                    
-                    frappe.db.commit() # Commit the status update
-                except Exception as inner_e:
-                    # If updating the student record itself fails
-                    frappe.log_error(f"Error updating failed status for student {student_entry.name}: {str(inner_e)}", 
-                                   "Backend Student Onboarding")
-                    
-                    results["failed"].append({
-                        "backend_id": student_entry.name,
-                        "student_name": "Unknown",
-                        "error": f"Original error: {str(e)}. Status update error: {str(inner_e)}"
-                    })
+        batch_size = 50  # Process 50 students at a time
+        commit_interval = 10  # Commit every 10 students
         
-        # Update batch status
+        for batch_start in range(0, total_students, batch_size):
+            batch_end = min(batch_start + batch_size, total_students)
+            batch_students = students[batch_start:batch_end]
+            
+            # Pre-fetch batch onboarding data for this batch
+            batch_keywords = list(set([
+                s.get('batch_skeyword') for s in batch_students 
+                if hasattr(s, 'batch_skeyword') and s.batch_skeyword
+            ]))
+            
+            batch_onboarding_cache = {}
+            if batch_keywords:
+                batch_onboardings = frappe.get_all(
+                    "Batch onboarding",
+                    filters={"batch_skeyword": ["in", batch_keywords]},
+                    fields=["batch_skeyword", "name", "kit_less"]
+                )
+                batch_onboarding_cache = {b.batch_skeyword: b for b in batch_onboardings}
+            
+            for index, student_entry in enumerate(batch_students):
+                try:
+                    # Update job progress
+                    actual_index = batch_start + index
+                    update_job_progress(actual_index, total_students)
+                    
+                    student = frappe.get_doc("Backend Students", student_entry.name)
+                    
+                    # 1. Handle Glific contact creation/retrieval
+                    try:
+                        course_level_for_glific = None
+                        if hasattr(student, 'batch_skeyword') and student.batch_skeyword and student.course_vertical and student.grade:
+                            # Use cached batch onboarding data
+                            batch_onboarding = batch_onboarding_cache.get(student.batch_skeyword)
+                            
+                            if batch_onboarding:
+                                kitless = batch_onboarding.kit_less
+                                course_level_for_glific = get_course_level_with_validation_backend(
+                                    student.course_vertical,
+                                    student.grade,
+                                    student.phone,
+                                    student.student_name,
+                                    kitless
+                                )
+                        
+                        glific_contact = process_glific_contact(student, glific_group, course_level_for_glific)
+                    except Exception as e:
+                        frappe.log_error(f"Error processing Glific contact for {student.student_name}: {str(e)}", 
+                                       "Backend Student Onboarding")
+                        glific_contact = None
+                    
+                    # 2. Create/update student record
+                    student_doc = process_student_record(student, glific_contact, batch_id, initial_stage, course_level_for_glific)
+                    
+                    # 3. Update Backend Students record
+                    update_backend_student_status(student, "Success", student_doc)
+                    
+                    success_count += 1
+                    success_data = {
+                        "backend_id": student.name,
+                        "student_id": student_doc.name,
+                        "student_name": student_doc.name1,
+                        "phone": student.phone
+                    }
+                    if glific_contact and 'id' in glific_contact:
+                        success_data["glific_id"] = glific_contact['id']
+                    
+                    results["success"].append(success_data)
+                    
+                    # Commit every 10 students instead of every student
+                    if (actual_index + 1) % commit_interval == 0:
+                        frappe.db.commit()
+                        frappe.log_error(f"Committed batch at student {actual_index + 1}/{total_students}", "Backend Batch Progress")
+                    
+                except Exception as e:
+                    frappe.db.rollback()
+                    
+                    failure_count += 1
+                    try:
+                        student = frappe.get_doc("Backend Students", student_entry.name)
+                        update_backend_student_status(student, "Failed", error=str(e))
+                        
+                        results["failed"].append({
+                            "backend_id": student.name,
+                            "student_name": student.student_name,
+                            "error": str(e)
+                        })
+                        
+                        frappe.db.commit()
+                    except Exception as inner_e:
+                        frappe.log_error(f"Error updating failed status for student {student_entry.name}: {str(inner_e)}", 
+                                       "Backend Student Onboarding")
+                        
+                        results["failed"].append({
+                            "backend_id": student_entry.name,
+                            "student_name": "Unknown",
+                            "error": f"Original error: {str(e)}. Status update error: {str(inner_e)}"
+                        })
+            
+            # Commit at end of each batch
+            frappe.db.commit()
+            frappe.log_error(f"Completed batch {batch_start//batch_size + 1}/{(total_students + batch_size - 1)//batch_size}", "Backend Batch Complete")
+        
+        # Final commit and update batch status
         try:
             batch = frappe.get_doc("Backend Student Onboarding", batch_id)
             if failure_count == 0:
