@@ -305,9 +305,6 @@ def create_teacher(api_key, keyword, first_name, phone_number, glific_id, last_n
 
 
 
-
-
-
 @frappe.whitelist(allow_guest=True)
 def list_batch_keyword(api_key):
     if not authenticate_api_key(api_key):
@@ -524,7 +521,6 @@ def determine_student_type(phone_number, student_name, course_vertical):
     except Exception as e:
         frappe.log_error(f"Error determining student type: {str(e)}", "Student Type Error")
         return "New"  # Default to New on error
-
 
 
 
@@ -795,9 +791,15 @@ def verify_batch_keyword():
         batch_id = cstr(frappe.get_value("Batch", batch_onboarding[0].batch, "batch_id"))
         tap_model = frappe.get_doc("Tap Models", batch_onboarding[0].model)
         kit_less = batch_onboarding[0].kit_less
+        school_district = None
+        district_id = frappe.get_value("School", batch_onboarding[0].school, "district")
+        if district_id:
+            school_district = frappe.get_value("District", district_id, "district_name")
+        
 
         response = {
             "school_name": school_name,
+            "school_district": school_district,
             "batch_id": batch_id,
             "tap_model_id": cstr(tap_model.name),
             "tap_model_name": cstr(tap_model.mname),
