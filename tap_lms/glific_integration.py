@@ -804,6 +804,7 @@ def add_student_to_glific_for_onboarding(student_name, phone, school_name, batch
             fields["course_level"] = {
                 "value": course_level_name,
                 "type": "string",
+                "label": "course_level",
                 "inserted_at": datetime.now(timezone.utc).isoformat()
             }
 
