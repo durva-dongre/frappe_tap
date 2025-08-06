@@ -343,6 +343,7 @@ def list_batch_keyword(api_key):
 
 
 @frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True)
 def create_student():
     try:
         # Get the data from the request
@@ -395,7 +396,8 @@ def create_student():
                     frappe.response.status_code = 202
                     return {"status": "error", "message": "Registration for this batch has ended"}
             except Exception as e:
-                frappe.log_error(f"Error parsing registration end date: {str(e)}")
+                # Simple print for debugging, no frappe.log_error
+                print(f"Error parsing registration end date: {str(e)}")
                 frappe.response.status_code = 202
                 return {"status": "error", "message": "Invalid registration end date format"}
 
@@ -434,7 +436,7 @@ def create_student():
             # Create new student
             student = create_new_student(student_name, phone, gender, school_id, grade, language_name, glific_id)
 
-        # UPDATED: Get the appropriate course level using new mapping-based logic
+        # Get the appropriate course level using new mapping-based logic
         try:
             course_level = get_course_level_with_mapping(
                 course_vertical[0].name,
@@ -444,14 +446,12 @@ def create_student():
                 kitless       # For fallback logic
             )
             
-            # Log successful course level selection
-            frappe.log_error(
-                f"Course level selected: {course_level} for student phone={phone[-4:]}, name={student_name}, vertical={vertical}, grade={grade}", 
-                "Course Level Success"
-            )
+            # REMOVED: Problematic logging - use print for debugging if needed
+            # print(f"DEBUG: Course level selected: {course_level} for student {student_name}")
             
         except Exception as course_error:
-            frappe.log_error(f"Course level selection failed: {str(course_error)}", "Course Level Selection Error")
+            # REMOVED: Problematic logging - use print for debugging if needed  
+            # print(f"DEBUG: Course level selection failed: {str(course_error)}")
             frappe.response.status_code = 202
             return {"status": "error", "message": f"Course selection failed: {str(course_error)}"}
 
@@ -473,17 +473,18 @@ def create_student():
         }
 
     except frappe.ValidationError as e:
-        frappe.log_error(f"Student Creation Validation Error: {str(e)}", "Student Creation Error")
+        # REMOVED: Problematic logging - use print for debugging if needed
+        # print(f"DEBUG: Student Creation Validation Error: {str(e)}")
         frappe.response.status_code = 202
         return {"status": "error", "message": str(e)}
     except Exception as e:
-        frappe.log_error(f"Student Creation Error: {str(e)}", "Student Creation Error")
+        # REMOVED: Problematic logging - use print for debugging if needed
+        # print(f"DEBUG: Student Creation Error: {str(e)}")
         frappe.response.status_code = 202
         return {"status": "error", "message": str(e)}
 
 
-
-
+# Updated helper functions with cleaned logging
 
 def determine_student_type(phone_number, student_name, course_vertical):
     """
@@ -511,17 +512,15 @@ def determine_student_type(phone_number, student_name, course_vertical):
         
         student_type = "Old" if existing_enrollment else "New"
         
-        frappe.log_error(
-            f"Student type determination: phone={phone_number}, name={student_name}, vertical={course_vertical}, type={student_type}",
-            "Student Type Classification"
-        )
+        # REMOVED: Problematic logging - use print for debugging if needed
+        # print(f"DEBUG: Student type: {student_type} for {student_name}")
         
         return student_type
         
     except Exception as e:
-        frappe.log_error(f"Error determining student type: {str(e)}", "Student Type Error")
+        # Simple print for debugging instead of frappe.log_error
+        print(f"Error determining student type: {str(e)}")
         return "New"  # Default to New on error
-
 
 
 def get_current_academic_year():
@@ -540,18 +539,14 @@ def get_current_academic_year():
         else:
             academic_year = f"{current_date.year - 1}-{str(current_date.year)[-2:]}"
         
-        frappe.log_error(f"Current academic year determined: {academic_year}", "Academic Year Calculation")
+        # REMOVED: Problematic logging - use print for debugging if needed
+        # print(f"DEBUG: Current academic year: {academic_year}")
         
         return academic_year
         
     except Exception as e:
-        frappe.log_error(f"Error calculating academic year: {str(e)}", "Academic Year Error")
+        print(f"Error calculating academic year: {str(e)}")
         return None
-
-
-
-
-
 
 
 def get_course_level_with_mapping(course_vertical, grade, phone_number, student_name, kitless):
@@ -575,10 +570,8 @@ def get_course_level_with_mapping(course_vertical, grade, phone_number, student_
         # Step 2: Get current academic year
         academic_year = get_current_academic_year()
         
-        frappe.log_error(
-            f"Course level mapping lookup: vertical={course_vertical}, grade={grade}, type={student_type}, year={academic_year}",
-            "Course Level Mapping Lookup"
-        )
+        # REMOVED: Problematic logging - use print for debugging if needed
+        # print(f"DEBUG: Course level mapping lookup: {course_vertical}, {grade}, {student_type}, {academic_year}")
         
         # Step 3: Try manual mapping with current academic year
         if academic_year:
@@ -597,10 +590,8 @@ def get_course_level_with_mapping(course_vertical, grade, phone_number, student_
             )
             
             if mapping:
-                frappe.log_error(
-                    f"Found mapping: {mapping[0].mapping_name} -> {mapping[0].assigned_course_level}",
-                    "Course Level Mapping Found"
-                )
+                # REMOVED: Problematic logging - use print for debugging if needed
+                # print(f"DEBUG: Found mapping: {mapping[0].mapping_name} -> {mapping[0].assigned_course_level}")
                 return mapping[0].assigned_course_level
         
         # Step 4: Try mapping with academic_year = null (flexible mappings)
@@ -619,39 +610,30 @@ def get_course_level_with_mapping(course_vertical, grade, phone_number, student_
         )
         
         if mapping_null:
-            frappe.log_error(
-                f"Found flexible mapping: {mapping_null[0].mapping_name} -> {mapping_null[0].assigned_course_level}",
-                "Course Level Flexible Mapping Found"
-            )
+            # REMOVED: Problematic logging - use print for debugging if needed
+            # print(f"DEBUG: Found flexible mapping: {mapping_null[0].assigned_course_level}")
             return mapping_null[0].assigned_course_level
         
         # Step 5: Log that no mapping was found, falling back
-        frappe.log_error(
-            f"No mapping found for vertical={course_vertical}, grade={grade}, type={student_type}, year={academic_year}. Using Stage Grades fallback.",
-            "Course Level Mapping Fallback"
-        )
+        # REMOVED: Problematic logging - use print for debugging if needed
+        # print(f"DEBUG: No mapping found, using Stage Grades fallback")
         
         # Step 6: Fallback to current Stage Grades logic
         return get_course_level_original(course_vertical, grade, kitless)
         
     except Exception as e:
-        frappe.log_error(f"Error in course level mapping: {str(e)}", "Course Level Mapping Error")
+        # Simple print for debugging instead of frappe.log_error
+        print(f"Error in course level mapping: {str(e)}")
         # On any error, fallback to original logic
         return get_course_level_original(course_vertical, grade, kitless)
-
-
-
 
 
 def get_course_level_original(course_vertical, grade, kitless):
     """
     Original course level selection logic using Stage Grades
-    (Your existing get_course_level function logic)
     """
-    frappe.log_error(
-        f"Using original Stage Grades logic: vertical={course_vertical}, grade={grade}, kitless={kitless}",
-        "Stage Grades Fallback"
-    )
+    # REMOVED: Problematic logging - use print for debugging if needed
+    # print(f"DEBUG: Using Stage Grades logic: {course_vertical}, {grade}, {kitless}")
     
     try:
         # Find stage by grade
@@ -704,7 +686,8 @@ def get_course_level_original(course_vertical, grade, kitless):
         return course_level[0].name
         
     except Exception as e:
-        frappe.log_error(f"Stage Grades fallback failed: {str(e)}", "Stage Grades Fallback Error")
+        # Simple print for debugging instead of frappe.log_error
+        print(f"Stage Grades fallback failed: {str(e)}")
         raise
 
 
