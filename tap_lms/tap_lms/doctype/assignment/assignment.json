@@ -22,7 +22,9 @@
   "reference_image",
   "rag_settings_section",
   "enable_auto_feedback",
-  "feedback_prompt"
+  "feedback_prompt",
+  "assignment_translations",
+  "estimated_duration"
  ],
  "fields": [
   {
@@ -61,7 +63,7 @@
   },
   {
    "fieldname": "submission_guidelines",
-   "fieldtype": "Text",
+   "fieldtype": "Text Editor",
    "label": "submission_guidelines"
   },
   {
@@ -108,11 +110,22 @@
    "fieldname": "feedback_prompt",
    "fieldtype": "Text",
    "label": "Feedback Prompt"
+  },
+  {
+   "fieldname": "assignment_translations",
+   "fieldtype": "Table",
+   "label": "Assignment Translations",
+   "options": "AssignmentTranslation"
+  },
+  {
+   "fieldname": "estimated_duration",
+   "fieldtype": "Data",
+   "label": "Estimated Duration"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2024-11-05 23:45:15.643071",
+ "modified": "2025-08-09 14:46:14.596995",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Assignment",
