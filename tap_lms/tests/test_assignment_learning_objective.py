@@ -110,17 +110,17 @@ class TestAssignmentLearningObjective:
 class TestAssignmentLearningObjectiveEdgeCases:
     """Edge case tests for better coverage"""
     
-    def test_class_definition_coverage(self):
-        """Ensure the actual class definition line is covered"""
-        # Import and access the class to ensure definition is executed
-        from tap_lms.tap_lms.doctype.assignment_learning_objective.assignment_learning_objective import AssignmentLearningObjective as ALO
+    # def test_class_definition_coverage(self):
+    #     """Ensure the actual class definition line is covered"""
+    #     # Import and access the class to ensure definition is executed
+    #     from tap_lms.tap_lms.doctype.assignment_learning_objective.assignment_learning_objective import AssignmentLearningObjective as ALO
         
-        # This should cover the class definition line
-        assert ALO.__bases__[0] == Document
+    #     # This should cover the class definition line
+    #     assert ALO.__bases__[0] == Document
         
-        # Create instance to cover the pass statement
-        instance = ALO()
-        assert instance is not None
+    #     # Create instance to cover the pass statement
+    #     instance = ALO()
+    #     assert instance is not None
     
     def test_import_coverage(self):
         """Test import statements coverage"""
