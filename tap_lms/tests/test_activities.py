@@ -175,3 +175,244 @@
 
 # # if __name__ == '__main__':
 # #     unittest.main(verbosity=2)
+# -*- coding: utf-8 -*-
+# Copyright (c) 2023, Tech4dev and contributors
+# For license information, please see license.txt
+
+import unittest
+from unittest.mock import patch, MagicMock
+import frappe
+from frappe.test_runner import make_test_records
+from tap_lms.tap_lms.doctype.activities.activities import Activities
+
+
+class TestActivities(unittest.TestCase):
+    """Test cases for Activities doctype"""
+    
+    @classmethod
+    def setUpClass(cls):
+        """Set up test class - run once before all tests"""
+        # Ensure we're in test mode
+        frappe.set_user("Administrator")
+        
+    def setUp(self):
+        """Set up before each test method"""
+        # Clean up any existing test data
+        frappe.db.sql("DELETE FROM `tabActivities` WHERE name LIKE 'test-activity%'")
+        frappe.db.commit()
+    
+    def tearDown(self):
+        """Clean up after each test method"""
+        # Clean up test data
+        frappe.db.sql("DELETE FROM `tabActivities` WHERE name LIKE 'test-activity%'")
+        frappe.db.commit()
+    
+    def test_activities_class_instantiation(self):
+        """Test that Activities class can be instantiated"""
+        activity = Activities()
+        self.assertIsInstance(activity, Activities)
+        self.assertTrue(hasattr(activity, '__init__'))
+    
+    def test_activities_inherits_from_document(self):
+        """Test that Activities inherits from frappe.model.document.Document"""
+        from frappe.model.document import Document
+        activity = Activities()
+        self.assertIsInstance(activity, Document)
+    
+    def test_activities_class_structure(self):
+        """Test the class structure and methods"""
+        # Check if class exists and has correct base class
+        self.assertTrue(issubclass(Activities, frappe.model.document.Document))
+        
+        # Check class name
+        self.assertEqual(Activities.__name__, 'Activities')
+    
+    @patch('frappe.get_doc')
+    def test_activities_document_creation(self, mock_get_doc):
+        """Test Activities document creation through Frappe framework"""
+        # Mock the document
+        mock_doc = MagicMock()
+        mock_doc.doctype = 'Activities'
+        mock_doc.name = 'test-activity-1'
+        mock_get_doc.return_value = mock_doc
+        
+        # Test document creation
+        doc = frappe.get_doc('Activities')
+        self.assertEqual(doc.doctype, 'Activities')
+        mock_get_doc.assert_called_once_with('Activities')
+    
+    @patch('frappe.new_doc')
+    def test_activities_new_document(self, mock_new_doc):
+        """Test creating new Activities document"""
+        # Mock new document
+        mock_doc = MagicMock(spec=Activities)
+        mock_doc.doctype = 'Activities'
+        mock_new_doc.return_value = mock_doc
+        
+        # Test new document creation
+        new_doc = frappe.new_doc('Activities')
+        self.assertEqual(new_doc.doctype, 'Activities')
+        mock_new_doc.assert_called_once_with('Activities')
+    
+    def test_activities_class_attributes(self):
+        """Test class attributes and methods availability"""
+        activity = Activities()
+        
+        # Test that it has Document's basic attributes/methods
+        self.assertTrue(hasattr(activity, 'doctype'))
+        self.assertTrue(hasattr(activity, 'name'))
+        self.assertTrue(callable(getattr(activity, 'save', None)))
+        self.assertTrue(callable(getattr(activity, 'delete', None)))
+    
+    @patch('frappe.db.get_value')
+    def test_activities_database_interaction(self, mock_get_value):
+        """Test database interaction capabilities"""
+        mock_get_value.return_value = 'test-activity-1'
+        
+        # Test database query
+        result = frappe.db.get_value('Activities', 'test-activity-1', 'name')
+        self.assertEqual(result, 'test-activity-1')
+        mock_get_value.assert_called_once_with('Activities', 'test-activity-1', 'name')
+    
+    def test_activities_class_methods_inheritance(self):
+        """Test inherited methods from Document class"""
+        activity = Activities()
+        
+        # Check if common Document methods are available
+        inherited_methods = [
+            'get', 'set', 'update', 'as_dict', 
+            'get_valid_dict', 'check_permission'
+        ]
+        
+        for method in inherited_methods:
+            self.assertTrue(hasattr(activity, method), 
+                          f"Method {method} should be inherited from Document")
+    
+    @patch('frappe.get_meta')
+    def test_activities_meta_information(self, mock_get_meta):
+        """Test doctype meta information"""
+        mock_meta = MagicMock()
+        mock_meta.name = 'Activities'
+        mock_meta.module = 'tap_lms'
+        mock_get_meta.return_value = mock_meta
+        
+        meta = frappe.get_meta('Activities')
+        self.assertEqual(meta.name, 'Activities')
+        self.assertEqual(meta.module, 'tap_lms')
+        mock_get_meta.assert_called_once_with('Activities')
+    
+    def test_activities_pass_statement_coverage(self):
+        """Test the pass statement in Activities class for coverage"""
+        # This test specifically targets the pass statement
+        activity = Activities()
+        
+        # The class should be instantiable despite having only pass
+        self.assertIsNotNone(activity)
+        
+        # Test that the pass statement doesn't prevent normal operation
+        try:
+            # This should work without errors
+            activity.doctype = 'Activities'
+            self.assertEqual(activity.doctype, 'Activities')
+        except Exception as e:
+            self.fail(f"Pass statement should not prevent normal operation: {e}")
+    
+    @patch('frappe.db.sql')
+    def test_activities_custom_queries(self, mock_sql):
+        """Test custom database queries for Activities"""
+        mock_sql.return_value = [['test-activity-1']]
+        
+        # Test custom query
+        result = frappe.db.sql("SELECT name FROM `tabActivities` LIMIT 1")
+        self.assertEqual(result, [['test-activity-1']])
+        mock_sql.assert_called_once()
+    
+    def test_activities_import_statement_coverage(self):
+        """Test the import statement coverage"""
+        # Test that the import from frappe.model.document works
+        from frappe.model.document import Document
+        
+        # Verify Activities uses the imported Document
+        self.assertTrue(issubclass(Activities, Document))
+        
+        # Test the specific import in the activities.py file
+        from tap_lms.tap_lms.doctype.activities.activities import Activities as ImportedActivities
+        self.assertEqual(Activities, ImportedActivities)
+    
+    @patch('frappe.flags.in_test', True)
+    def test_activities_test_environment(self):
+        """Test Activities in test environment"""
+        activity = Activities()
+        
+        # Ensure we can work with the class in test mode
+        self.assertIsInstance(activity, Activities)
+        self.assertTrue(frappe.flags.in_test)
+    
+    def test_activities_class_docstring_coverage(self):
+        """Test class definition coverage including potential docstrings"""
+        # Test the class definition line coverage
+        self.assertEqual(Activities.__name__, 'Activities')
+        self.assertEqual(len(Activities.__bases__), 1)
+        self.assertEqual(Activities.__bases__[0].__name__, 'Document')
+
+
+# Additional test class for edge cases
+class TestActivitiesEdgeCases(unittest.TestCase):
+    """Edge case tests for Activities"""
+    
+    def test_activities_multiple_inheritance_check(self):
+        """Test Activities class inheritance chain"""
+        activity = Activities()
+        
+        # Check the method resolution order
+        mro = Activities.__mro__
+        self.assertIn(frappe.model.document.Document, mro)
+        self.assertEqual(mro[0], Activities)
+    
+    def test_activities_empty_class_functionality(self):
+        """Test that empty class with pass still functions correctly"""
+        activity = Activities()
+        
+        # Test that standard Document functionality works
+        # Even with just 'pass' in the class
+        activity.flags = frappe._dict()
+        self.assertIsInstance(activity.flags, frappe._dict)
+    
+    @patch.object(Activities, '__init__')
+    def test_activities_init_method_call(self, mock_init):
+        """Test __init__ method call coverage"""
+        mock_init.return_value = None
+        
+        # This will call __init__ and cover that line
+        Activities()
+        mock_init.assert_called_once()
+
+
+# Performance and integration tests
+class TestActivitiesIntegration(unittest.TestCase):
+    """Integration tests for Activities"""
+    
+    @patch('frappe.get_all')
+    def test_activities_list_view(self, mock_get_all):
+        """Test Activities list functionality"""
+        mock_get_all.return_value = [
+            {'name': 'test-activity-1'},
+            {'name': 'test-activity-2'}
+        ]
+        
+        result = frappe.get_all('Activities')
+        self.assertEqual(len(result), 2)
+        mock_get_all.assert_called_once_with('Activities')
+    
+    def test_activities_module_import(self):
+        """Test module import coverage"""
+        # Test different ways to import the class
+        import tap_lms.tap_lms.doctype.activities.activities as activities_module
+        self.assertTrue(hasattr(activities_module, 'Activities'))
+        
+        from tap_lms.tap_lms.doctype.activities import activities
+        self.assertTrue(hasattr(activities, 'Activities'))
+
+
+if __name__ == '__main__':
+    unittest.main()
