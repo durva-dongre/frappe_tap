@@ -728,8 +728,17 @@
 # test_city.py
 import unittest
 import frappe
-from frappe.tests.utils import FrappeTestCase
-from tap_lms.tap_lms.doctype.city.city import City
+from frappe.test_runner import unittest_runner
+
+# Try different import paths for FrappeTestCase
+try:
+    from frappe.tests.utils import FrappeTestCase
+except ImportError:
+    try:
+        from frappe.utils.testutils import FrappeTestCase
+    except ImportError:
+        # Fallback to basic unittest if FrappeTestCase is not available
+        FrappeTestCase = unittest.TestCase
 
 
 class TestCity(FrappeTestCase):
@@ -737,6 +746,11 @@ class TestCity(FrappeTestCase):
     
     def setUp(self):
         """Set up test data before each test method"""
+        # Initialize Frappe if not already done
+        if not frappe.db:
+            frappe.init_site()
+            frappe.connect()
+        
         self.test_city_data = {
             "doctype": "City",
             "city_name": "Test City",
@@ -748,8 +762,11 @@ class TestCity(FrappeTestCase):
     
     def tearDown(self):
         """Clean up after each test method"""
-        # Delete any test records created
-        frappe.db.rollback()
+        # Clean up test records
+        try:
+            frappe.db.rollback()
+        except:
+            pass
     
     def test_city_creation(self):
         """Test basic city document creation"""
