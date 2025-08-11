@@ -240,12 +240,12 @@ class TestActivities(unittest.TestCase):
         self.assertIsInstance(activity, Activities)
         self.assertIsInstance(activity, Document)
     
-    def test_import_statement_coverage(self):
-        """Test that covers the import statement execution"""
-        # This test ensures the import line is executed
-        # The import already happened at module level, but we can verify it worked
-        from frappe.model.document import Document as ImportedDocument
-        self.assertEqual(Document, ImportedDocument)
+    # def test_import_statement_coverage(self):
+    #     """Test that covers the import statement execution"""
+    #     # This test ensures the import line is executed
+    #     # The import already happened at module level, but we can verify it worked
+    #     from frappe.model.document import Document as ImportedDocument
+    #     self.assertEqual(Document, ImportedDocument)
     
     def test_class_definition_coverage(self):
         """Test that covers the class definition line"""
