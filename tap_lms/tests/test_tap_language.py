@@ -435,18 +435,18 @@ except ImportError:
 
 
 # Create the actual import with fallbacks for testing
-TAPLanguage = None
+# TAPLanguage = None
 
-try:
-    from tap_lms.tap_lms.doctype.tap_language.tap_language import TAPLanguage
-except ImportError:
-    try:
-        from tap_language import TAPLanguage
-    except ImportError:
-        class TAPLanguage(MockDocument):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-            pass
+# try:
+#     from tap_lms.tap_lms.doctype.tap_language.tap_language import TAPLanguage
+# except ImportError:
+#     try:
+#         from tap_language import TAPLanguage
+#     except ImportError:
+#         class TAPLanguage(MockDocument):
+#             def __init__(self, *args, **kwargs):
+#                 super().__init__(*args, **kwargs)
+#             pass
 
 
 class TestTAPLanguage:
