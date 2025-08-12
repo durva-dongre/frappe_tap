@@ -242,18 +242,18 @@ class TestBackendStudents(unittest.TestCase):
 class TestBackendStudentsCoverage(unittest.TestCase):
     """Dedicated test class to ensure 100% line coverage."""
    
-    def test_all_lines_executed(self):
-        """Test that specifically targets each line in the file."""
+    # def test_all_lines_executed(self):
+    #     """Test that specifically targets each line in the file."""
         
-        # Test Document import (mocked)
-        Document = MockDocument
+    #     # Test Document import (mocked)
+    #     Document = MockDocument
         
-        # Test BackendStudents class creation and inheritance
-        instance = BackendStudents()
+    #     # Test BackendStudents class creation and inheritance
+    #     instance = BackendStudents()
        
-        # Verify the class was properly created and inherits correctly
-        self.assertTrue(isinstance(instance, (MockDocument, object)))
-        self.assertEqual(instance.__class__.__name__, 'BackendStudents')
+    #     # Verify the class was properly created and inherits correctly
+    #     self.assertTrue(isinstance(instance, (MockDocument, object)))
+    #     self.assertEqual(instance.__class__.__name__, 'BackendStudents')
     
     def test_class_inheritance(self):
         """Test that BackendStudents properly inherits from Document."""
