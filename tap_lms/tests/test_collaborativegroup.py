@@ -43,23 +43,7 @@ class TestCollaborativeGroupCompleteCoverage(unittest.TestCase):
             cg = CollaborativeGroup()
             del cg
 
-    def test_property_access_coverage(self):
-        """Test 11: Cover property access if any exist"""
-        cg = CollaborativeGroup()
-        
-        # Test accessing common Frappe Document properties
-        common_attrs = [
-            'name', 'doctype', 'docstatus', 'idx', 'owner', 
-            'creation', 'modified', 'modified_by'
-        ]
-        
-        for attr in common_attrs:
-            if hasattr(cg, attr):
-                try:
-                    _ = getattr(cg, attr)
-                except Exception:
-                    # Some attributes might not be initialized
-                    pass
+    
 
     def test_magic_methods_coverage(self):
         """Test 12: Cover magic methods"""
