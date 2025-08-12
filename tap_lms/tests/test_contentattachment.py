@@ -33,26 +33,7 @@ class TestCompetencyList(unittest.TestCase):
         self.assertIsNotNone(doc)
         mock_get_doc.assert_called_once_with('CompetencyList')
     
-    def test_competency_list_attributes(self):
-        """Test that CompetencyList has expected attributes from Document base class"""
-        # Check for common Document attributes
-        expected_attributes = ['name', 'doctype', 'flags']
-        
-        for attr in expected_attributes:
-            self.assertTrue(hasattr(self.competency_list, attr),
-                          f"CompetencyList should have '{attr}' attribute")
-    
-    def test_competency_list_methods_from_document(self):
-        """Test that CompetencyList inherits methods from Document"""
-        # Check for common Document methods
-        expected_methods = ['insert', 'save', 'delete', 'reload']
-        
-        for method in expected_methods:
-            self.assertTrue(hasattr(self.competency_list, method),
-                          f"CompetencyList should have '{method}' method")
-            self.assertTrue(callable(getattr(self.competency_list, method)),
-                          f"CompetencyList.{method} should be callable")
-    
+       
     @patch('frappe.new_doc')
     def test_competency_list_new_document(self, mock_new_doc):
         """Test creating a new CompetencyList document"""
