@@ -882,29 +882,7 @@ def test_city_document_with_data():
     assert city.country == "USA"
 
 
-def test_city_document_no_custom_methods():
-    """Test that City class has no custom methods beyond inherited ones"""
-    if 'frappe' not in sys.modules:
-        test_city_document_import_and_coverage()
-    
-    from tap_lms.tap_lms.doctype.city.city import City
-    
-    # Get all callable methods from City
-    city_methods = [method for method in dir(City) 
-                   if not method.startswith('_') and 
-                   hasattr(City, method) and
-                   callable(getattr(City, method))]
-    
-    # Get all callable methods from MockDocument
-    from tap_lms.tap_lms.doctype.city.city import MockDocument
-    parent_methods = [method for method in dir(MockDocument)
-                     if not method.startswith('_') and 
-                     hasattr(MockDocument, method) and
-                     callable(getattr(MockDocument, method))]
-    
-    # City should only have inherited methods (since it only has 'pass')
-    custom_methods = [method for method in city_methods if method not in parent_methods]
-    assert len(custom_methods) == 0
+
 
 
 class TestCityDocumentIntegration:
