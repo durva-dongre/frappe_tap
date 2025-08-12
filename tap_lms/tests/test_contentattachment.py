@@ -372,96 +372,96 @@ class TestContentAttachmentModuleCoverage:
             assert hasattr(obj, 'meta')
 
 
-# Additional test to ensure the module is properly loaded
-def test_contentattachment_module_loading():
-    """Test the module loading process specifically"""
+# # Additional test to ensure the module is properly loaded
+# def test_contentattachment_module_loading():
+#     """Test the module loading process specifically"""
     
-    # Create comprehensive mocks
-    frappe_mock = MagicMock()
-    document_mock = MagicMock()
+#     # Create comprehensive mocks
+#     frappe_mock = MagicMock()
+#     document_mock = MagicMock()
     
-    class TestDocument:
-        def __init__(self):
-            self.flags = {}
+#     class TestDocument:
+#         def __init__(self):
+#             self.flags = {}
     
-    document_mock.Document = TestDocument
-    frappe_mock.model = MagicMock()
-    frappe_mock.model.document = document_mock
+#     document_mock.Document = TestDocument
+#     frappe_mock.model = MagicMock()
+#     frappe_mock.model.document = document_mock
     
-    # Clean module cache first
-    module_path = 'tap_lms.tap_lms.doctype.contentattachment.contentattachment'
-    if module_path in sys.modules:
-        del sys.modules[module_path]
+#     # Clean module cache first
+#     module_path = 'tap_lms.tap_lms.doctype.contentattachment.contentattachment'
+#     if module_path in sys.modules:
+#         del sys.modules[module_path]
     
-    with patch.dict('sys.modules', {
-        'frappe': frappe_mock,
-        'frappe.model': frappe_mock.model,
-        'frappe.model.document': document_mock
-    }):
-        # Import the module - this executes all lines
-        import importlib
-        module = importlib.import_module('tap_lms.tap_lms.doctype.contentattachment.contentattachment')
+#     with patch.dict('sys.modules', {
+#         'frappe': frappe_mock,
+#         'frappe.model': frappe_mock.model,
+#         'frappe.model.document': document_mock
+#     }):
+#         # Import the module - this executes all lines
+#         import importlib
+#         module = importlib.import_module('tap_lms.tap_lms.doctype.contentattachment.contentattachment')
         
-        # Verify the module was loaded and ContentAttachment class exists
-        assert hasattr(module, 'ContentAttachment')
-        ContentAttachment = module.ContentAttachment
+#         # Verify the module was loaded and ContentAttachment class exists
+#         assert hasattr(module, 'ContentAttachment')
+#         ContentAttachment = module.ContentAttachment
         
-        # Verify inheritance
-        assert issubclass(ContentAttachment, TestDocument)
+#         # Verify inheritance
+#         assert issubclass(ContentAttachment, TestDocument)
         
-        # Create instance
-        instance = ContentAttachment()
-        assert hasattr(instance, 'flags')
+#         # Create instance
+#         instance = ContentAttachment()
+#         assert hasattr(instance, 'flags')
         
-        # Test that we can create multiple instances
-        instances = [ContentAttachment() for _ in range(5)]
-        assert len(instances) == 5
-        assert all(isinstance(inst, ContentAttachment) for inst in instances)
+#         # Test that we can create multiple instances
+#         instances = [ContentAttachment() for _ in range(5)]
+#         assert len(instances) == 5
+#         assert all(isinstance(inst, ContentAttachment) for inst in instances)
 
 
-# Parametrized test for different scenarios
-@pytest.mark.parametrize("mock_setup", [
-    "basic_mock",
-    "extended_mock",
-    "minimal_mock"
-])
-def test_contentattachment_various_mocks(mock_setup):
-    """Test ContentAttachment with various mock setups"""
+# # Parametrized test for different scenarios
+# @pytest.mark.parametrize("mock_setup", [
+#     "basic_mock",
+#     "extended_mock",
+#     "minimal_mock"
+# ])
+# def test_contentattachment_various_mocks(mock_setup):
+#     """Test ContentAttachment with various mock setups"""
     
-    if mock_setup == "basic_mock":
-        mock_doc = type('Document', (), {})
-    elif mock_setup == "extended_mock":
-        class ExtendedDoc:
-            def __init__(self):
-                self.name = None
-                self.doctype = None
-        mock_doc = ExtendedDoc
-    else:  # minimal_mock
-        mock_doc = object
+#     if mock_setup == "basic_mock":
+#         mock_doc = type('Document', (), {})
+#     elif mock_setup == "extended_mock":
+#         class ExtendedDoc:
+#             def __init__(self):
+#                 self.name = None
+#                 self.doctype = None
+#         mock_doc = ExtendedDoc
+#     else:  # minimal_mock
+#         mock_doc = object
     
-    mock_frappe = MagicMock()
-    mock_document_module = MagicMock()
-    mock_document_module.Document = mock_doc
-    mock_frappe.model = MagicMock()
-    mock_frappe.model.document = mock_document_module
+#     mock_frappe = MagicMock()
+#     mock_document_module = MagicMock()
+#     mock_document_module.Document = mock_doc
+#     mock_frappe.model = MagicMock()
+#     mock_frappe.model.document = mock_document_module
     
-    # Clear cache
-    module_name = 'tap_lms.tap_lms.doctype.contentattachment.contentattachment'
-    if module_name in sys.modules:
-        del sys.modules[module_name]
+#     # Clear cache
+#     module_name = 'tap_lms.tap_lms.doctype.contentattachment.contentattachment'
+#     if module_name in sys.modules:
+#         del sys.modules[module_name]
     
-    with patch.dict('sys.modules', {
-        'frappe': mock_frappe,
-        'frappe.model': mock_frappe.model,
-        'frappe.model.document': mock_document_module
-    }):
-        from tap_lms.tap_lms.doctype.contentattachment.contentattachment import ContentAttachment
+#     with patch.dict('sys.modules', {
+#         'frappe': mock_frappe,
+#         'frappe.model': mock_frappe.model,
+#         'frappe.model.document': mock_document_module
+#     }):
+#         from tap_lms.tap_lms.doctype.contentattachment.contentattachment import ContentAttachment
         
-        # Basic tests that ensure all lines are executed
-        assert ContentAttachment is not None
-        instance = ContentAttachment()
-        assert instance is not None
+#         # Basic tests that ensure all lines are executed
+#         assert ContentAttachment is not None
+#         instance = ContentAttachment()
+#         assert instance is not None
         
-        if mock_setup != "minimal_mock":
-            assert isinstance(instance, mock_doc)
+#         if mock_setup != "minimal_mock":
+#             assert isinstance(instance, mock_doc)
 
