@@ -103,4 +103,3 @@ class TestContentAttachmentParametrized:
         """Test that inherited Document methods exist"""
         content_attachment = ContentAttachment()
         assert hasattr(content_attachment, attribute)
-
