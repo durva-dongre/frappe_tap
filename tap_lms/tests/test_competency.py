@@ -29,3 +29,29 @@ class TestCompetency(unittest.TestCase):
     
     
 # Additional test class for edge cases and integration scenarios
+class TestCompetencyIntegration(unittest.TestCase):
+    
+    @patch('sys.modules')
+    def test_module_import_with_mocked_frappe(self, mock_modules):
+        """Test module import behavior with different frappe mock scenarios."""
+        # Setup mock
+        mock_frappe = MagicMock()
+        mock_document = MagicMock()
+        mock_frappe.model.document.Document = mock_document
+        mock_modules.__getitem__.side_effect = lambda name: {
+            'frappe': mock_frappe,
+            'frappe.model': mock_frappe.model,
+            'frappe.model.document': mock_frappe.model.document
+        }.get(name, MagicMock())
+        
+        # Test import
+        try:
+            import importlib
+            if 'tap_lms.tap_lms.doctype.competency.competency' in sys.modules:
+                importlib.reload(sys.modules['tap_lms.tap_lms.doctype.competency.competency'])
+            else:
+                import tap_lms.tap_lms.doctype.competency.competency
+            self.assertTrue(True)
+        except Exception as e:
+            self.fail(f"Import with mocked frappe failed: {e}")
+
