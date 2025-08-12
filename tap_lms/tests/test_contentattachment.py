@@ -1,100 +1,106 @@
-import unittest
-from unittest.mock import patch, MagicMock
+import pytest
 from frappe.model.document import Document
-from tap_lms.tap_lms.doctype.competencylist.competencylist import CompetencyList
+from tap_lms.tap_lms.doctype.contentattachment.contentattachment import ContentAttachment
 
 
-class TestCompetencyList(unittest.TestCase):
-    """Test cases for CompetencyList doctype"""
+class TestContentAttachment:
+    """Test cases for ContentAttachment class to achieve 100% code coverage"""
     
-    def setUp(self):
-        """Set up test fixtures before each test method"""
-        self.competency_list = CompetencyList()
-    
-    def test_competency_list_inheritance(self):
-        """Test that CompetencyList inherits from Document"""
-        self.assertIsInstance(self.competency_list, Document)
-        self.assertTrue(issubclass(CompetencyList, Document))
-    
-    def test_competency_list_instantiation(self):
-        """Test CompetencyList can be instantiated"""
-        self.assertIsNotNone(self.competency_list)
-        self.assertEqual(type(self.competency_list).__name__, 'CompetencyList')
-    
-    @patch('frappe.get_doc')
-    def test_competency_list_creation_with_frappe(self, mock_get_doc):
-        """Test CompetencyList creation through Frappe framework"""
-        mock_doc = MagicMock(spec=CompetencyList)
-        mock_get_doc.return_value = mock_doc
+    def test_content_attachment_import(self):
+        """Test that ContentAttachment can be imported successfully"""
+        # This tests the import statement (line 5)
+        assert ContentAttachment is not None
         
-        # Simulate creating a new CompetencyList document
-        doc = mock_get_doc('CompetencyList')
+    def test_content_attachment_class_definition(self):
+        """Test that ContentAttachment class is properly defined"""
+        # This tests the class definition (line 7)
+        assert issubclass(ContentAttachment, Document)
+        assert ContentAttachment.__name__ == "ContentAttachment"
         
-        self.assertIsNotNone(doc)
-        mock_get_doc.assert_called_once_with('CompetencyList')
-    
-       
-    @patch('frappe.new_doc')
-    def test_competency_list_new_document(self, mock_new_doc):
-        """Test creating a new CompetencyList document"""
-        mock_doc = MagicMock(spec=CompetencyList)
-        mock_new_doc.return_value = mock_doc
+    def test_content_attachment_instantiation(self):
+        """Test that ContentAttachment can be instantiated"""
+        # This tests the class instantiation and pass statement (line 8)
+        content_attachment = ContentAttachment()
+        assert isinstance(content_attachment, ContentAttachment)
+        assert isinstance(content_attachment, Document)
         
-        # Simulate creating a new document
-        new_competency_list = mock_new_doc('CompetencyList')
+    def test_content_attachment_with_data(self):
+        """Test ContentAttachment with sample data"""
+        # Test with dictionary data (common Frappe pattern)
+        data = {
+            "name": "test-attachment",
+            "doctype": "ContentAttachment",
+            "title": "Test Attachment"
+        }
+        content_attachment = ContentAttachment(data)
+        assert isinstance(content_attachment, ContentAttachment)
         
-        self.assertIsNotNone(new_competency_list)
-        mock_new_doc.assert_called_once_with('CompetencyList')
-    
-    def test_competency_list_str_representation(self):
-        """Test string representation of CompetencyList"""
-        # Set a name for testing
-        self.competency_list.name = "Test Competency List"
+    def test_content_attachment_inheritance(self):
+        """Test that ContentAttachment properly inherits from Document"""
+        content_attachment = ContentAttachment()
         
-        # The string representation should include the name
-        str_repr = str(self.competency_list)
-        self.assertIsInstance(str_repr, str)
-    
-    def test_competency_list_doctype_property(self):
-        """Test that doctype is set correctly"""
-        # This might be set automatically by Frappe
-        if hasattr(self.competency_list, 'doctype'):
-            self.assertEqual(self.competency_list.doctype, 'CompetencyList')
+        # Check that it has Document methods/attributes
+        assert hasattr(content_attachment, 'insert')
+        assert hasattr(content_attachment, 'save')
+        assert hasattr(content_attachment, 'delete')
+        assert hasattr(content_attachment, 'get')
+        
+    @pytest.fixture
+    def content_attachment_instance(self):
+        """Fixture to provide a ContentAttachment instance for tests"""
+        return ContentAttachment({
+            "name": "fixture-attachment",
+            "doctype": "ContentAttachment"
+        })
+        
+    def test_content_attachment_fixture(self, content_attachment_instance):
+        """Test using the fixture"""
+        assert isinstance(content_attachment_instance, ContentAttachment)
+        assert content_attachment_instance.doctype == "ContentAttachment"
 
 
-class TestCompetencyListIntegration(unittest.TestCase):
-    """Integration tests for CompetencyList with Frappe framework"""
+# Additional integration tests if you need them
+class TestContentAttachmentIntegration:
+    """Integration tests for ContentAttachment"""
     
-    @patch('frappe.get_all')
-    def test_get_all_competency_lists(self, mock_get_all):
-        """Test retrieving all CompetencyList documents"""
-        mock_get_all.return_value = [
-            {'name': 'CL001', 'title': 'Basic Skills'},
-            {'name': 'CL002', 'title': 'Advanced Skills'}
-        ]
+    @pytest.mark.skip(reason="Requires Frappe site setup")
+    def test_content_attachment_database_operations(self):
+        """Test database operations (requires actual Frappe setup)"""
+        # This would test actual CRUD operations
+        content_attachment = ContentAttachment({
+            "title": "Integration Test Attachment",
+            "description": "Test attachment for integration testing"
+        })
         
-        # This would be how you'd typically query CompetencyList documents
-        import frappe
-        competency_lists = frappe.get_all('CompetencyList', 
-                                        fields=['name', 'title'])
+        # These would require proper Frappe site setup
+        # content_attachment.insert()
+        # content_attachment.save()
+        # content_attachment.reload()
+        # content_attachment.delete()
         
-        self.assertEqual(len(competency_lists), 2)
-        self.assertEqual(competency_lists[0]['name'], 'CL001')
-        mock_get_all.assert_called_once_with('CompetencyList', 
-                                           fields=['name', 'title'])
-    
-    @patch('frappe.db.exists')
-    def test_competency_list_exists(self, mock_exists):
-        """Test checking if CompetencyList document exists"""
-        mock_exists.return_value = True
-        
-        import frappe
-        exists = frappe.db.exists('CompetencyList', 'CL001')
-        
-        self.assertTrue(exists)
-        mock_exists.assert_called_once_with('CompetencyList', 'CL001')
+        pass
 
 
-# if __name__ == '__main__':
-#     # Run the tests
-#     unittest.main(verbosity=2)
+# Parametrized tests for more comprehensive coverage
+class TestContentAttachmentParametrized:
+    """Parametrized tests for different scenarios"""
+    
+    @pytest.mark.parametrize("test_data", [
+        {},
+        {"name": "test1"},
+        {"name": "test2", "title": "Test Title"},
+        {"name": "test3", "title": "Test Title", "description": "Test Description"}
+    ])
+    def test_content_attachment_various_data(self, test_data):
+        """Test ContentAttachment with various data combinations"""
+        content_attachment = ContentAttachment(test_data)
+        assert isinstance(content_attachment, ContentAttachment)
+        
+    @pytest.mark.parametrize("attribute", [
+        "insert", "save", "delete", "reload", "get", "set"
+    ])
+    def test_inherited_methods_exist(self, attribute):
+        """Test that inherited Document methods exist"""
+        content_attachment = ContentAttachment()
+        assert hasattr(content_attachment, attribute)
+
