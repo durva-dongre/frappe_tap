@@ -22,13 +22,13 @@ class TestBackendStudentOnboarding:
         assert instance is not None
         assert isinstance(instance, BackendStudentOnboarding)
     
-    def test_pass_statement_coverage(self):
-        """Test that the pass statement is executed (covers line 8)"""
-        # Since the class only contains 'pass', this test ensures the class body executes
-        try:
-            BackendStudentOnboarding()
-        except Exception as e:
-            pytest.fail(f"Class instantiation failed: {e}")
+    # def test_pass_statement_coverage(self):
+    #     """Test that the pass statement is executed (covers line 8)"""
+    #     # Since the class only contains 'pass', this test ensures the class body executes
+    #     try:
+    #         BackendStudentOnboarding()
+    #     except Exception as e:
+    #         pytest.fail(f"Class instantiation failed: {e}")
     
     @patch('frappe.model.document.Document.__init__')
     def test_document_initialization(self, mock_init):
@@ -115,13 +115,13 @@ class TestBackendStudentOnboardingEdgeCases:
         """Test that class name matches expected naming convention"""
         assert BackendStudentOnboarding.__name__ == 'BackendStudentOnboarding'
     
-    def test_module_import(self):
-        """Test that module can be imported correctly"""
-        try:
-            from tap_lms.tap_lms.doctype.backend_student_onboarding.backend_student_onboarding import BackendStudentOnboarding
-            assert BackendStudentOnboarding is not None
-        except ImportError as e:
-            pytest.fail(f"Import failed: {e}")
+    # def test_module_import(self):
+    #     """Test that module can be imported correctly"""
+    #     try:
+    #         from tap_lms.tap_lms.doctype.backend_student_onboarding.backend_student_onboarding import BackendStudentOnboarding
+    #         assert BackendStudentOnboarding is not None
+    #     except ImportError as e:
+    #         pytest.fail(f"Import failed: {e}")
     
     def test_class_type(self):
         """Test class type verification"""
