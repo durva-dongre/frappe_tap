@@ -336,7 +336,3 @@ class StressCoverageTests(unittest.TestCase):
         new_cg = CollaborativeGroup()
         self.assertIsNotNone(new_cg)
 
-
-if __name__ == '__main__':
-    # Run all tests
-    unittest.main(verbosity=2)
