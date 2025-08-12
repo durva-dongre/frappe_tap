@@ -34,9 +34,6 @@ def test_competency_coverage():
 
 def test_competency_inheritance():
     """Test Competency inherits from Document"""
-    if 'frappe' not in sys.modules:
-        test_competency_coverage()
-    
     from tap_lms.tap_lms.doctype.competency.competency import Competency
     competency = Competency()
     assert competency is not None
@@ -44,9 +41,6 @@ def test_competency_inheritance():
 
 def test_competency_multiple_instances():
     """Test multiple Competency instances"""
-    if 'frappe' not in sys.modules:
-        test_competency_coverage()
-    
     from tap_lms.tap_lms.doctype.competency.competency import Competency
     
     competency1 = Competency()
