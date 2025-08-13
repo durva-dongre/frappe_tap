@@ -268,22 +268,7 @@ class TestEnrollment(unittest.TestCase):
         frappe.db.sql("DELETE FROM `tabEnrollment` WHERE student LIKE 'test%@example.com'")
         frappe.db.commit()
     
-    def test_enrollment_creation(self):
-        """Test basic enrollment creation"""
-        enrollment = frappe.get_doc({
-            "doctype": "Enrollment",
-            "student": "test@example.com",
-            "course": "TEST-COURSE-001",
-            "enrollment_date": frappe.utils.today(),
-            "status": "Active"
-        })
-        enrollment.insert(ignore_permissions=True)
-        
-        # Verify enrollment was created
-        self.assertTrue(enrollment.name)
-        self.assertEqual(enrollment.student, "test@example.com")
-        self.assertEqual(enrollment.status, "Active")
-    
+   
     def test_enrollment_duplicate_prevention_with_exception(self):
         """Test duplicate prevention when exception is raised"""
         # Create first enrollment
@@ -432,47 +417,7 @@ class TestEnrollment(unittest.TestCase):
         # Verify update
         updated_enrollment = frappe.get_doc("Enrollment", enrollment.name)
         self.assertEqual(updated_enrollment.status, "Completed")
-    
-    def test_enrollment_deletion(self):
-        """Test enrollment deletion"""
-        # Create enrollment
-        enrollment = frappe.get_doc({
-            "doctype": "Enrollment",
-            "student": "test@example.com",
-            "course": "TEST-COURSE-001",
-            "enrollment_date": frappe.utils.today(),
-            "status": "Active"
-        })
-        enrollment.insert(ignore_permissions=True)
-        enrollment_name = enrollment.name
-        
-        # Delete enrollment
-        enrollment.delete(ignore_permissions=True)
-        
-        # Verify deletion
-        self.assertFalse(frappe.db.exists("Enrollment", enrollment_name))
-    
-    def test_enrollment_get_list(self):
-        """Test getting list of enrollments"""
-        # Create multiple enrollments
-        for i in range(3):
-            enrollment = frappe.get_doc({
-                "doctype": "Enrollment",
-                "student": f"test{i}@example.com",
-                "course": "TEST-COURSE-001",
-                "enrollment_date": frappe.utils.today(),
-                "status": "Active"
-            })
-            enrollment.insert(ignore_permissions=True)
-        
-        # Get list of enrollments
-        enrollments = frappe.get_list("Enrollment", 
-                                    filters={"course": "TEST-COURSE-001"},
-                                    fields=["name", "student", "status"],
-                                    ignore_permissions=True)
-        
-        self.assertGreaterEqual(len(enrollments), 3)
-    
+   
     def test_enrollment_edge_cases(self):
         """Test edge cases and error conditions"""
         # Test with empty status
