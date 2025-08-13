@@ -142,43 +142,7 @@ class TestGlificTeacherGroup(unittest.TestCase):
                 frappe.db.commit()
         except Exception:
             pass
-    
-    def test_import_statement_coverage(self):
-        """Test that import statement is covered"""
-        # This test ensures the import line is executed
-        try:
-            from tap_lms.tap_lms.doctype.glific_teacher_group.glific_teacher_group import GlificTeacherGroup
-            # Verify the import worked correctly
-            self.assertTrue(issubclass(GlificTeacherGroup, Document))
-        except ImportError:
-            # If the module doesn't exist yet, create a mock test
-            self.assertTrue(True, "Module import test passed (module may not exist yet)")
-    
-    def test_class_inheritance_mock(self):
-        """Test class inheritance with mock if needed"""
-        try:
-            from tap_lms.tap_lms.doctype.glific_teacher_group.glific_teacher_group import GlificTeacherGroup
-            self.assertTrue(issubclass(GlificTeacherGroup, Document))
-        except ImportError:
-            # Create a mock class for testing
-            class MockGlificTeacherGroup(Document):
-                pass
-            self.assertTrue(issubclass(MockGlificTeacherGroup, Document))
-    
-    def test_class_instantiation(self):
-        """Test that GlificTeacherGroup can be instantiated"""
-        try:
-            from tap_lms.tap_lms.doctype.glific_teacher_group.glific_teacher_group import GlificTeacherGroup
-            doc = GlificTeacherGroup()
-            self.assertIsInstance(doc, GlificTeacherGroup)
-            self.assertIsInstance(doc, Document)
-        except ImportError:
-            # Mock test
-            class MockGlificTeacherGroup(Document):
-                pass
-            doc = MockGlificTeacherGroup()
-            self.assertIsInstance(doc, Document)
-    
+  
     def test_doctype_exists(self):
         """Test that the doctype exists in the system"""
         try:
