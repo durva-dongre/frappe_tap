@@ -49,3 +49,4 @@ def test_course_project_multiple_instances():
     assert project1 is not None
     assert project2 is not None
     assert project1 is not project2
+    
