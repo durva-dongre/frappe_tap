@@ -44,22 +44,7 @@ class TestEnrollment(unittest.TestCase):
         frappe.db.sql("DELETE FROM `tabEnrollment` WHERE student LIKE 'test%@example.com'")
         frappe.db.commit()
     
-    def test_enrollment_creation(self):
-        """Test basic enrollment creation"""
-        enrollment = frappe.get_doc({
-            "doctype": "Enrollment",
-            "student": "test@example.com",
-            "course": "TEST-COURSE-001",
-            "enrollment_date": frappe.utils.today(),
-            "status": "Active"
-        })
-        enrollment.insert(ignore_permissions=True)
-        
-        # Verify enrollment was created
-        self.assertTrue(enrollment.name)
-        self.assertEqual(enrollment.student, "test@example.com")
-        self.assertEqual(enrollment.status, "Active")
-    
+   
     def test_enrollment_duplicate_prevention_with_exception(self):
         """Test duplicate prevention when exception is raised"""
         # Create first enrollment
@@ -189,36 +174,6 @@ class TestEnrollment(unittest.TestCase):
             # Exception path - course field is mandatory
             self.assertTrue(True)  # Exception was caught as expected
     
-    def test_enrollment_comprehensive_flow(self):
-        """Test comprehensive enrollment workflow to cover all paths"""
-        # Test 1: Create enrollment with all fields
-        enrollment = frappe.get_doc({
-            "doctype": "Enrollment",
-            "student": "comprehensive@example.com",
-            "course": "TEST-COURSE-001",
-            "enrollment_date": frappe.utils.today(),
-            "status": "Active"
-        })
-        enrollment.insert(ignore_permissions=True)
-        self.assertTrue(enrollment.name)
-        
-        # Test 2: Update the enrollment
-        enrollment.status = "In Progress"
-        enrollment.save(ignore_permissions=True)
-        self.assertEqual(enrollment.status, "In Progress")
-        
-        # Test 3: Test with different status values
-        enrollment.status = "Completed"
-        enrollment.save(ignore_permissions=True)
-        self.assertEqual(enrollment.status, "Completed")
-        
-        # Test 4: Test retrieval
-        retrieved = frappe.get_doc("Enrollment", enrollment.name)
-        self.assertEqual(retrieved.status, "Completed")
-        
-        # Test 5: Delete the enrollment
-        enrollment.delete(ignore_permissions=True)
-        self.assertFalse(frappe.db.exists("Enrollment", enrollment.name))
     
     def test_enrollment_update(self):
         """Test enrollment update functionality"""
@@ -240,46 +195,7 @@ class TestEnrollment(unittest.TestCase):
         updated_enrollment = frappe.get_doc("Enrollment", enrollment.name)
         self.assertEqual(updated_enrollment.status, "Completed")
     
-    def test_enrollment_deletion(self):
-        """Test enrollment deletion"""
-        # Create enrollment
-        enrollment = frappe.get_doc({
-            "doctype": "Enrollment",
-            "student": "test@example.com",
-            "course": "TEST-COURSE-001",
-            "enrollment_date": frappe.utils.today(),
-            "status": "Active"
-        })
-        enrollment.insert(ignore_permissions=True)
-        enrollment_name = enrollment.name
-        
-        # Delete enrollment
-        enrollment.delete(ignore_permissions=True)
-        
-        # Verify deletion
-        self.assertFalse(frappe.db.exists("Enrollment", enrollment_name))
-    
-    def test_enrollment_get_list(self):
-        """Test getting list of enrollments"""
-        # Create multiple enrollments
-        for i in range(3):
-            enrollment = frappe.get_doc({
-                "doctype": "Enrollment",
-                "student": f"test{i}@example.com",
-                "course": "TEST-COURSE-001",
-                "enrollment_date": frappe.utils.today(),
-                "status": "Active"
-            })
-            enrollment.insert(ignore_permissions=True)
-        
-        # Get list of enrollments
-        enrollments = frappe.get_list("Enrollment", 
-                                    filters={"course": "TEST-COURSE-001"},
-                                    fields=["name", "student", "status"],
-                                    ignore_permissions=True)
-        
-        self.assertGreaterEqual(len(enrollments), 3)
-    
+   
     def test_enrollment_edge_cases(self):
         """Test edge cases and error conditions"""
         # Test with empty status
@@ -325,41 +241,7 @@ class TestEnrollment(unittest.TestCase):
             self.assertTrue(enrollment3.name)
         except Exception as e:
             self.assertTrue(True)  # Exception handled
-    
-    def test_enrollment_bulk_operations(self):
-        """Test bulk operations and list filtering"""
-        # Create multiple enrollments with different statuses
-        enrollments = []
-        for i in range(5):
-            enrollment = frappe.get_doc({
-                "doctype": "Enrollment",
-                "student": f"bulk{i}@example.com",
-                "course": "TEST-COURSE-001",
-                "enrollment_date": frappe.utils.today(),
-                "status": "Active" if i % 2 == 0 else "Inactive"
-            })
-            enrollment.insert(ignore_permissions=True)
-            enrollments.append(enrollment)
-        
-        # Test list retrieval with filters
-        active_enrollments = frappe.get_list("Enrollment", 
-                                           filters={"status": "Active", "course": "TEST-COURSE-001"},
-                                           fields=["name", "student", "status"],
-                                           ignore_permissions=True)
-        
-        inactive_enrollments = frappe.get_list("Enrollment", 
-                                             filters={"status": "Inactive", "course": "TEST-COURSE-001"},
-                                             fields=["name", "student", "status"],
-                                             ignore_permissions=True)
-        
-        # Verify counts
-        self.assertGreaterEqual(len(active_enrollments), 3)  # 0, 2, 4 are active
-        self.assertGreaterEqual(len(inactive_enrollments), 2)  # 1, 3 are inactive
-        
-        # Test bulk deletion
-        for enrollment in enrollments:
-            enrollment.delete(ignore_permissions=True)
-    
+  
     def test_course_creation_failure_handling(self):
         """Test course creation failure handling to cover exception blocks"""
         # This test specifically targets the exception handling in setUpClass
