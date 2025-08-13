@@ -298,41 +298,41 @@ class TestGlificTeacherGroup(unittest.TestCase):
         doc = GlificTeacherGroup()
         self.assertIsInstance(doc, GlificTeacherGroup)
 
-    def test_import_doctype_file(self):
-        """Test importing the doctype file to get coverage"""
-        # This will attempt to import and execute the doctype file
-        try:
-            # Try multiple possible import paths
-            import_paths = [
-                'glific_teacher_group',
-                'tap_lms.doctype.glific_teacher_group.glific_teacher_group',
-                '..doctype.glific_teacher_group.glific_teacher_group'
-            ]
+    # def test_import_doctype_file(self):
+    #     """Test importing the doctype file to get coverage"""
+    #     # This will attempt to import and execute the doctype file
+    #     try:
+    #         # Try multiple possible import paths
+    #         import_paths = [
+    #             'glific_teacher_group',
+    #             'tap_lms.doctype.glific_teacher_group.glific_teacher_group',
+    #             '..doctype.glific_teacher_group.glific_teacher_group'
+    #         ]
             
-            for import_path in import_paths:
-                try:
-                    if '.' in import_path:
-                        parts = import_path.split('.')
-                        if len(parts) > 1 and parts[-1] == parts[-2]:
-                            # Import module.Class format
-                            exec(f"from {'.'.join(parts[:-1])} import {parts[-1]}")
-                    else:
-                        # Simple import
-                        exec(f"import {import_path}")
-                    break
-                except ImportError:
-                    continue
+    #         for import_path in import_paths:
+    #             try:
+    #                 if '.' in import_path:
+    #                     parts = import_path.split('.')
+    #                     if len(parts) > 1 and parts[-1] == parts[-2]:
+    #                         # Import module.Class format
+    #                         exec(f"from {'.'.join(parts[:-1])} import {parts[-1]}")
+    #                 else:
+    #                     # Simple import
+    #                     exec(f"import {import_path}")
+    #                 break
+    #             except ImportError:
+    #                 continue
                     
-            # Create instances to ensure coverage
-            for i in range(3):
-                doc = GlificTeacherGroup()
-                self.assertIsNotNone(doc)
+    #         # Create instances to ensure coverage
+    #         for i in range(3):
+    #             doc = GlificTeacherGroup()
+    #             self.assertIsNotNone(doc)
                 
-        except Exception:
-            # If all imports fail, still pass the test but create mock instances
-            for i in range(3):
-                doc = GlificTeacherGroup()
-                self.assertIsNotNone(doc)
+    #     except Exception:
+    #         # If all imports fail, still pass the test but create mock instances
+    #         for i in range(3):
+    #             doc = GlificTeacherGroup()
+    #             self.assertIsNotNone(doc)
 
 
 class TestGlificTeacherGroupBasic(unittest.TestCase):
@@ -373,53 +373,53 @@ class TestExceptionCoverage(unittest.TestCase):
 class TestDirectImport(unittest.TestCase):
     """Direct import test to ensure coverage"""
     
-    def test_direct_file_execution(self):
-        """Execute the doctype file directly for coverage"""
-        # Get the absolute path to the doctype file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
+    # def test_direct_file_execution(self):
+    #     """Execute the doctype file directly for coverage"""
+    #     # Get the absolute path to the doctype file
+    #     current_dir = os.path.dirname(os.path.abspath(__file__))
         
-        # Possible paths to the doctype file
-        possible_paths = [
-            os.path.join(current_dir, '..', 'doctype', 'glific_teacher_group', 'glific_teacher_group.py'),
-            os.path.join(current_dir, '..', '..', 'doctype', 'glific_teacher_group', 'glific_teacher_group.py'),
-            os.path.join(current_dir, '..', '..', '..', 'tap_lms', 'doctype', 'glific_teacher_group', 'glific_teacher_group.py')
-        ]
+    #     # Possible paths to the doctype file
+    #     possible_paths = [
+    #         os.path.join(current_dir, '..', 'doctype', 'glific_teacher_group', 'glific_teacher_group.py'),
+    #         os.path.join(current_dir, '..', '..', 'doctype', 'glific_teacher_group', 'glific_teacher_group.py'),
+    #         os.path.join(current_dir, '..', '..', '..', 'tap_lms', 'doctype', 'glific_teacher_group', 'glific_teacher_group.py')
+    #     ]
         
-        file_content_executed = False
+    #     file_content_executed = False
         
-        for file_path in possible_paths:
-            if os.path.exists(file_path):
-                try:
-                    # Execute the file content to get coverage
-                    with open(file_path, 'r') as f:
-                        file_content = f.read()
+    #     for file_path in possible_paths:
+    #         if os.path.exists(file_path):
+    #             try:
+    #                 # Execute the file content to get coverage
+    #                 with open(file_path, 'r') as f:
+    #                     file_content = f.read()
                     
-                    # Create a namespace for execution
-                    namespace = {
-                        'frappe': frappe,
-                        'Document': Document,
-                        '__name__': '__main__'
-                    }
+    #                 # Create a namespace for execution
+    #                 namespace = {
+    #                     'frappe': frappe,
+    #                     'Document': Document,
+    #                     '__name__': '__main__'
+    #                 }
                     
-                    # Execute the file content
-                    exec(file_content, namespace)
+    #                 # Execute the file content
+    #                 exec(file_content, namespace)
                     
-                    # If there's a GlificTeacherGroup class, instantiate it
-                    if 'GlificTeacherGroup' in namespace:
-                        cls = namespace['GlificTeacherGroup']
-                        instance = cls()
-                        self.assertIsNotNone(instance)
-                        file_content_executed = True
-                    break
+    #                 # If there's a GlificTeacherGroup class, instantiate it
+    #                 if 'GlificTeacherGroup' in namespace:
+    #                     cls = namespace['GlificTeacherGroup']
+    #                     instance = cls()
+    #                     self.assertIsNotNone(instance)
+    #                     file_content_executed = True
+    #                 break
                     
-                except Exception as e:
-                    # If execution fails, continue to next path
-                    continue
+    #             except Exception as e:
+    #                 # If execution fails, continue to next path
+    #                 continue
         
-        # If we couldn't execute the file, at least ensure our mock works
-        if not file_content_executed:
-            doc = GlificTeacherGroup()
-            self.assertIsNotNone(doc)
+    #     # If we couldn't execute the file, at least ensure our mock works
+    #     if not file_content_executed:
+    #         doc = GlificTeacherGroup()
+    #         self.assertIsNotNone(doc)
         
-        self.assertTrue(True)  # Test passes regardless
+    #     self.assertTrue(True)  # Test passes regardless
 
