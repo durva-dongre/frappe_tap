@@ -67,29 +67,6 @@ class TestEngagementStateIntegration(unittest.TestCase):
         self.assertTrue(issubclass(Document, object))
 
 
-if __name__ == '__main__':
-    # Test runner configuration
-    unittest.main(verbosity=2)
-
-
-# Additional test configuration for coverage
-def run_tests_with_coverage():
-    """Run tests with coverage reporting"""
-    import coverage
-    
-    cov = coverage.Coverage()
-    cov.start()
-    
-    # Run the tests
-    unittest.main(exit=False, verbosity=2)
-    
-    cov.stop()
-    cov.save()
-    
-    # Generate coverage report
-    print("\nCoverage Report:")
-    cov.report()
-
 
 # Pytest-style tests (alternative approach)
 def test_engagement_state_class_exists():
