@@ -320,248 +320,517 @@
 
 
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-import sys
+# import pytest
+# from unittest.mock import Mock, patch, MagicMock
+# import sys
 
 
-# First, we need to mock frappe BEFORE any imports
-@pytest.fixture(scope="session", autouse=True)
-def mock_frappe():
-    """Mock frappe module for the entire test session"""
-    # Create mock frappe module
-    frappe_mock = MagicMock()
+# # First, we need to mock frappe BEFORE any imports
+# @pytest.fixture(scope="session", autouse=True)
+# def mock_frappe():
+#     """Mock frappe module for the entire test session"""
+#     # Create mock frappe module
+#     frappe_mock = MagicMock()
     
-    # Create mock Document class
-    class MockDocument:
-        def __init__(self, *args, **kwargs):
+#     # Create mock Document class
+#     class MockDocument:
+#         def __init__(self, *args, **kwargs):
+#             pass
+        
+#         def save(self):
+#             return True
+        
+#         def delete(self):
+#             return True
+        
+#         def insert(self):
+#             return True
+        
+#         def reload(self):
+#             return True
+        
+#         def cancel(self):
+#             return True
+    
+#     # Set up the mock structure
+#     frappe_mock.model.document.Document = MockDocument
+    
+#     # Add to sys.modules BEFORE importing
+#     sys.modules['frappe'] = frappe_mock
+#     sys.modules['frappe.model'] = frappe_mock.model
+#     sys.modules['frappe.model.document'] = frappe_mock.model.document
+    
+#     return frappe_mock
+
+
+# # Now we can import the actual class
+
+
+# def test_class_definition():
+#     """Test that executes the class definition line"""
+#     # This will execute line 7: class EngagementState(Document):
+#     from frappe.model.document import Document
+    
+#     class EngagementState(Document):
+#         pass  # This will execute line 8: pass
+    
+#     assert EngagementState is not None
+#     assert issubclass(EngagementState, Document)
+
+
+# def test_class_instantiation():
+#     """Test instantiating the class"""
+#     # This will execute all three lines when creating an instance
+#     from frappe.model.document import Document
+    
+#     class EngagementState(Document):
+#         pass
+    
+#     # Creating an instance executes the class body including 'pass'
+#     instance = EngagementState()
+#     assert instance is not None
+#     assert isinstance(instance, EngagementState)
+#     assert isinstance(instance, Document)
+
+
+# def test_multiple_instantiation():
+#     """Test multiple instantiations to ensure coverage"""
+#     from frappe.model.document import Document
+    
+#     class EngagementState(Document):
+#         pass
+    
+#     instances = []
+#     for i in range(3):
+#         instance = EngagementState()
+#         instances.append(instance)
+#         assert instance is not None
+    
+#     assert len(instances) == 3
+
+
+# def test_inheritance_verification():
+#     """Test inheritance to cover class definition"""
+#     from frappe.model.document import Document
+    
+#     class EngagementState(Document):
+#         pass
+    
+#     # Verify inheritance
+#     assert hasattr(EngagementState, '__bases__')
+#     assert Document in EngagementState.__bases__
+#     assert issubclass(EngagementState, Document)
+
+
+# def test_class_attributes():
+#     """Test class attributes"""
+#     from frappe.model.document import Document
+    
+#     class EngagementState(Document):
+#         pass
+    
+#     instance = EngagementState()
+    
+#     # Test that it has Document attributes/methods
+#     assert hasattr(instance, 'save')
+#     assert hasattr(instance, 'delete')
+#     assert hasattr(instance, 'insert')
+
+
+# def test_pass_statement_execution():
+#     """Explicitly test the pass statement"""
+#     from frappe.model.document import Document
+    
+#     # This class definition will execute the pass statement
+#     class EngagementState(Document):
+#         pass  # This line needs to be covered
+    
+#     # Instantiate to ensure class body is executed
+#     instance = EngagementState()
+    
+#     # The pass statement is executed when the class is defined
+#     assert True  # If we get here, pass was executed
+
+
+# @patch('frappe.model.document.Document')
+# def test_with_document_mock(mock_document):
+#     """Test with mocked Document class"""
+#     # Set up mock
+#     mock_document.return_value = Mock()
+    
+#     # Import and define the class
+#     class EngagementState(mock_document):
+#         pass
+    
+#     # Test instantiation
+#     instance = EngagementState()
+#     assert instance is not None
+
+
+# def test_coverage_all_lines():
+#     """Test specifically designed to hit all 3 lines for coverage"""
+#     # Line 5: from frappe.model.document import Document
+#     from frappe.model.document import Document
+    
+#     # Line 7: class EngagementState(Document):
+#     # Line 8: pass
+#     class EngagementState(Document):
+#         pass
+    
+#     # Create instance to execute class body
+#     instance = EngagementState()
+    
+#     # Verify it worked
+#     assert instance is not None
+#     assert isinstance(instance, Document)
+#     assert type(instance).__name__ == 'EngagementState'
+
+
+# def test_direct_class_execution():
+#     """Test that directly executes the class code"""
+#     # Execute the exact code from the file
+#     exec("""
+# from frappe.model.document import Document
+
+# class EngagementState(Document):
+#     pass
+# """)
+    
+#     # Verify execution completed
+#     assert True
+
+
+# def test_import_and_use():
+#     """Test importing and using the class"""
+#     # Import Document
+#     from frappe.model.document import Document
+    
+#     # Define EngagementState exactly as in the file
+#     class EngagementState(Document):
+#         pass
+    
+#     # Use the class multiple ways
+#     instance1 = EngagementState()
+#     instance2 = EngagementState()
+    
+#     # Test inheritance
+#     assert isinstance(instance1, Document)
+#     assert isinstance(instance2, Document)
+#     assert instance1 is not instance2
+    
+#     # Test class attributes
+#     assert hasattr(EngagementState, '__name__')
+#     assert EngagementState.__name__ == 'EngagementState'
+
+
+# # Alternative approach - try to import the real file
+
+
+# def test_execute_file_content():
+#     """Test that executes the exact file content"""
+#     # The exact content of the engagementstate.py file:
+#     file_content = '''
+# from frappe.model.document import Document
+
+# class EngagementState(Document):
+#     pass
+# '''
+    
+#     # Execute the file content
+#     namespace = {}
+#     exec(file_content, namespace)
+    
+#     # Verify the class was created
+#     assert 'EngagementState' in namespace
+#     assert 'Document' in namespace
+    
+#     # Test the class
+#     EngagementState = namespace['EngagementState']
+#     Document = namespace['Document']
+    
+#     instance = EngagementState()
+#     assert instance is not None
+#     assert isinstance(instance, Document)
+
+
+# # Parametrized test for multiple executions
+# @pytest.mark.parametrize("execution_count", [1, 2, 3])
+# def test_multiple_executions(execution_count):
+#     """Test multiple executions to ensure coverage"""
+#     for i in range(execution_count):
+#         from frappe.model.document import Document
+        
+#         class EngagementState(Document):
+#             pass
+        
+#         instance = EngagementState()
+#         assert instance is not None
+
+
+import pytest
+import sys
+from unittest.mock import Mock, patch, MagicMock
+
+
+class TestEngagementStateModuleCoverage:
+    """Test to achieve 100% coverage of the actual engagementstate.py module"""
+    
+    def setup_method(self):
+        """Setup mocks before each test method"""
+        # Clean up any existing imports
+        modules_to_remove = [
+            'frappe',
+            'frappe.model',
+            'frappe.model.document',
+            'tap_lms',
+            'tap_lms.tap_lms',
+            'tap_lms.tap_lms.doctype',
+            'tap_lms.tap_lms.doctype.engagementstate',
+            'tap_lms.tap_lms.doctype.engagementstate.engagementstate'
+        ]
+        
+        for module in modules_to_remove:
+            if module in sys.modules:
+                del sys.modules[module]
+    
+    def test_import_and_execute_engagementstate_module(self):
+        """Test that imports and executes the actual EngagementState module"""
+        
+        # Mock frappe.model.document.Document
+        mock_document = MagicMock()
+        mock_document.__name__ = 'Document'
+        
+        # Create frappe module structure
+        frappe_mock = MagicMock()
+        frappe_mock.model = MagicMock()
+        frappe_mock.model.document = MagicMock()
+        frappe_mock.model.document.Document = mock_document
+        
+        # Add mocks to sys.modules
+        sys.modules['frappe'] = frappe_mock
+        sys.modules['frappe.model'] = frappe_mock.model
+        sys.modules['frappe.model.document'] = frappe_mock.model.document
+        
+        # Now import the actual module - this will execute all lines
+        from tap_lms.tap_lms.doctype.engagementstate.engagementstate import EngagementState
+        
+        # Verify the import worked
+        assert EngagementState is not None
+        
+        # Create an instance to ensure class body was executed
+        instance = EngagementState()
+        assert instance is not None
+    
+    def test_multiple_imports_same_module(self):
+        """Test multiple imports of the same module for coverage"""
+        
+        # Mock frappe
+        mock_document = type('Document', (), {})
+        frappe_mock = MagicMock()
+        frappe_mock.model.document.Document = mock_document
+        
+        sys.modules['frappe'] = frappe_mock
+        sys.modules['frappe.model'] = frappe_mock.model
+        sys.modules['frappe.model.document'] = frappe_mock.model.document
+        
+        # Import multiple times
+        for i in range(3):
+            from tap_lms.tap_lms.doctype.engagementstate.engagementstate import EngagementState
+            
+            # Create instances
+            instance1 = EngagementState()
+            instance2 = EngagementState()
+            
+            assert instance1 is not instance2
+            assert isinstance(instance1, mock_document)
+            assert isinstance(instance2, mock_document)
+    
+    def test_class_inheritance_and_instantiation(self):
+        """Test class inheritance and instantiation to cover all statements"""
+        
+        # Create a proper Document base class
+        class MockDocument:
+            def __init__(self):
+                pass
+        
+        # Mock frappe structure
+        frappe_mock = MagicMock()
+        frappe_mock.model.document.Document = MockDocument
+        
+        sys.modules['frappe'] = frappe_mock
+        sys.modules['frappe.model'] = frappe_mock.model
+        sys.modules['frappe.model.document'] = frappe_mock.model.document
+        
+        # Import the module
+        from tap_lms.tap_lms.doctype.engagementstate.engagementstate import EngagementState
+        
+        # Test inheritance
+        assert issubclass(EngagementState, MockDocument)
+        
+        # Test instantiation multiple times to ensure pass statement is covered
+        instances = []
+        for i in range(5):
+            instance = EngagementState()
+            instances.append(instance)
+            assert isinstance(instance, MockDocument)
+            assert isinstance(instance, EngagementState)
+        
+        # Verify all instances are different
+        for i in range(len(instances)):
+            for j in range(i + 1, len(instances)):
+                assert instances[i] is not instances[j]
+    
+    def test_execute_module_directly(self):
+        """Test executing the module content directly"""
+        
+        # Set up mocks
+        class Document:
             pass
         
-        def save(self):
-            return True
+        frappe_mock = MagicMock()
+        frappe_mock.model.document.Document = Document
         
-        def delete(self):
-            return True
+        sys.modules['frappe'] = frappe_mock
+        sys.modules['frappe.model'] = frappe_mock.model
+        sys.modules['frappe.model.document'] = frappe_mock.model.document
         
-        def insert(self):
-            return True
+        # Execute the exact module content
+        module_code = """
+from frappe.model.document import Document
+
+class EngagementState(Document):
+    pass
+"""
         
-        def reload(self):
-            return True
+        # Execute in a namespace
+        namespace = {}
+        exec(module_code, namespace)
         
-        def cancel(self):
-            return True
+        # Verify execution
+        assert 'EngagementState' in namespace
+        assert 'Document' in namespace
+        
+        # Test the created class
+        EngagementState = namespace['EngagementState']
+        Document = namespace['Document']
+        
+        instance = EngagementState()
+        assert isinstance(instance, Document)
+        
+        # Also import the real module to ensure it's covered
+        from tap_lms.tap_lms.doctype.engagementstate.engagementstate import EngagementState as RealEngagementState
+        real_instance = RealEngagementState()
+        assert real_instance is not None
+
+
+# Additional standalone tests for better coverage
+def test_engagementstate_import_coverage():
+    """Standalone test for import coverage"""
     
-    # Set up the mock structure
+    # Mock Document
+    class MockDocument:
+        pass
+    
+    # Mock frappe
+    frappe_mock = MagicMock()
     frappe_mock.model.document.Document = MockDocument
     
-    # Add to sys.modules BEFORE importing
     sys.modules['frappe'] = frappe_mock
     sys.modules['frappe.model'] = frappe_mock.model
     sys.modules['frappe.model.document'] = frappe_mock.model.document
     
-    return frappe_mock
-
-
-# Now we can import the actual class
-
-
-def test_class_definition():
-    """Test that executes the class definition line"""
-    # This will execute line 7: class EngagementState(Document):
-    from frappe.model.document import Document
+    # Import the actual module
+    import tap_lms.tap_lms.doctype.engagementstate.engagementstate as es_module
     
-    class EngagementState(Document):
-        pass  # This will execute line 8: pass
+    # Verify module attributes
+    assert hasattr(es_module, 'EngagementState')
     
-    assert EngagementState is not None
-    assert issubclass(EngagementState, Document)
-
-
-def test_class_instantiation():
-    """Test instantiating the class"""
-    # This will execute all three lines when creating an instance
-    from frappe.model.document import Document
-    
-    class EngagementState(Document):
-        pass
-    
-    # Creating an instance executes the class body including 'pass'
-    instance = EngagementState()
+    # Create instances
+    instance = es_module.EngagementState()
     assert instance is not None
-    assert isinstance(instance, EngagementState)
-    assert isinstance(instance, Document)
 
 
-def test_multiple_instantiation():
-    """Test multiple instantiations to ensure coverage"""
-    from frappe.model.document import Document
+def test_engagementstate_class_definition():
+    """Test the class definition specifically"""
     
-    class EngagementState(Document):
-        pass
+    # Mock the base class
+    class Document:
+        def __init__(self):
+            super().__init__()
     
-    instances = []
+    # Set up module mocking
+    frappe_mock = MagicMock()
+    frappe_mock.model.document.Document = Document
+    
+    sys.modules['frappe'] = frappe_mock
+    sys.modules['frappe.model'] = frappe_mock.model
+    sys.modules['frappe.model.document'] = frappe_mock.model.document
+    
+    # Import and use
+    from tap_lms.tap_lms.doctype.engagementstate.engagementstate import EngagementState
+    
+    # Test class properties
+    assert EngagementState.__name__ == 'EngagementState'
+    assert Document in EngagementState.__mro__
+    
+    # Create and test instances
     for i in range(3):
         instance = EngagementState()
-        instances.append(instance)
-        assert instance is not None
-    
-    assert len(instances) == 3
-
-
-def test_inheritance_verification():
-    """Test inheritance to cover class definition"""
-    from frappe.model.document import Document
-    
-    class EngagementState(Document):
-        pass
-    
-    # Verify inheritance
-    assert hasattr(EngagementState, '__bases__')
-    assert Document in EngagementState.__bases__
-    assert issubclass(EngagementState, Document)
-
-
-def test_class_attributes():
-    """Test class attributes"""
-    from frappe.model.document import Document
-    
-    class EngagementState(Document):
-        pass
-    
-    instance = EngagementState()
-    
-    # Test that it has Document attributes/methods
-    assert hasattr(instance, 'save')
-    assert hasattr(instance, 'delete')
-    assert hasattr(instance, 'insert')
+        assert isinstance(instance, Document)
+        assert isinstance(instance, EngagementState)
 
 
 def test_pass_statement_execution():
-    """Explicitly test the pass statement"""
-    from frappe.model.document import Document
+    """Specifically test that the pass statement gets executed"""
     
-    # This class definition will execute the pass statement
-    class EngagementState(Document):
-        pass  # This line needs to be covered
+    # Mock frappe
+    class Document:
+        pass
     
-    # Instantiate to ensure class body is executed
-    instance = EngagementState()
+    frappe_mock = MagicMock()
+    frappe_mock.model.document.Document = Document
+    
+    sys.modules['frappe'] = frappe_mock
+    sys.modules['frappe.model'] = frappe_mock.model
+    sys.modules['frappe.model.document'] = frappe_mock.model.document
+    
+    # Import the module - this executes the pass statement
+    from tap_lms.tap_lms.doctype.engagementstate.engagementstate import EngagementState
     
     # The pass statement is executed when the class is defined
-    assert True  # If we get here, pass was executed
-
-
-@patch('frappe.model.document.Document')
-def test_with_document_mock(mock_document):
-    """Test with mocked Document class"""
-    # Set up mock
-    mock_document.return_value = Mock()
-    
-    # Import and define the class
-    class EngagementState(mock_document):
-        pass
-    
-    # Test instantiation
+    # Creating an instance ensures the class body is processed
     instance = EngagementState()
+    
+    # Test that the class works as expected
+    assert hasattr(EngagementState, '__init__')
+    assert callable(EngagementState)
     assert instance is not None
 
 
-def test_coverage_all_lines():
-    """Test specifically designed to hit all 3 lines for coverage"""
-    # Line 5: from frappe.model.document import Document
-    from frappe.model.document import Document
+@pytest.mark.parametrize("iteration", range(5))
+def test_multiple_instantiations(iteration):
+    """Parametrized test for multiple instantiations"""
     
-    # Line 7: class EngagementState(Document):
-    # Line 8: pass
-    class EngagementState(Document):
+    # Mock setup
+    class Document:
         pass
     
-    # Create instance to execute class body
-    instance = EngagementState()
+    frappe_mock = MagicMock()
+    frappe_mock.model.document.Document = Document
     
-    # Verify it worked
-    assert instance is not None
-    assert isinstance(instance, Document)
-    assert type(instance).__name__ == 'EngagementState'
-
-
-def test_direct_class_execution():
-    """Test that directly executes the class code"""
-    # Execute the exact code from the file
-    exec("""
-from frappe.model.document import Document
-
-class EngagementState(Document):
-    pass
-""")
+    sys.modules['frappe'] = frappe_mock
+    sys.modules['frappe.model'] = frappe_mock.model
+    sys.modules['frappe.model.document'] = frappe_mock.model.document
     
-    # Verify execution completed
-    assert True
-
-
-def test_import_and_use():
-    """Test importing and using the class"""
-    # Import Document
-    from frappe.model.document import Document
+    # Import and test
+    from tap_lms.tap_lms.doctype.engagementstate.engagementstate import EngagementState
     
-    # Define EngagementState exactly as in the file
-    class EngagementState(Document):
-        pass
-    
-    # Use the class multiple ways
-    instance1 = EngagementState()
-    instance2 = EngagementState()
-    
-    # Test inheritance
-    assert isinstance(instance1, Document)
-    assert isinstance(instance2, Document)
-    assert instance1 is not instance2
-    
-    # Test class attributes
-    assert hasattr(EngagementState, '__name__')
-    assert EngagementState.__name__ == 'EngagementState'
-
-
-# Alternative approach - try to import the real file
-
-
-def test_execute_file_content():
-    """Test that executes the exact file content"""
-    # The exact content of the engagementstate.py file:
-    file_content = '''
-from frappe.model.document import Document
-
-class EngagementState(Document):
-    pass
-'''
-    
-    # Execute the file content
-    namespace = {}
-    exec(file_content, namespace)
-    
-    # Verify the class was created
-    assert 'EngagementState' in namespace
-    assert 'Document' in namespace
-    
-    # Test the class
-    EngagementState = namespace['EngagementState']
-    Document = namespace['Document']
-    
+    # Create instance
     instance = EngagementState()
     assert instance is not None
     assert isinstance(instance, Document)
-
-
-# Parametrized test for multiple executions
-@pytest.mark.parametrize("execution_count", [1, 2, 3])
-def test_multiple_executions(execution_count):
-    """Test multiple executions to ensure coverage"""
-    for i in range(execution_count):
-        from frappe.model.document import Document
-        
-        class EngagementState(Document):
-            pass
-        
-        instance = EngagementState()
-        assert instance is not None
+    
+    # Test multiple instances in same test
+    instances = [EngagementState() for _ in range(3)]
+    assert len(instances) == 3
+    assert all(isinstance(inst, EngagementState) for inst in instances)
