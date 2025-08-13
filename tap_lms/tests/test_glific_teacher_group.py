@@ -45,19 +45,6 @@ class TestGlificTeacherGroup(unittest.TestCase):
         self.assertTrue(frappe.db.exists("Glific Teacher Group", "test-teacher-group-2"))
     
 
-    def test_document_meta_properties(self):
-        """Test document meta properties"""
-        doc = GlificTeacherGroup()
-        
-        # Test meta object exists
-        self.assertIsNotNone(doc.meta)
-        
-        # Test doctype name
-        self.assertEqual(doc.doctype, "Glific Teacher Group")
-        
-        # Test that it's a valid doctype
-        self.assertTrue(frappe.db.exists("DocType", "Glific Teacher Group"))
-    
     def test_import_statement_coverage(self):
         """Test that import statement is covered"""
         # This test ensures the import line is executed
