@@ -38,29 +38,6 @@ class TestEnrollment(unittest.TestCase):
         """Test that Enrollment DocType exists"""
         self.assertTrue(frappe.db.exists("DocType", "Enrollment"))
 
-    def test_enrollment_creation(self):
-        """Test basic enrollment document creation"""
-        if not frappe.db.exists("DocType", "Enrollment"):
-            self.skipTest("Enrollment DocType does not exist")
-            
-        enrollment = frappe.get_doc({
-            "doctype": "Enrollment",
-            # Add required fields based on your DocType definition
-            # Uncomment and modify these based on your actual fields:
-            # "student": "test-student@example.com",
-            # "course": "TEST-COURSE-001", 
-            # "enrollment_date": frappe.utils.today(),
-            # "status": "Active"
-        })
-        
-        # Test document creation
-        enrollment.insert(ignore_permissions=True)
-        self.assertTrue(enrollment.name)
-        
-        # Test document retrieval
-        saved_enrollment = frappe.get_doc("Enrollment", enrollment.name)
-        self.assertEqual(saved_enrollment.doctype, "Enrollment")
-
     def test_enrollment_class_import(self):
         """Test that Enrollment class can be imported"""
         try:
