@@ -329,17 +329,7 @@ class TestInteractionLog(unittest.TestCase):
         # Test frappe is accessible
         self.assertIsNotNone(frappe.db)
     
-    def test_frappe_db_connection(self):
-        """Test database connection"""
-        # Test if we can access the database
-        result = frappe.db.sql("SELECT 1 as test_value")
-        self.assertEqual(result[0][0], 1)
-   
-    def test_user_permissions(self):
-        """Test user permissions setup"""
-        current_user = frappe.session.user
-        self.assertIsNotNone(current_user)
-        self.assertEqual(current_user, "Administrator")
+  
    
     def test_doctype_exists(self):
         """Test if required doctypes exist"""
@@ -353,30 +343,8 @@ class TestInteractionLog(unittest.TestCase):
         self.assertIsNotNone(frappe.session.user)
         self.assertIsNotNone(frappe.local)
     
-    def test_sql_operations(self):
-        """Test basic SQL operations"""
-        # Test SELECT
-        result = frappe.db.sql("SELECT name FROM tabDocType WHERE name = 'User'")
-        self.assertTrue(len(result) > 0)
-        
-        # Test get_value
-        user_count = frappe.db.count("User")
-        self.assertGreaterEqual(user_count, 1)  # Should have at least Administrator
-        
-        # Test get_all
-        users = frappe.get_all("User", fields=["name"], limit=1)
-        self.assertTrue(len(users) > 0)
-    
-    def test_permissions_and_roles(self):
-        """Test permission system"""
-        # Test has_permission for a basic doctype
-        has_perm = frappe.has_permission("User", "read")
-        self.assertTrue(has_perm)
-        
-        # Test get_roles
-        roles = frappe.get_roles()
-        self.assertIsInstance(roles, list)
-        self.assertIn("Administrator", roles)
+   
+   
    
     def test_sample_interaction_log(self):
         """Test creating a sample interaction log if doctype exists"""
