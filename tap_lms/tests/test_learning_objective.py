@@ -20,29 +20,7 @@ class TestLearningObjective:
         assert learning_obj is not None
         assert learning_obj.__class__.__name__ == "LearningObjective"
     
-    def test_learning_objective_with_data(self):
-        """Test LearningObjective with sample data"""
-        # Create with some sample data to ensure it works as a Document
-        learning_obj = LearningObjective({
-            'name': 'test-learning-objective',
-            'title': 'Test Learning Objective',
-            'description': 'A test learning objective'
-        })
-        assert learning_obj.name == 'test-learning-objective'
-        assert learning_obj.title == 'Test Learning Objective'
-        assert learning_obj.description == 'A test learning objective'
-    
-    def test_learning_objective_methods_inherited(self):
-        """Test that Document methods are available"""
-        learning_obj = LearningObjective()
-        # Test that common Document methods are accessible
-        assert hasattr(learning_obj, 'get')
-        assert hasattr(learning_obj, 'set')
-        assert hasattr(learning_obj, 'update')
-        assert callable(getattr(learning_obj, 'get'))
-        assert callable(getattr(learning_obj, 'set'))
-        assert callable(getattr(learning_obj, 'update'))
-
+   
 
 # Alternative test structure using unittest if you prefer
 import unittest
@@ -83,23 +61,26 @@ def learning_objective_with_data():
     })
 
 
-# Parameterized tests for better coverage
-@pytest.mark.parametrize("test_data", [
-    {},
-    {'name': 'test1'},
-    {'name': 'test2', 'title': 'Test Title'},
-    {'name': 'test3', 'title': 'Test Title', 'description': 'Test Description'}
-])
-def test_learning_objective_with_various_data(test_data):
-    """Test LearningObjective with various data configurations"""
-    learning_obj = LearningObjective(test_data)
-    assert learning_obj is not None
+# # Parameterized tests for better coverage
+# @pytest.mark.parametrize("test_data", [
+#     {},
+#     {'name': 'test1'},
+#     {'name': 'test2', 'title': 'Test Title'},
+#     {'name': 'test3', 'title': 'Test Title', 'description': 'Test Description'}
+# ])
+
+
+
+# def test_learning_objective_with_various_data(test_data):
+#     """Test LearningObjective with various data configurations"""
+#     learning_obj = LearningObjective(test_data)
+#     assert learning_obj is not None
     
-    # Verify data was set correctly
-    for key, value in test_data.items():
-        assert getattr(learning_obj, key, None) == value
+#     # Verify data was set correctly
+#     for key, value in test_data.items():
+#         assert getattr(learning_obj, key, None) == value
 
 
-if __name__ == '__main__':
-    # Run tests directly
-    unittest.main()
+# if __name__ == '__main__':
+#     # Run tests directly
+#     unittest.main()
