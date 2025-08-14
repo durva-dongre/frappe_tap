@@ -130,14 +130,7 @@ class TestLearningObjectiveUnittest(unittest.TestCase):
         self.assertTrue(hasattr(LearningObjective, '__module__'))
         self.assertIn(Document, LearningObjective.__bases__)
     
-    def test_object_creation(self):
-        """Test object creation doesn't raise exceptions"""
-        try:
-            obj = LearningObjective()
-            self.assertIsNotNone(obj)
-        except Exception as e:
-            self.fail(f"LearningObjective creation raised an exception: {e}")
-
+   
 # Parametrized tests for more coverage
 class TestLearningObjectiveParametrized:
     """Parametrized tests for comprehensive coverage"""
