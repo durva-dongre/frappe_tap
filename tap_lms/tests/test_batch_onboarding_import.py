@@ -170,29 +170,6 @@ def test_after_import_edge_cases():
             pass  # Expected behavior - function should handle missing documents
 
 
-# def test_import_statements_coverage():
-#     """Ensure all import statements are covered"""
-    
-#     with patch.dict('sys.modules', {
-#         'frappe': Mock(),
-#         'frappe.model': Mock(),
-#         'frappe.model.document': Mock(),
-#         'your_app': Mock(),
-#         'your_app.your_app': Mock(),
-#         'your_app.your_app.doctype': Mock(),
-#         'your_app.your_app.doctype.batch_onboarding': Mock(),
-#         'your_app.your_app.doctype.batch_onboarding.batch_onboarding': Mock(),
-#     }):
-#         # This test ensures lines 1-3 are covered
-#         try:
-#             from tap_lms.batch_onboarding_import import before_import, after_import
-#             import_success = True
-#         except ImportError:
-#             import_success = False
-        
-#         assert import_success
-
-
 def test_function_definitions_coverage():
     """Test that function definitions are properly covered"""
     
