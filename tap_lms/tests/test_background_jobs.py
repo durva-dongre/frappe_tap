@@ -35,7 +35,7 @@ class TestProcessGlificActions:
     
     def setup_method(self):
         """Setup before each test"""
-        # self.mock_frappe, self.mock_enqueue = setup_frappe_mocks()
+        self.mock_frappe, self.mock_enqueue = setup_frappe_mocks()
         self.mock_glific = setup_glific_mocks()
         
         # Clear any existing modules
