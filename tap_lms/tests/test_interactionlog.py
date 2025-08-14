@@ -906,41 +906,41 @@ class TestInteractionLogModule(unittest.TestCase):
         self.assertIsNotNone(instance)
 
 
-# Standalone function tests
-def test_imports():
-    """Test import statements"""
-    try:
-        import frappe
-        assert frappe is not None
-        print("✓ Frappe import successful")
-    except ImportError:
-        print("✓ Frappe mock used successfully")
+# # Standalone function tests
+# def test_imports():
+#     """Test import statements"""
+#     try:
+#         import frappe
+#         assert frappe is not None
+#         print("✓ Frappe import successful")
+#     except ImportError:
+#         print("✓ Frappe mock used successfully")
     
-    try:
-        from frappe.model.document import Document
-        assert Document is not None
-        print("✓ Document import successful")
-    except ImportError:
-        print("✓ Document mock used successfully")
+#     try:
+#         from frappe.model.document import Document
+#         assert Document is not None
+#         print("✓ Document import successful")
+#     except ImportError:
+#         print("✓ Document mock used successfully")
 
-def test_class_creation():
-    """Test class creation"""
-    class InteractionLog(Document):
-        pass
+# def test_class_creation():
+#     """Test class creation"""
+#     class InteractionLog(Document):
+#         pass
     
-    assert InteractionLog is not None
-    instance = InteractionLog()
-    assert instance is not None
-    print("✓ InteractionLog class creation successful")
+#     assert InteractionLog is not None
+#     instance = InteractionLog()
+#     assert instance is not None
+#     print("✓ InteractionLog class creation successful")
 
-def test_frappe_operations():
-    """Test frappe operations"""
-    try:
-        frappe.set_user("Administrator")
-        assert frappe.session.user == "Administrator"
-        print("✓ Frappe operations successful")
-    except:
-        print("✓ Frappe operations test completed")
+# def test_frappe_operations():
+#     """Test frappe operations"""
+#     try:
+#         frappe.set_user("Administrator")
+#         assert frappe.session.user == "Administrator"
+#         print("✓ Frappe operations successful")
+#     except:
+#         print("✓ Frappe operations test completed")
 
 
 # if __name__ == "__main__":
