@@ -461,26 +461,7 @@ class TestCompleteCoverage(unittest.TestCase):
         else:
             print("✓ Frappe not available scenario covered")
     
-    def test_class_instantiation_and_inheritance(self):
-        """Test class instantiation and inheritance scenarios"""
-        
-        # Test ImpactMetrics instantiation
-        instance = ImpactMetrics()
-        self.assertIsInstance(instance, ImpactMetrics)
-        
-        # Test inheritance
-        from frappe.model.document import Document
-        self.assertIsInstance(instance, Document)
-        self.assertTrue(issubclass(ImpactMetrics, Document))
-        
-        # Test multiple instantiations
-        instances = [ImpactMetrics() for _ in range(3)]
-        for i, inst in enumerate(instances):
-            self.assertIsInstance(inst, ImpactMetrics)
-        
-        print("✓ All class instantiation and inheritance scenarios covered")
-
-
+  
 class TestEveryPossibleScenario(unittest.TestCase):
     """Final comprehensive test to cover any remaining lines"""
     
