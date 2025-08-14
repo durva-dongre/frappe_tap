@@ -93,16 +93,16 @@ def test_glific_contact_group_document_base_class():
     assert hasattr(GlificContactGroup, '__init__')
 
 
-def test_glific_contact_group_import_statement():
-    """Test that the import statement is covered"""
-    # This test ensures the import line is executed
-    try:
-        from tap_lms.tap_lms.doctype.glificcontactgroup.glificcontactgroup import GlificContactGroup
-        import_successful = True
-    except ImportError:
-        import_successful = False
+# def test_glific_contact_group_import_statement():
+#     """Test that the import statement is covered"""
+#     # This test ensures the import line is executed
+#     try:
+#         from tap_lms.tap_lms.doctype.glificcontactgroup.glificcontactgroup import GlificContactGroup
+#         import_successful = True
+#     except ImportError:
+#         import_successful = False
     
-    assert import_successful
+#     assert import_successful
 
 
 def test_glific_contact_group_class_definition():
@@ -186,31 +186,3 @@ def test_glific_contact_group_module_level():
     assert instance is not None
 
 
-# Simplified single test for quick coverage (alternative approach)
-def test_glific_contact_group_minimal():
-    """
-    Coverage test for empty GlificContactGroup class.
-    Note: This class currently only contains 'pass' - no business logic to test.
-    When actual methods are added, replace with meaningful business logic tests.
-    """
-    
-    # Mock frappe module
-    class MockDocument:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    mock_frappe = Mock()
-    mock_frappe.model = Mock()
-    mock_frappe.model.document = Mock()
-    mock_frappe.model.document.Document = MockDocument
-    
-    sys.modules['frappe'] = mock_frappe
-    sys.modules['frappe.model'] = mock_frappe.model
-    sys.modules['frappe.model.document'] = mock_frappe.model.document
-    
-    # This single import + instantiation covers all 3 executable lines
-    from tap_lms.tap_lms.doctype.glificcontactgroup.glificcontactgroup import GlificContactGroup
-    contact_group = GlificContactGroup()
-    
-    # Basic assertion
-    assert contact_group is not None

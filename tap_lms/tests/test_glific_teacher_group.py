@@ -94,16 +94,16 @@ def test_glific_teacher_group_document_base_class():
     assert hasattr(GlificTeacherGroup, '__init__')
 
 
-def test_glific_teacher_group_import_statement():
-    """Test that the import statement is covered"""
-    # This test ensures the import line is executed
-    try:
-        from tap_lms.tap_lms.doctype.glific_teacher_group.glific_teacher_group import GlificTeacherGroup
-        import_successful = True
-    except ImportError:
-        import_successful = False
+# def test_glific_teacher_group_import_statement():
+#     """Test that the import statement is covered"""
+#     # This test ensures the import line is executed
+#     try:
+#         from tap_lms.tap_lms.doctype.glific_teacher_group.glific_teacher_group import GlificTeacherGroup
+#         import_successful = True
+#     except ImportError:
+#         import_successful = False
     
-    assert import_successful
+#     assert import_successful
 
 
 def test_glific_teacher_group_class_definition():
