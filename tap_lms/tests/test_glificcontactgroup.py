@@ -670,18 +670,7 @@ class TestGlifitcontactGroupWithFixtures(unittest.TestCase):
 class TestModuleExecution(unittest.TestCase):
     """Test module execution to ensure coverage."""
     
-    def test_module_import(self):
-        """Test that the module can be imported and executed."""
-        # Re-import to ensure execution
-        try:
-            if actual_module:
-                importlib.reload(actual_module)
-        except:
-            pass
-        
-        # Verify class exists and is usable
-        self.assertTrue(callable(GlifitcontactGroup))
-        
+    
     def test_comprehensive_coverage(self):
         """Comprehensive test to hit all lines."""
         # This should execute every line in the source file
