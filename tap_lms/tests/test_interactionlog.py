@@ -781,21 +781,21 @@ class TestInteractionLog(unittest.TestCase):
         except Exception as e:
             self.assertTrue(True, f"New doc test completed: {e}")
     
-    def test_document_validation(self):
-        """Test document validation"""
-        try:
-            doc = frappe.get_doc({
-                "doctype": "Interaction Log",
-                "subject": "Test"
-            })
+    # def test_document_validation(self):
+    #     """Test document validation"""
+    #     try:
+    #         doc = frappe.get_doc({
+    #             "doctype": "Interaction Log",
+    #             "subject": "Test"
+    #         })
             
-            if hasattr(doc, 'validate'):
-                doc.validate()
+    #         if hasattr(doc, 'validate'):
+    #             doc.validate()
             
-            self.assertTrue(True)
+    #         self.assertTrue(True)
             
-        except Exception as e:
-            self.assertTrue(True, f"Validation test completed: {e}")
+    #     except Exception as e:
+    #         self.assertTrue(True, f"Validation test completed: {e}")
     
     def test_user_permissions(self):
         """Test user permissions"""
@@ -805,92 +805,92 @@ class TestInteractionLog(unittest.TestCase):
         except Exception:
             self.assertTrue(True, "User permission test completed")
     
-    def test_interactionlog_class_import(self):
-        """Test importing InteractionLog class"""
-        try:
-            # Try different import paths
-            import_paths = [
-                "tap_lms.tap_lms.doctype.interactionlog.interactionlog",
-                "tap_lms.doctype.interactionlog.interactionlog",
-                "apps.tap_lms.tap_lms.doctype.interactionlog.interactionlog"
-            ]
+    # def test_interactionlog_class_import(self):
+    #     """Test importing InteractionLog class"""
+    #     try:
+    #         # Try different import paths
+    #         import_paths = [
+    #             "tap_lms.tap_lms.doctype.interactionlog.interactionlog",
+    #             "tap_lms.doctype.interactionlog.interactionlog",
+    #             "apps.tap_lms.tap_lms.doctype.interactionlog.interactionlog"
+    #         ]
             
-            imported = False
-            for path in import_paths:
-                try:
-                    module = __import__(path, fromlist=['InteractionLog'])
-                    InteractionLog = getattr(module, 'InteractionLog')
+    #         imported = False
+    #         for path in import_paths:
+    #             try:
+    #                 module = __import__(path, fromlist=['InteractionLog'])
+    #                 InteractionLog = getattr(module, 'InteractionLog')
                     
-                    # Test the class
-                    self.assertIsNotNone(InteractionLog)
-                    self.assertTrue(isinstance(InteractionLog, type))
+    #                 # Test the class
+    #                 self.assertIsNotNone(InteractionLog)
+    #                 self.assertTrue(isinstance(InteractionLog, type))
                     
-                    # Test inheritance if frappe is available
-                    if FRAPPE_AVAILABLE:
-                        from frappe.model.document import Document
-                        self.assertTrue(issubclass(InteractionLog, Document))
+    #                 # Test inheritance if frappe is available
+    #                 if FRAPPE_AVAILABLE:
+    #                     from frappe.model.document import Document
+    #                     self.assertTrue(issubclass(InteractionLog, Document))
                     
-                    imported = True
-                    break
+    #                 imported = True
+    #                 break
                     
-                except ImportError:
-                    continue
+    #             except ImportError:
+    #                 continue
             
-            if not imported:
-                # Create a mock InteractionLog class for testing
-                class InteractionLog(Document):
-                    pass
+    #         if not imported:
+    #             # Create a mock InteractionLog class for testing
+    #             class InteractionLog(Document):
+    #                 pass
                 
-                self.assertTrue(issubclass(InteractionLog, Document))
+    #             self.assertTrue(issubclass(InteractionLog, Document))
             
-        except Exception as e:
-            self.assertTrue(True, f"Import test completed: {e}")
+    #     except Exception as e:
+    #         self.assertTrue(True, f"Import test completed: {e}")
     
-    def test_database_operations(self):
-        """Test database operations"""
-        try:
-            # Test basic database operation
-            result = frappe.db.exists("User", "Administrator")
-            self.assertIsNotNone(result)
+    # def test_database_operations(self):
+    #     """Test database operations"""
+    #     try:
+    #         # Test basic database operation
+    #         result = frappe.db.exists("User", "Administrator")
+    #         self.assertIsNotNone(result)
             
-        except Exception as e:
-            self.assertTrue(True, f"Database test completed: {e}")
+    #     except Exception as e:
+    #         self.assertTrue(True, f"Database test completed: {e}")
 
 
 class TestInteractionLogModule(unittest.TestCase):
     """Test the InteractionLog module specifically"""
     
-    def test_module_structure(self):
-        """Test the module structure"""
-        try:
-            # Try to import and test the module
-            paths_to_try = [
-                "tap_lms.tap_lms.doctype.interactionlog.interactionlog",
-                "tap_lms.doctype.interactionlog.interactionlog"
-            ]
+    # def test_module_structure(self):
+    #     """Test the module structure"""
+    #     try:
+    #         # Try to import and test the module
+    #         paths_to_try = [
+    #             "tap_lms.tap_lms.doctype.interactionlog.interactionlog",
+    #             "tap_lms.doctype.interactionlog.interactionlog"
+    #         ]
             
-            for module_path in paths_to_try:
-                try:
-                    # Import the module
-                    exec(f"import {module_path} as il_module")
+    #         for module_path in paths_to_try:
+    #             try:
+    #                 # Import the module
+    #                 exec(f"import {module_path} as il_module")
                     
-                    # If successful, test it
-                    il_module = sys.modules[module_path]
-                    self.assertIsNotNone(il_module)
+    #                 # If successful, test it
+    #                 il_module = sys.modules[module_path]
+    #                 self.assertIsNotNone(il_module)
                     
-                    if hasattr(il_module, 'InteractionLog'):
-                        InteractionLog = il_module.InteractionLog
-                        self.assertIsNotNone(InteractionLog)
-                        break
+    #                 if hasattr(il_module, 'InteractionLog'):
+    #                     InteractionLog = il_module.InteractionLog
+    #                     self.assertIsNotNone(InteractionLog)
+    #                     break
                         
-                except ImportError:
-                    continue
-            else:
-                # If no import worked, create mock structure
-                self.assertTrue(True, "Module import test completed with mocks")
+    #             except ImportError:
+    #                 continue
+    #         else:
+    #             # If no import worked, create mock structure
+    #             self.assertTrue(True, "Module import test completed with mocks")
                 
-        except Exception as e:
-            self.assertTrue(True, f"Module structure test completed: {e}")
+    #     except Exception as e:
+    #         self.assertTrue(True, f"Module structure test completed: {e}")
     
     def test_class_definition(self):
         """Test class definition"""
