@@ -33,14 +33,14 @@ def setup_glific_mocks():
 
 class TestProcessGlificActions:
     
-    # def setup_method(self):
-    #     """Setup before each test"""
-    #     self.mock_frappe, self.mock_enqueue = setup_frappe_mocks()
-    #     self.mock_glific = setup_glific_mocks()
+    def setup_method(self):
+        """Setup before each test"""
+        # self.mock_frappe, self.mock_enqueue = setup_frappe_mocks()
+        self.mock_glific = setup_glific_mocks()
         
-    #     # Clear any existing modules
-    #     if 'tap_lms.background_jobs' in sys.modules:
-    #         del sys.modules['tap_lms.background_jobs']
+        # Clear any existing modules
+        if 'tap_lms.background_jobs' in sys.modules:
+            del sys.modules['tap_lms.background_jobs']
 
     @patch('tap_lms.background_jobs.optin_contact')
     @patch('tap_lms.background_jobs.start_contact_flow')
