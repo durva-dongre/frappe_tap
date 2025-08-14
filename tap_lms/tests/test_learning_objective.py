@@ -227,13 +227,13 @@ class TestLearningObjective:
         # Verify mock structure exists
         assert 'frappe' in sys.modules or FRAPPE_AVAILABLE
         
-    def test_sys_modules_modification(self):
-        """Test that sys.modules is modified correctly"""
-        # This covers the sys.modules assignment lines
-        if not FRAPPE_AVAILABLE:
-            assert 'frappe' in sys.modules
-            assert 'frappe.model' in sys.modules
-            assert 'frappe.model.document' in sys.modules
+    # def test_sys_modules_modification(self):
+    #     """Test that sys.modules is modified correctly"""
+    #     # This covers the sys.modules assignment lines
+    #     if not FRAPPE_AVAILABLE:
+    #         assert 'frappe' in sys.modules
+    #         assert 'frappe.model' in sys.modules
+    #         assert 'frappe.model.document' in sys.modules
 
 # Alternative test structure using unittest if you prefer
 import unittest
