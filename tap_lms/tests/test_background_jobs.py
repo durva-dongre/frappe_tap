@@ -2,7 +2,7 @@ import pytest
 import sys
 from unittest.mock import Mock, patch
 
-# Simple mock setup
+# Set up basic mocks at module level
 mock_frappe = Mock()
 mock_frappe.db = Mock()
 mock_frappe.logger = Mock()
