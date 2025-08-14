@@ -176,31 +176,3 @@ def test_grade_course_level_mapping_module_level():
     assert instance is not None
 
 
-# Simplified single test for quick coverage (alternative approach)
-def test_grade_course_level_mapping_minimal():
-    """
-    Coverage test for empty GradeCourseLevelMapping class.
-    Note: This class currently only contains 'pass' - no business logic to test.
-    When actual methods are added, replace with meaningful business logic tests.
-    """
-    
-    # Mock frappe module
-    class MockDocument:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    mock_frappe = Mock()
-    mock_frappe.model = Mock()
-    mock_frappe.model.document = Mock()
-    mock_frappe.model.document.Document = MockDocument
-    
-    sys.modules['frappe'] = mock_frappe
-    sys.modules['frappe.model'] = mock_frappe.model
-    sys.modules['frappe.model.document'] = mock_frappe.model.document
-    
-    # This single import + instantiation covers all 3 executable lines
-    from tap_lms.tap_lms.doctype.grade_course_level_mapping.grade_course_level_mapping import GradeCourseLevelMapping
-    grade_mapping = GradeCourseLevelMapping()
-    
-    # Basic assertion
-    assert grade_mapping is not None
