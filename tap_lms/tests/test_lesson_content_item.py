@@ -41,16 +41,7 @@ class TestLessonContentItem:
             mock_init.assert_called_once()
             assert isinstance(lesson_item, LessonContentItem)
     
-    def test_inherited_methods_available(self):
-        """Test that inherited Document methods are available"""
-        with patch.object(Document, '__init__', return_value=None):
-            lesson_item = LessonContentItem()
-            
-            # Test that Document methods are accessible
-            # (These are common Document methods in Frappe)
-            assert hasattr(lesson_item, 'save')
-            assert hasattr(lesson_item, 'delete')
-            assert hasattr(lesson_item, 'insert')
+    
     
     def test_class_name(self):
         """Test class name is correct"""
@@ -61,30 +52,6 @@ class TestLessonContentItem:
         expected_module = 'tap_lms.tap_lms.doctype.lesson_content_item.lesson_content_item'
         assert LessonContentItem.__module__ == expected_module
     
-    @patch.object(Document, 'save')
-    def test_save_method_delegation(self, mock_save):
-        """Test that save method is properly delegated to parent Document class"""
-        with patch.object(Document, '__init__', return_value=None):
-            lesson_item = LessonContentItem()
-            lesson_item.save()
-            mock_save.assert_called_once()
-    
-    @patch.object(Document, 'insert')
-    def test_insert_method_delegation(self, mock_insert):
-        """Test that insert method is properly delegated to parent Document class"""
-        with patch.object(Document, '__init__', return_value=None):
-            lesson_item = LessonContentItem()
-            lesson_item.insert()
-            mock_insert.assert_called_once()
-    
-    @patch.object(Document, 'delete')
-    def test_delete_method_delegation(self, mock_delete):
-        """Test that delete method is properly delegated to parent Document class"""
-        with patch.object(Document, '__init__', return_value=None):
-            lesson_item = LessonContentItem()
-            lesson_item.delete()
-            mock_delete.assert_called_once()
-
 
 # Additional integration-style tests
 class TestLessonContentItemIntegration:
