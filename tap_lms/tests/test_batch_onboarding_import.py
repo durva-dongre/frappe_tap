@@ -185,7 +185,8 @@ def test_import_statements_coverage():
     }):
         # This test ensures lines 1-3 are covered
         try:
-            from tap_lms.batch_onboarding_import import before_import, after_import
+            # Fix the import path - remove the extra tap_lms part
+            from batch_onboarding_import import before_import, after_import
             import_success = True
         except ImportError:
             import_success = False
