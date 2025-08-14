@@ -228,35 +228,71 @@ class TestEnqueueGlificActions:
         """Setup before each test"""
         self.mock_frappe, self.mock_enqueue = setup_frappe_mocks()
 
-    # def test_enqueue_glific_actions(self):
-    #     """Test enqueue_glific_actions function"""
-    #     from tap_lms.background_jobs import enqueue_glific_actions
+    def test_enqueue_glific_actions_all_parameters(self):
+        """Test enqueue_glific_actions function with all parameters"""
+        from tap_lms.background_jobs import enqueue_glific_actions
         
-    #     enqueue_glific_actions(
-    #         "teacher_1", "1234567890", "John", "school_1",
-    #         "Test School", "en", "model_1", "Batch A", "batch_1"
-    #     )
+        # Test with all parameters to ensure complete coverage
+        enqueue_glific_actions(
+            teacher_id="teacher_1", 
+            phone="1234567890", 
+            first_name="John", 
+            school="school_1",
+            school_name="Test School", 
+            language="en", 
+            model_name="model_1", 
+            batch_name="Batch A", 
+            batch_id="batch_1"
+        )
         
-    #     # Verify enqueue was called with correct parameters
-    #     self.mock_enqueue.assert_called_once()
-    #     call_args = self.mock_enqueue.call_args
+        # Verify enqueue was called with correct parameters
+        self.mock_enqueue.assert_called_once()
+        call_args = self.mock_enqueue.call_args
         
-    #     # Check positional arguments
-    #     assert call_args[0][0].__name__ == 'process_glific_actions'
+        # Check that the first argument is the process_glific_actions function
+        from tap_lms.background_jobs import process_glific_actions
+        assert call_args[0][0] == process_glific_actions
         
-    #     # Check keyword arguments
-    #     kwargs = call_args[1]
-    #     assert kwargs['queue'] == "short"
-    #     assert kwargs['timeout'] == 300
-    #     assert kwargs['teacher_id'] == "teacher_1"
-    #     assert kwargs['phone'] == "1234567890"
-    #     assert kwargs['first_name'] == "John"
-    #     assert kwargs['school'] == "school_1"
-    #     assert kwargs['school_name'] == "Test School"
-    #     assert kwargs['language'] == "en"
-    #     assert kwargs['model_name'] == "model_1"
-    #     assert kwargs['batch_name'] == "Batch A"
-    #     assert kwargs['batch_id'] == "batch_1"
+        # Check keyword arguments
+        kwargs = call_args[1]
+        assert kwargs['queue'] == "short"
+        assert kwargs['timeout'] == 300
+        assert kwargs['teacher_id'] == "teacher_1"
+        assert kwargs['phone'] == "1234567890"
+        assert kwargs['first_name'] == "John"
+        assert kwargs['school'] == "school_1"
+        assert kwargs['school_name'] == "Test School"
+        assert kwargs['language'] == "en"
+        assert kwargs['model_name'] == "model_1"
+        assert kwargs['batch_name'] == "Batch A"
+        assert kwargs['batch_id'] == "batch_1"
+
+    def test_enqueue_glific_actions_edge_case_parameters(self):
+        """Test enqueue_glific_actions with edge case parameters"""
+        from tap_lms.background_jobs import enqueue_glific_actions
+        
+        # Test with empty/None values to ensure robustness
+        enqueue_glific_actions(
+            teacher_id="", 
+            phone="", 
+            first_name="", 
+            school="",
+            school_name="", 
+            language="", 
+            model_name="", 
+            batch_name="", 
+            batch_id=""
+        )
+        
+        # Verify enqueue was still called
+        self.mock_enqueue.assert_called_once()
+        
+        # Verify all parameters were passed through
+        kwargs = self.mock_enqueue.call_args[1]
+        assert all(key in kwargs for key in [
+            'teacher_id', 'phone', 'first_name', 'school', 
+            'school_name', 'language', 'model_name', 'batch_name', 'batch_id'
+        ])
 
 class TestImportStatements:
     
@@ -304,10 +340,10 @@ class TestEdgeCases:
     # @patch('tap_lms.background_jobs.optin_contact')
     # @patch('tap_lms.background_jobs.start_contact_flow')
     # def test_flow_start_failure(self, mock_start_flow, mock_optin):
-    #     """Test when flow start fails - covers line 62"""
+    #     """Test when flow start fails - covers the else block for flow start failure"""
     #     mock_optin.return_value = True
     #     self.mock_frappe.db.get_value.side_effect = ["glific_123", "flow_456"]
-    #     mock_start_flow.return_value = False
+    #     mock_start_flow.return_value = False  # This triggers the else block
         
     #     from tap_lms.background_jobs import process_glific_actions
         
@@ -316,8 +352,26 @@ class TestEdgeCases:
     #         "Test School", "en", "model_1", "Batch A", "batch_1"
     #     )
         
-    #     # Verify flow start was attempted
-    #     mock_start_flow.assert_called_once()
-    #     # Verify error was logged for flow start failure (line 62)
+    #     # Verify flow start was attempted with correct parameters
+    #     mock_start_flow.assert_called_once_with(
+    #         "flow_456", 
+    #         "glific_123", 
+    #         {
+    #             "teacher_id": "teacher_1",
+    #             "school_id": "school_1", 
+    #             "school_name": "Test School",
+    #             "language": "en",
+    #             "model": "model_1"
+    #         }
+    #     )
+        
+    #     # Verify the specific error message for flow start failure
     #     error_calls = self.mock_frappe.logger().error.call_args_list
-    #     assert any("Failed to start onboarding flow" in str(call) for call in error_calls)
+    #     flow_error_found = False
+    #     for call in error_calls:
+    #         call_str = str(call)
+    #         if "Failed to start onboarding flow for teacher teacher_1" in call_str:
+    #             flow_error_found = True
+    #             break
+        
+    #     assert flow_error_found, f"Expected 'Failed to start onboarding flow for teacher teacher_1' in error calls: {error_calls}"
