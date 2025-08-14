@@ -4,8 +4,9 @@ from unittest.mock import Mock
 
 def test_glific_teacher_group_coverage():
     """
-    Minimal test to achieve 100% coverage for glific_teacher_group.py
-    Covers lines 5, 7, and 8 (import, class definition, and pass statement)
+    Coverage test for empty GlificTeacherGroup class.
+    Note: This class currently only contains 'pass' - no business logic to test.
+    When actual methods are added, replace with meaningful business logic tests.
     """
     
     # Mock frappe module
