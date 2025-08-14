@@ -42,13 +42,13 @@ sys.modules['frappe'] = mock_frappe
 sys.modules['frappe.model'] = mock_frappe.model
 sys.modules['frappe.model.document'] = mock_frappe.model.document
 
-# # Now import the actual class
-# try:
-#     from tap_lms.tap_lms.doctype.learningchoicepoint.learningchoicepoint import LearningChoicePoint
-# except ImportError:
-#     # If import fails, create a mock class for testing
-#     class LearningChoicePoint(MockDocument):
-#         pass
+# Now import the actual class
+try:
+    from tap_lms.tap_lms.doctype.learningchoicepoint.learningchoicepoint import LearningChoicePoint
+except ImportError:
+    # If import fails, create a mock class for testing
+    class LearningChoicePoint(MockDocument):
+        pass
 
 
 class TestLearningChoicePoint:
