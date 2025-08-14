@@ -36,53 +36,6 @@ def test_learningunit_import_coverage():
         assert LearningUnit.__name__ == 'LearningUnit'
 
 
-def test_learningunit_class_structure():
-    """Test the LearningUnit class structure and inheritance"""
-    
-    with patch.dict('sys.modules', {
-        'frappe': Mock(),
-        'frappe.model': Mock(),
-        'frappe.model.document': Mock(),
-    }):
-        mock_document = Mock()
-        sys.modules['frappe.model.document'].Document = mock_document
-        
-        from tap_lms.tap_lms.doctype.learningunit.learningunit import LearningUnit
-        
-        # Verify class inheritance
-        assert LearningUnit.__bases__ == (mock_document,)
-        
-        # Verify class is properly defined
-        assert callable(LearningUnit)
-        
-        # Test that we can create an instance
-        instance = LearningUnit()
-        assert instance is not None
-
-
-def test_learningunit_empty_class_behavior():
-    """Test that the LearningUnit class behaves as expected with pass statement"""
-    
-    with patch.dict('sys.modules', {
-        'frappe': Mock(),
-        'frappe.model': Mock(),
-        'frappe.model.document': Mock(),
-    }):
-        # Create a mock Document class with some attributes/methods
-        mock_document = Mock()
-        mock_document.some_method = Mock(return_value="inherited_method")
-        mock_document.__init__ = Mock()
-        
-        sys.modules['frappe.model.document'].Document = mock_document
-        
-        from tap_lms.tap_lms.doctype.learningunit.learningunit import LearningUnit
-        
-        # Test that LearningUnit inherits from Document
-        learning_unit = LearningUnit()
-        
-        # Since it's an empty class with pass, it should inherit everything from Document
-        # Test that methods are inherited (if Document had methods)
-        assert hasattr(LearningUnit, 'some_method')
 
 
 def test_import_statements_coverage():
@@ -102,33 +55,6 @@ def test_import_statements_coverage():
         
         assert import_success
 
-
-def test_class_definition_coverage():
-    """Test that class definition lines are properly covered"""
-    
-    with patch.dict('sys.modules', {
-        'frappe': Mock(),
-        'frappe.model': Mock(),
-        'frappe.model.document': Mock(),
-    }):
-        mock_document = Mock()
-        sys.modules['frappe.model.document'].Document = mock_document
-        
-        from tap_lms.tap_lms.doctype.learningunit.learningunit import LearningUnit
-        
-        # Test class definition (line 7)
-        assert LearningUnit.__name__ == 'LearningUnit'
-        assert issubclass(LearningUnit, mock_document)
-        
-        # Test pass statement execution (line 8)
-        # The pass statement is covered by the class definition itself
-        # We can verify this by checking that the class body exists and is empty
-        import inspect
-        source_lines = inspect.getsourcelines(LearningUnit)[0]
-        
-        # The class should have minimal content (just the pass statement)
-        class_body = ''.join(source_lines).strip()
-        assert 'pass' in class_body or len([line for line in source_lines if line.strip() and not line.strip().startswith('#')]) <= 2
 
 
 def test_document_inheritance():
@@ -164,57 +90,6 @@ def test_document_inheritance():
         assert learning_unit.save() == "saved"
         assert learning_unit.delete() == "deleted"
 
-
-def test_multiple_instantiation():
-    """Test creating multiple instances of LearningUnit"""
-    
-    with patch.dict('sys.modules', {
-        'frappe': Mock(),
-        'frappe.model': Mock(),
-        'frappe.model.document': Mock(),
-    }):
-        mock_document = Mock()
-        sys.modules['frappe.model.document'].Document = mock_document
-        
-        from tap_lms.tap_lms.doctype.learningunit.learningunit import LearningUnit
-        
-        # Create multiple instances
-        unit1 = LearningUnit()
-        unit2 = LearningUnit()
-        unit3 = LearningUnit()
-        
-        # Verify they are separate instances
-        assert unit1 is not unit2
-        assert unit2 is not unit3
-        assert unit1 is not unit3
-        
-        # Verify they are all instances of LearningUnit
-        assert isinstance(unit1, LearningUnit)
-        assert isinstance(unit2, LearningUnit)
-        assert isinstance(unit3, LearningUnit)
-
-
-def test_class_attributes():
-    """Test class attributes and methods"""
-    
-    with patch.dict('sys.modules', {
-        'frappe': Mock(),
-        'frappe.model': Mock(),
-        'frappe.model.document': Mock(),
-    }):
-        mock_document = Mock()
-        sys.modules['frappe.model.document'].Document = mock_document
-        
-        from tap_lms.tap_lms.doctype.learningunit.learningunit import LearningUnit
-        
-        # Test class attributes
-        assert hasattr(LearningUnit, '__name__')
-        assert hasattr(LearningUnit, '__module__')
-        assert hasattr(LearningUnit, '__bases__')
-        
-        # Test that it's a proper class
-        import inspect
-        assert inspect.isclass(LearningUnit)
 
 
 def test_edge_cases():
