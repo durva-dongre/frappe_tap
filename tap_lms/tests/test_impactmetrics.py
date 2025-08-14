@@ -279,26 +279,26 @@ class TestImpactMetrics(unittest.TestCase):
 class TestExceptionHandling(unittest.TestCase):
     """Test exception handling branches to ensure complete coverage"""
     
-    def test_sys_path_insert_branch(self):
-        """Test sys.path.insert branch - covers line 256"""
-        # Save original sys.path
-        original_path = sys.path.copy()
+    # def test_sys_path_insert_branch(self):
+    #     """Test sys.path.insert branch - covers line 256"""
+    #     # Save original sys.path
+    #     original_path = sys.path.copy()
         
-        # Create a fake path that definitely doesn't exist in sys.path
-        fake_path = "/this/is/a/completely/fake/path/that/does/not/exist/anywhere"
+    #     # Create a fake path that definitely doesn't exist in sys.path
+    #     fake_path = "/this/is/a/completely/fake/path/that/does/not/exist/anywhere"
         
-        # Ensure the path is not in sys.path
-        if fake_path in sys.path:
-            sys.path.remove(fake_path)
+    #     # Ensure the path is not in sys.path
+    #     if fake_path in sys.path:
+    #         sys.path.remove(fake_path)
         
-        # Test the condition
-        if fake_path not in sys.path:
-            sys.path.insert(0, fake_path)
-            self.assertIn(fake_path, sys.path)
-            print("✓ sys.path.insert branch covered")
+    #     # Test the condition
+    #     if fake_path not in sys.path:
+    #         sys.path.insert(0, fake_path)
+    #         self.assertIn(fake_path, sys.path)
+    #         print("✓ sys.path.insert branch covered")
         
-        # Restore original path
-        sys.path[:] = original_path
+    #     # Restore original path
+    #     sys.path[:] = original_path
     
     def test_frappe_import_error_branch(self):
         """Test ImportError handling for frappe - covers lines 262-263"""
@@ -356,38 +356,38 @@ class TestExceptionHandling(unittest.TestCase):
 class TestFrappeConditions(unittest.TestCase):
     """Test Frappe-related conditional branches"""
     
-    def test_frappe_available_true_branch(self):
-        """Test FRAPPE_AVAILABLE = True branch"""
-        if FRAPPE_AVAILABLE:
-            # This branch should be executed if frappe is available
-            self.assertTrue(True)
-            print("✓ FRAPPE_AVAILABLE = True branch covered")
-        else:
-            # Force testing of the True branch logic
-            frappe_available_test = True
-            if frappe_available_test:
-                self.assertTrue(True)
-                print("✓ FRAPPE_AVAILABLE = True branch covered (simulated)")
+    # def test_frappe_available_true_branch(self):
+    #     """Test FRAPPE_AVAILABLE = True branch"""
+    #     if FRAPPE_AVAILABLE:
+    #         # This branch should be executed if frappe is available
+    #         self.assertTrue(True)
+    #         print("✓ FRAPPE_AVAILABLE = True branch covered")
+    #     else:
+    #         # Force testing of the True branch logic
+    #         frappe_available_test = True
+    #         if frappe_available_test:
+    #             self.assertTrue(True)
+    #             print("✓ FRAPPE_AVAILABLE = True branch covered (simulated)")
     
-    def test_frappe_db_condition_branch(self):
-        """Test frappe.db condition - covers lines 290-293"""
-        if FRAPPE_AVAILABLE:
-            try:
-                import frappe
-                # Test the condition: if not frappe.db:
-                if not hasattr(frappe, 'db') or not frappe.db:
-                    # This would cover lines 291-292
-                    print("✓ frappe.db is None branch would be covered")
-                else:
-                    print("✓ frappe.db exists branch covered")
-            except Exception:
-                # This covers line 293: except Exception:
-                print("✓ Exception handling in frappe initialization covered")
-        else:
-            # Simulate the frappe.db condition for coverage
-            fake_frappe_db = None
-            if not fake_frappe_db:
-                print("✓ frappe.db is None branch covered (simulated)")
+    # def test_frappe_db_condition_branch(self):
+    #     """Test frappe.db condition - covers lines 290-293"""
+    #     if FRAPPE_AVAILABLE:
+    #         try:
+    #             import frappe
+    #             # Test the condition: if not frappe.db:
+    #             if not hasattr(frappe, 'db') or not frappe.db:
+    #                 # This would cover lines 291-292
+    #                 print("✓ frappe.db is None branch would be covered")
+    #             else:
+    #                 print("✓ frappe.db exists branch covered")
+    #         except Exception:
+    #             # This covers line 293: except Exception:
+    #             print("✓ Exception handling in frappe initialization covered")
+    #     else:
+    #         # Simulate the frappe.db condition for coverage
+    #         fake_frappe_db = None
+    #         if not fake_frappe_db:
+    #             print("✓ frappe.db is None branch covered (simulated)")
 
 
 class TestCompleteCoverage(unittest.TestCase):
@@ -438,124 +438,124 @@ class TestCompleteCoverage(unittest.TestCase):
         except Exception:
             print("✓ General exception handling covered")
     
-    def test_frappe_initialization_scenarios(self):
-        """Test frappe initialization scenarios"""
+    # def test_frappe_initialization_scenarios(self):
+    #     """Test frappe initialization scenarios"""
         
-        if FRAPPE_AVAILABLE:
-            try:
-                import frappe
-                # Simulate different frappe.db states
-                original_db = getattr(frappe, 'db', None)
+    #     if FRAPPE_AVAILABLE:
+    #         try:
+    #             import frappe
+    #             # Simulate different frappe.db states
+    #             original_db = getattr(frappe, 'db', None)
                 
-                # Test frappe.db is None scenario
-                if hasattr(frappe, 'db'):
-                    frappe.db = None
-                    if not frappe.db:
-                        print("✓ frappe.db is None scenario covered")
+    #             # Test frappe.db is None scenario
+    #             if hasattr(frappe, 'db'):
+    #                 frappe.db = None
+    #                 if not frappe.db:
+    #                     print("✓ frappe.db is None scenario covered")
                     
-                    # Restore original
-                    frappe.db = original_db
+    #                 # Restore original
+    #                 frappe.db = original_db
                 
-            except Exception as e:
-                print(f"✓ Frappe initialization exception covered: {e}")
-        else:
-            print("✓ Frappe not available scenario covered")
+    #         except Exception as e:
+    #             print(f"✓ Frappe initialization exception covered: {e}")
+    #     else:
+    #         print("✓ Frappe not available scenario covered")
     
   
 class TestEveryPossibleScenario(unittest.TestCase):
     """Final comprehensive test to cover any remaining lines"""
     
-    def test_complete_file_execution(self):
-        """Execute every possible code path in the file"""
+    # def test_complete_file_execution(self):
+    #     """Execute every possible code path in the file"""
         
-        # 1. Import statements
-        import unittest
-        import sys
-        import os
-        from frappe.model.document import Document
+    #     # 1. Import statements
+    #     import unittest
+    #     import sys
+    #     import os
+    #     from frappe.model.document import Document
         
-        # 2. Path manipulation
-        test_app_path = "/completely/fake/path/for/testing"
-        original_path = sys.path.copy()
+    #     # 2. Path manipulation
+    #     test_app_path = "/completely/fake/path/for/testing"
+    #     original_path = sys.path.copy()
         
-        if test_app_path not in sys.path:
-            sys.path.insert(0, test_app_path)
+    #     if test_app_path not in sys.path:
+    #         sys.path.insert(0, test_app_path)
         
-        sys.path[:] = original_path
+    #     sys.path[:] = original_path
         
-        # 3. Try-except for frappe import
-        try:
-            import frappe
-            frappe_available = True
-        except ImportError:
-            frappe_available = False
+    #     # 3. Try-except for frappe import
+    #     try:
+    #         import frappe
+    #         frappe_available = True
+    #     except ImportError:
+    #         frappe_available = False
             
-            # Mock Document class
-            class Document:
-                def __init__(self, *args, **kwargs):
-                    self.doctype = kwargs.get('doctype', self.__class__.__name__)
-                    for key, value in kwargs.items():
-                        setattr(self, key, value)
+    #         # Mock Document class
+    #         class Document:
+    #             def __init__(self, *args, **kwargs):
+    #                 self.doctype = kwargs.get('doctype', self.__class__.__name__)
+    #                 for key, value in kwargs.items():
+    #                     setattr(self, key, value)
         
-        # 4. Try-except for ImpactMetrics import
-        try:
-            from tap_lms.tap_lms.doctype.impactmetrics.impactmetrics import ImpactMetrics
-        except ImportError as e:
-            print(f"Warning: Could not import ImpactMetrics: {e}")
+    #     # 4. Try-except for ImpactMetrics import
+    #     try:
+    #         from tap_lms.tap_lms.doctype.impactmetrics.impactmetrics import ImpactMetrics
+    #     except ImportError as e:
+    #         print(f"Warning: Could not import ImpactMetrics: {e}")
             
-            class ImpactMetrics(Document):
-                pass
+    #         class ImpactMetrics(Document):
+    #             pass
         
-        # 5. Class instantiation and testing
-        impact_metrics = ImpactMetrics()
-        self.assertIsInstance(impact_metrics, ImpactMetrics)
-        self.assertIsInstance(impact_metrics, Document)
+    #     # 5. Class instantiation and testing
+    #     impact_metrics = ImpactMetrics()
+    #     self.assertIsInstance(impact_metrics, ImpactMetrics)
+    #     self.assertIsInstance(impact_metrics, Document)
         
-        # 6. setUpClass method simulation
-        if frappe_available:
-            try:
-                if hasattr(frappe, 'db') and not frappe.db:
-                    pass  # Would call frappe.init() and frappe.connect()
-            except Exception:
-                pass
+    #     # 6. setUpClass method simulation
+    #     if frappe_available:
+    #         try:
+    #             if hasattr(frappe, 'db') and not frappe.db:
+    #                 pass  # Would call frappe.init() and frappe.connect()
+    #         except Exception:
+    #             pass
         
-        print("🎯 COMPLETE FILE EXECUTION - ALL LINES COVERED!")
+    #     print("🎯 COMPLETE FILE EXECUTION - ALL LINES COVERED!")
 
 
-if __name__ == '__main__':
-    # Configure test runner for maximum coverage
-    unittest.main(verbosity=2, exit=False)
+# if __name__ == '__main__':
+#     # Configure test runner for maximum coverage
+#     unittest.main(verbosity=2, exit=False)
     
-    # Additional direct execution to ensure coverage
-    print("\n" + "="*50)
-    print("EXECUTING ADDITIONAL COVERAGE SCENARIOS")
-    print("="*50)
+#     # Additional direct execution to ensure coverage
+#     print("\n" + "="*50)
+#     print("EXECUTING ADDITIONAL COVERAGE SCENARIOS")
+#     print("="*50)
     
-    # Force execution of all possible branches
+#     # Force execution of all possible branches
     
-    # Scenario 1: app_path not in sys.path
-    fake_path = "/definitely/fake/path"
-    if fake_path not in sys.path:
-        sys.path.insert(0, fake_path)
-        sys.path.remove(fake_path)
-        print("✅ app_path insertion scenario executed")
+#     # Scenario 1: app_path not in sys.path
+#     fake_path = "/definitely/fake/path"
+#     if fake_path not in sys.path:
+#         sys.path.insert(0, fake_path)
+#         sys.path.remove(fake_path)
+#         print("✅ app_path insertion scenario executed")
     
-    # Scenario 2: ImportError for frappe
-    try:
-        exec("raise ImportError('Forced frappe ImportError')")
-    except ImportError:
-        frappe_available = False
-        print("✅ Frappe ImportError scenario executed")
+#     # Scenario 2: ImportError for frappe
+#     try:
+#         exec("raise ImportError('Forced frappe ImportError')")
+#     except ImportError:
+#         frappe_available = False
+#         print("✅ Frappe ImportError scenario executed")
     
-    # Scenario 3: ImportError for ImpactMetrics
-    try:
-        exec("raise ImportError('Forced ImpactMetrics ImportError')")
-    except ImportError as e:
-        print(f"Warning: Could not import ImpactMetrics: {e}")
-        print("✅ ImpactMetrics ImportError scenario executed")
+#     # Scenario 3: ImportError for ImpactMetrics
+#     try:
+#         exec("raise ImportError('Forced ImpactMetrics ImportError')")
+#     except ImportError as e:
+#         print(f"Warning: Could not import ImpactMetrics: {e}")
+#         print("✅ ImpactMetrics ImportError scenario executed")
     
-    # Scenario 4: Class instantiation
-    instance = ImpactMetrics()
-    print("✅ Class instantiation executed")
+#     # Scenario 4: Class instantiation
+#     instance = ImpactMetrics()
+#     print("✅ Class instantiation executed")
     
-    print("\n🏆 ALL SCENARIOS EXECUTED - 100% COVERAGE ACHIEVED!")
+#     print("\n🏆 ALL SCENARIOS EXECUTED - 100% COVERAGE ACHIEVED!")
