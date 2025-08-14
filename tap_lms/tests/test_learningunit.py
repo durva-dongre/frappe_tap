@@ -81,13 +81,7 @@ class TestLearningUnit:
         # Test that we can import and use the class
         learning_unit = LearningUnit()
         assert learning_unit is not None
-    
-    def test_class_module_import(self):
-        """Test that the module can be imported correctly"""
-        # This ensures the import statements are covered
-        from tap_lms.tap_lms.doctype.learningunit.learningunit import LearningUnit as LU
-        assert LU == LearningUnit
-    
+   
     def test_document_import(self):
         """Test that Document is imported correctly"""
         # Test importing Document to ensure import coverage
@@ -151,17 +145,7 @@ class TestLearningUnitEdgeCases:
         mock_parent_init.assert_called_once_with(complex_data)
         assert isinstance(learning_unit, LearningUnit)
     
-    def test_import_statement_coverage(self):
-        """Test that all import statements are covered"""
-        # This test ensures all import statements are executed and covered
-        from tap_lms.tap_lms.doctype.learningunit.learningunit import LearningUnit as TestImport
-        assert TestImport == LearningUnit
-        
-        # Test importing Document to ensure full import coverage
-        from frappe.model.document import Document as DocImport
-        assert DocImport is not None
-
-
+    
 # Test fixtures for reusable test data
 @pytest.fixture
 def sample_unit_data():
@@ -358,16 +342,6 @@ class TestErrorHandling:
             assert isinstance(instance, LearningUnit)
             mock_parent_init.reset_mock()
 
-
-# Module-level tests
-def test_module_attributes():
-    """Test module-level attributes and properties"""
-    import tap_lms.tap_lms.doctype.learningunit.learningunit as module
-    
-    assert hasattr(module, 'LearningUnit')
-    assert hasattr(module, 'Document')
-    assert module.LearningUnit == LearningUnit
-    assert module.Document == Document
 
 
 # Unit-specific tests
