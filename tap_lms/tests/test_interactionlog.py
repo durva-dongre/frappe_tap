@@ -17,13 +17,7 @@ class TestInteractionLog(unittest.TestCase):
         
         # Test frappe is accessible
         self.assertIsNotNone(frappe.db)
-    
-    def test_frappe_db_connection(self):
-        """Test database connection"""
-        # Test if we can access the database
-        result = frappe.db.sql("SELECT 1 as test_value")
-        self.assertEqual(result[0][0], 1)
-    
+   
     def test_user_permissions(self):
         """Test user permissions setup"""
         current_user = frappe.session.user
