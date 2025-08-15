@@ -59,19 +59,24 @@ def test_get_glific_auth_headers_valid_token(mock_frappe):
     except ImportError as e:
         pytest.skip(f"Could not import module: {e}")
     
-    # Mock settings with valid token
-    mock_settings = Mock()
-    mock_settings.access_token = "valid_token"
-    mock_settings.token_expiry_time = datetime.now(timezone.utc) + timedelta(hours=1)
-    mock_frappe.get_single.return_value = mock_settings
-    
-    result = get_glific_auth_headers()
-    
-    expected = {
-        "authorization": "valid_token",
-        "Content-Type": "application/json"
-    }
-    assert result == expected
+    with patch('glific_integration.datetime') as mock_datetime:
+        # Mock settings with valid token
+        mock_settings = Mock()
+        mock_settings.access_token = "valid_token"
+        mock_settings.token_expiry_time = datetime.now(timezone.utc) + timedelta(hours=1)
+        mock_frappe.get_single.return_value = mock_settings
+        
+        # Mock datetime.now to return a consistent time
+        mock_datetime.now.return_value = datetime.now(timezone.utc)
+        mock_datetime.datetime = datetime  # For isinstance checks
+        
+        result = get_glific_auth_headers()
+        
+        expected = {
+            "authorization": "valid_token",
+            "Content-Type": "application/json"
+        }
+        assert result == expected
 
 def test_get_glific_auth_headers_expired_token(mock_frappe):
     """Test get_glific_auth_headers with expired token - should refresh"""
@@ -81,7 +86,10 @@ def test_get_glific_auth_headers_expired_token(mock_frappe):
     except ImportError as e:
         pytest.skip(f"Could not import module: {e}")
     
-    with patch('glific_integration.requests') as mock_requests:
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.datetime') as mock_datetime, \
+         patch('glific_integration.isoparse') as mock_isoparse:
+        
         # Mock settings with expired token
         mock_settings = Mock()
         mock_settings.access_token = "expired_token"
@@ -91,6 +99,13 @@ def test_get_glific_auth_headers_expired_token(mock_frappe):
         mock_settings.password = "password"
         mock_settings.name = "settings_name"
         mock_frappe.get_single.return_value = mock_settings
+        
+        # Mock datetime.now to return a consistent time
+        mock_datetime.now.return_value = datetime.now(timezone.utc)
+        mock_datetime.datetime = datetime
+        
+        # Mock isoparse for token expiry parsing
+        mock_isoparse.return_value = datetime.now(timezone.utc) + timedelta(hours=1)
         
         # Mock successful auth response
         mock_response = Mock()
@@ -254,7 +269,9 @@ def test_update_contact_fields_success(mock_frappe):
     
     with patch('glific_integration.requests') as mock_requests, \
          patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers, \
+         patch('glific_integration.datetime') as mock_datetime, \
+         patch('glific_integration.json') as mock_json:
         
         # Mock dependencies
         mock_settings = Mock()
@@ -262,9 +279,17 @@ def test_update_contact_fields_success(mock_frappe):
         mock_get_settings.return_value = mock_settings
         mock_get_headers.return_value = {"authorization": "token"}
         
+        # Mock datetime for timestamp
+        mock_datetime.now.return_value.isoformat.return_value = "2025-01-01T00:00:00Z"
+        
+        # Mock json.loads for existing fields
+        mock_json.loads.return_value = {"existing_field": {"value": "existing_value"}}
+        mock_json.dumps.return_value = '{"updated": "fields"}'
+        
         # Mock fetch response (get current contact)
         fetch_response = Mock()
         fetch_response.status_code = 200
+        fetch_response.raise_for_status = Mock()
         fetch_response.json.return_value = {
             "data": {
                 "contact": {
@@ -280,6 +305,8 @@ def test_update_contact_fields_success(mock_frappe):
         # Mock update response
         update_response = Mock()
         update_response.status_code = 200
+        update_response.text = "success"
+        update_response.raise_for_status = Mock()
         update_response.json.return_value = {
             "data": {
                 "updateContact": {
@@ -292,6 +319,10 @@ def test_update_contact_fields_success(mock_frappe):
         }
         
         mock_requests.post.side_effect = [fetch_response, update_response]
+        
+        # Create a proper RequestException for the except clause
+        mock_requests.exceptions = Mock()
+        mock_requests.exceptions.RequestException = Exception
         
         result = update_contact_fields("123", {"new_field": "new_value"})
         
@@ -472,7 +503,7 @@ def test_update_student_glific_ids(mock_frappe):
         pytest.skip(f"Could not import module: {e}")
     
     with patch('glific_integration.get_contact_by_phone') as mock_get_contact:
-        # Mock students data
+        # Mock students data - fix: students are dicts, not objects
         mock_students = [
             {"name": "student1", "phone": "9876543210"},
             {"name": "student2", "phone": "9876543211"}
@@ -496,7 +527,7 @@ def test_update_student_glific_ids_invalid_phone(mock_frappe):
     except ImportError as e:
         pytest.skip(f"Could not import module: {e}")
     
-    # Mock students with invalid phone
+    # Mock students with invalid phone - fix: students are dicts, not objects
     mock_students = [
         {"name": "student1", "phone": "invalid_phone"}
     ]
@@ -893,8 +924,12 @@ def test_edge_cases_and_error_handling(mock_frappe):
     mock_settings.token_expiry_time = "2025-12-31T23:59:59Z"  # String format
     mock_frappe.get_single.return_value = mock_settings
     
-    with patch('glific_integration.isoparse') as mock_isoparse:
+    with patch('glific_integration.isoparse') as mock_isoparse, \
+         patch('glific_integration.datetime') as mock_datetime:
+        
         mock_isoparse.return_value = datetime.now(timezone.utc) + timedelta(hours=1)
+        mock_datetime.now.return_value = datetime.now(timezone.utc)
+        mock_datetime.datetime = datetime  # For isinstance checks
         
         result = get_glific_auth_headers()
         
