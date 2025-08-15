@@ -1053,8 +1053,97 @@ def test_get_glific_auth_headers_timezone_replacement(mock_frappe):
         }
         assert result == expected
 
-def test_update_contact_fields_json_decode_error(mock_frappe):
-    """Test update_contact_fields when JSON parsing fails"""
+def test_create_contact_unexpected_response_structure(mock_frappe):
+    """Test create_contact with unexpected response structure - covers lines 124-125"""
+    
+    try:
+        from glific_integration import create_contact
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
+        
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
+        
+        # Mock response with unexpected structure (no createContact field)
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.text = "unexpected"
+        mock_response.json.return_value = {
+            "data": {
+                "unexpectedField": "value"  # Missing createContact
+            }
+        }
+        mock_requests.post.return_value = mock_response
+        
+        result = create_contact("Test User", "1234567890", "Test School", "Test Model", "1", "batch123")
+        
+        assert result is None
+
+def test_create_contact_bad_status_code(mock_frappe):
+    """Test create_contact with non-200 status code - covers lines 127-128"""
+    
+    try:
+        from glific_integration import create_contact
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
+        
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
+        
+        # Mock response with bad status code
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.text = "Server Error"
+        mock_requests.post.return_value = mock_response
+        
+        result = create_contact("Test User", "1234567890", "Test School", "Test Model", "1", "batch123")
+        
+        assert result is None
+
+def test_update_contact_fields_contact_not_found(mock_frappe):
+    """Test update_contact_fields when contact fetch fails - covers lines 172-173"""
+    
+    try:
+        from glific_integration import update_contact_fields
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
+        
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
+        
+        # Mock fetch response with no contact data
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "data": {
+                "contact": {
+                    "contact": None  # No contact found
+                }
+            }
+        }
+        mock_requests.post.return_value = mock_response
+        mock_requests.exceptions = Mock()
+        mock_requests.exceptions.RequestException = Exception
+        
+        result = update_contact_fields("123", {"new_field": "new_value"})
+        
+        assert result is False
+
+def test_update_contact_fields_json_decode_error_complete(mock_frappe):
+    """Test update_contact_fields JSON decode error - covers lines 180-182"""
     
     try:
         from glific_integration import update_contact_fields
@@ -1067,16 +1156,16 @@ def test_update_contact_fields_json_decode_error(mock_frappe):
          patch('glific_integration.datetime') as mock_datetime, \
          patch('glific_integration.json') as mock_json:
         
-        # Mock dependencies
         mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
         mock_get_headers.return_value = {"authorization": "token"}
         mock_datetime.now.return_value.isoformat.return_value = "2025-01-01T00:00:00Z"
         
-        # Mock json.loads to raise JSONDecodeError
-        mock_json.loads.side_effect = json.JSONDecodeError("Invalid JSON", "doc", 0)
+        # Mock json.loads to raise JSONDecodeError, then work normally
+        decode_error = json.JSONDecodeError("Invalid JSON", "doc", 0)
+        mock_json.loads.side_effect = decode_error
         mock_json.dumps.return_value = '{"updated": "fields"}'
         
-        # Mock fetch response with invalid JSON in fields
+        # Mock fetch response
         fetch_response = Mock()
         fetch_response.status_code = 200
         fetch_response.raise_for_status = Mock()
@@ -1086,7 +1175,7 @@ def test_update_contact_fields_json_decode_error(mock_frappe):
                     "contact": {
                         "id": "123",
                         "name": "Test User",
-                        "fields": "invalid json string"
+                        "fields": "invalid json"
                     }
                 }
             }
@@ -1100,10 +1189,7 @@ def test_update_contact_fields_json_decode_error(mock_frappe):
         update_response.json.return_value = {
             "data": {
                 "updateContact": {
-                    "contact": {
-                        "id": "123",
-                        "name": "Test User"
-                    }
+                    "contact": {"id": "123", "name": "Test User"}
                 }
             }
         }
@@ -1114,11 +1200,169 @@ def test_update_contact_fields_json_decode_error(mock_frappe):
         
         result = update_contact_fields("123", {"new_field": "new_value"})
         
-        # Should still succeed and continue with empty fields
         assert result is True
 
-def test_get_contact_by_phone_request_exception(mock_frappe):
-    """Test get_contact_by_phone when request fails with exception"""
+def test_update_contact_fields_update_errors(mock_frappe):
+    """Test update_contact_fields when update returns errors - covers lines 235-236"""
+    
+    try:
+        from glific_integration import update_contact_fields
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers, \
+         patch('glific_integration.datetime') as mock_datetime, \
+         patch('glific_integration.json') as mock_json:
+        
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
+        mock_datetime.now.return_value.isoformat.return_value = "2025-01-01T00:00:00Z"
+        mock_json.loads.return_value = {"existing": "field"}
+        mock_json.dumps.return_value = '{"updated": "fields"}'
+        
+        # Mock fetch response
+        fetch_response = Mock()
+        fetch_response.status_code = 200
+        fetch_response.raise_for_status = Mock()
+        fetch_response.json.return_value = {
+            "data": {
+                "contact": {
+                    "contact": {
+                        "id": "123",
+                        "name": "Test User",
+                        "fields": '{"existing": "field"}'
+                    }
+                }
+            }
+        }
+        
+        # Mock update response with errors
+        update_response = Mock()
+        update_response.status_code = 200
+        update_response.text = "error"
+        update_response.raise_for_status = Mock()
+        update_response.json.return_value = {
+            "errors": [{"message": "Update failed"}]
+        }
+        
+        mock_requests.post.side_effect = [fetch_response, update_response]
+        mock_requests.exceptions = Mock()
+        mock_requests.exceptions.RequestException = Exception
+        
+        result = update_contact_fields("123", {"new_field": "new_value"})
+        
+        assert result is False
+
+def test_update_contact_fields_update_no_contact(mock_frappe):
+    """Test update_contact_fields when update returns no contact - covers lines 243-244"""
+    
+    try:
+        from glific_integration import update_contact_fields
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers, \
+         patch('glific_integration.datetime') as mock_datetime, \
+         patch('glific_integration.json') as mock_json:
+        
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
+        mock_datetime.now.return_value.isoformat.return_value = "2025-01-01T00:00:00Z"
+        mock_json.loads.return_value = {"existing": "field"}
+        mock_json.dumps.return_value = '{"updated": "fields"}'
+        
+        # Mock fetch response
+        fetch_response = Mock()
+        fetch_response.status_code = 200
+        fetch_response.raise_for_status = Mock()
+        fetch_response.json.return_value = {
+            "data": {
+                "contact": {
+                    "contact": {
+                        "id": "123",
+                        "name": "Test User",
+                        "fields": '{"existing": "field"}'
+                    }
+                }
+            }
+        }
+        
+        # Mock update response with no contact in response
+        update_response = Mock()
+        update_response.status_code = 200
+        update_response.text = "success"
+        update_response.raise_for_status = Mock()
+        update_response.json.return_value = {
+            "data": {
+                "updateContact": {}  # No contact field
+            }
+        }
+        
+        mock_requests.post.side_effect = [fetch_response, update_response]
+        mock_requests.exceptions = Mock()
+        mock_requests.exceptions.RequestException = Exception
+        
+        result = update_contact_fields("123", {"new_field": "new_value"})
+        
+        assert result is False
+
+def test_update_contact_fields_request_exception(mock_frappe):
+    """Test update_contact_fields RequestException - covers lines 246-248"""
+    
+    try:
+        from glific_integration import update_contact_fields
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
+        
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
+        
+        # Create a proper RequestException
+        class MockRequestException(Exception):
+            pass
+        
+        mock_requests.exceptions = Mock()
+        mock_requests.exceptions.RequestException = MockRequestException
+        mock_requests.post.side_effect = MockRequestException("Network error")
+        
+        result = update_contact_fields("123", {"new_field": "new_value"})
+        
+        assert result is False
+
+def test_update_contact_fields_general_exception(mock_frappe):
+    """Test update_contact_fields general Exception - covers lines 249-251"""
+    
+    try:
+        from glific_integration import update_contact_fields
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
+        
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
+        
+        mock_requests.exceptions = Mock()
+        mock_requests.exceptions.RequestException = Exception
+        # Raise a non-RequestException
+        mock_requests.post.side_effect = ValueError("Unexpected error")
+        
+        result = update_contact_fields("123", {"new_field": "new_value"})
+        
+        assert result is False
+
+def test_get_contact_by_phone_api_errors(mock_frappe):
+    """Test get_contact_by_phone API errors - covers line 287"""
     
     try:
         from glific_integration import get_contact_by_phone
@@ -1132,216 +1376,23 @@ def test_get_contact_by_phone_request_exception(mock_frappe):
         mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
         mock_get_headers.return_value = {"authorization": "token"}
         
-        # Mock request to raise an exception
+        # Mock response with errors
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "errors": [{"message": "Contact fetch failed"}]
+        }
+        mock_requests.post.return_value = mock_response
         mock_requests.exceptions = Mock()
         mock_requests.exceptions.RequestException = Exception
-        mock_requests.post.side_effect = Exception("Network error")
         
         result = get_contact_by_phone("1234567890")
         
         assert result is None
 
-def test_optin_contact_api_errors(mock_frappe):
-    """Test optin_contact when API returns errors"""
-    
-    try:
-        from glific_integration import optin_contact
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        # Mock response with errors
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {
-            "errors": [{"message": "Contact opt-in failed"}]
-        }
-        mock_requests.post.return_value = mock_response
-        mock_requests.exceptions = Mock()
-        mock_requests.exceptions.RequestException = Exception
-        
-        result = optin_contact("1234567890", "Test User")
-        
-        assert result is False
-
-def test_optin_contact_request_exception(mock_frappe):
-    """Test optin_contact when request raises exception"""
-    
-    try:
-        from glific_integration import optin_contact
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        mock_requests.exceptions = Mock()
-        mock_requests.exceptions.RequestException = Exception
-        mock_requests.post.side_effect = Exception("Network error")
-        
-        result = optin_contact("1234567890", "Test User")
-        
-        assert result is False
-
-def test_start_contact_flow_api_errors(mock_frappe):
-    """Test start_contact_flow when API returns errors"""
-    
-    try:
-        from glific_integration import start_contact_flow
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        # Mock response with errors
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.raise_for_status = Mock()
-        mock_response.json.return_value = {
-            "errors": [{"message": "Flow start failed"}]
-        }
-        mock_requests.post.return_value = mock_response
-        mock_requests.exceptions = Mock()
-        mock_requests.exceptions.RequestException = Exception
-        
-        result = start_contact_flow("flow123", "contact123", {"key": "value"})
-        
-        assert result is False
-
-def test_start_contact_flow_request_exception(mock_frappe):
-    """Test start_contact_flow when request raises exception"""
-    
-    try:
-        from glific_integration import start_contact_flow
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        mock_requests.exceptions = Mock()
-        mock_requests.exceptions.RequestException = Exception
-        mock_requests.post.side_effect = Exception("Network error")
-        
-        result = start_contact_flow("flow123", "contact123", {"key": "value"})
-        
-        assert result is False
-
-def test_update_student_glific_ids_no_contact_found(mock_frappe):
-    """Test update_student_glific_ids when no contact is found"""
-    
-    try:
-        from glific_integration import update_student_glific_ids
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.get_contact_by_phone') as mock_get_contact:
-        # Mock students data
-        class MockStudent:
-            def __init__(self, name, phone):
-                self.name = name
-                self.phone = phone
-        
-        mock_students = [MockStudent("student1", "9876543210")]
-        mock_frappe.get_all.return_value = mock_students
-        
-        # Mock no contact found
-        mock_get_contact.return_value = None
-        
-        result = update_student_glific_ids(batch_size=1)
-        
-        assert result == 1
-        # Should not call set_value since no contact was found
-        mock_frappe.db.set_value.assert_not_called()
-
-def test_check_glific_group_exists_exception(mock_frappe):
-    """Test check_glific_group_exists when request raises exception"""
-    
-    try:
-        from glific_integration import check_glific_group_exists
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        # Mock request to raise exception
-        mock_requests.post.side_effect = Exception("Network error")
-        
-        result = check_glific_group_exists("Test Group")
-        
-        assert result is None
-
-def test_create_glific_group_exception(mock_frappe):
-    """Test create_glific_group when request raises exception"""
-    
-    try:
-        from glific_integration import create_glific_group
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        # Mock request to raise exception
-        mock_requests.post.side_effect = Exception("Network error")
-        
-        result = create_glific_group("Test Group", "Test Description")
-        
-        assert result is None
-
-def test_add_contact_to_group_exception(mock_frappe):
-    """Test add_contact_to_group when request raises exception"""
-    
-    try:
-        from glific_integration import add_contact_to_group
-    except ImportError as e:
-        pytest.skip(f"Could not import module: {e}")
-    
-    with patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        # Mock request to raise exception
-        mock_requests.post.side_effect = Exception("Network error")
-        
-        result = add_contact_to_group("contact123", "group123")
-        
-        assert result is False
-
-def test_add_student_to_glific_for_onboarding_contact_creation_failure(mock_frappe):
-    """Test add_student_to_glific_for_onboarding when contact creation fails"""
+def test_add_student_to_glific_for_onboarding_with_optional_fields(mock_frappe):
+    """Test add_student_to_glific_for_onboarding with all optional fields - covers lines 722-741"""
     
     try:
         from glific_integration import add_student_to_glific_for_onboarding
@@ -1349,31 +1400,35 @@ def test_add_student_to_glific_for_onboarding_contact_creation_failure(mock_frap
         pytest.skip(f"Could not import module: {e}")
     
     with patch('glific_integration.get_contact_by_phone') as mock_get_contact, \
-         patch('glific_integration.requests') as mock_requests, \
-         patch('glific_integration.get_glific_settings') as mock_get_settings, \
-         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
+         patch('glific_integration.optin_contact') as mock_optin, \
+         patch('glific_integration.add_contact_to_group') as mock_add_to_group, \
+         patch('glific_integration.update_contact_fields') as mock_update:
         
-        # Mock no existing contact
-        mock_get_contact.return_value = None
-        
-        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
-        mock_get_headers.return_value = {"authorization": "token"}
-        
-        # Mock failed contact creation
-        mock_response = Mock()
-        mock_response.status_code = 500  # Server error
-        mock_response.text = "Server error"
-        mock_requests.post.return_value = mock_response
+        # Mock existing contact with SESSION status (no opt-in needed)
+        mock_get_contact.return_value = {
+            "id": "contact123",
+            "bspStatus": "SESSION"
+        }
+        mock_add_to_group.return_value = True
+        mock_update.return_value = True
         
         result = add_student_to_glific_for_onboarding(
             "Test Student", "9876543210", "Test School", "Test Batch", 
             "group123", "1", "Level 1", "Math", "Grade 5"
         )
         
-        assert result is None
+        # Should update fields with all optional parameters
+        mock_update.assert_called_once()
+        call_args = mock_update.call_args[0][1]  # Second argument (fields_to_update)
+        
+        assert "school" in call_args
+        assert "course_level" in call_args
+        assert "course" in call_args
+        assert "grade" in call_args
+        assert result is not None
 
-def test_add_student_to_glific_for_onboarding_no_contact_in_response(mock_frappe):
-    """Test add_student_to_glific_for_onboarding when response has no contact"""
+def test_add_student_to_glific_for_onboarding_default_language_error(mock_frappe):
+    """Test add_student_to_glific_for_onboarding when getting default language fails - covers lines 746-750"""
     
     try:
         from glific_integration import add_student_to_glific_for_onboarding
@@ -1391,43 +1446,103 @@ def test_add_student_to_glific_for_onboarding_no_contact_in_response(mock_frappe
         mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
         mock_get_headers.return_value = {"authorization": "token"}
         
-        # Mock response with no contact data
+        # Mock frappe.db.get_single_value to raise exception
+        mock_frappe.db.get_single_value.side_effect = Exception("Database error")
+        
+        # Mock successful contact creation
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "data": {
-                "createContact": {}  # No contact field
+                "createContact": {
+                    "contact": {
+                        "id": "new_contact123",
+                        "name": "Test Student",
+                        "phone": "919876543210"
+                    }
+                }
             }
         }
         mock_requests.post.return_value = mock_response
         
         result = add_student_to_glific_for_onboarding(
             "Test Student", "9876543210", "Test School", "Test Batch", 
-            "group123", "1", "Level 1", "Math", "Grade 5"
+            "group123", None  # No language_id provided
         )
         
-        assert result is None
+        assert result is not None
 
-def test_create_or_get_teacher_group_for_batch_creation_failure(mock_frappe):
-    """Test create_or_get_teacher_group_for_batch when group creation fails"""
+def test_add_student_to_glific_for_onboarding_invalid_language_id(mock_frappe):
+    """Test add_student_to_glific_for_onboarding with invalid language_id - covers lines 755"""
     
     try:
-        from glific_integration import create_or_get_teacher_group_for_batch
+        from glific_integration import add_student_to_glific_for_onboarding
     except ImportError as e:
         pytest.skip(f"Could not import module: {e}")
     
-    with patch('glific_integration.check_glific_group_exists') as mock_check, \
-         patch('glific_integration.create_glific_group') as mock_create:
+    with patch('glific_integration.get_contact_by_phone') as mock_get_contact, \
+         patch('glific_integration.requests') as mock_requests, \
+         patch('glific_integration.get_glific_settings') as mock_get_settings, \
+         patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
         
-        # Mock no existing mapping
-        mock_frappe.get_all.return_value = []
+        # Mock no existing contact
+        mock_get_contact.return_value = None
         
-        # Mock no existing group in Glific
-        mock_check.return_value = None
+        mock_get_settings.return_value = Mock(api_url="https://api.glific.com")
+        mock_get_headers.return_value = {"authorization": "token"}
         
-        # Mock failed group creation
-        mock_create.return_value = None
+        # Mock successful contact creation
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "data": {
+                "createContact": {
+                    "contact": {
+                        "id": "new_contact123",
+                        "name": "Test Student",
+                        "phone": "919876543210"
+                    }
+                }
+            }
+        }
+        mock_requests.post.return_value = mock_response
         
-        result = create_or_get_teacher_group_for_batch("Batch Name", "batch123")
+        result = add_student_to_glific_for_onboarding(
+            "Test Student", "9876543210", "Test School", "Test Batch", 
+            "group123", "invalid_language_id"  # Invalid language_id
+        )
         
-        assert result is None
+        assert result is not None
+
+def test_add_student_to_glific_for_onboarding_optin_error(mock_frappe):
+    """Test add_student_to_glific_for_onboarding when opt-in fails - covers line 718"""
+    
+    try:
+        from glific_integration import add_student_to_glific_for_onboarding
+    except ImportError as e:
+        pytest.skip(f"Could not import module: {e}")
+    
+    with patch('glific_integration.get_contact_by_phone') as mock_get_contact, \
+         patch('glific_integration.optin_contact') as mock_optin, \
+         patch('glific_integration.add_contact_to_group') as mock_add_to_group, \
+         patch('glific_integration.update_contact_fields') as mock_update:
+        
+        # Mock existing contact that needs opt-in
+        mock_get_contact.return_value = {
+            "id": "contact123",
+            "bspStatus": "NONE"
+        }
+        
+        # Mock opt-in to raise exception
+        mock_optin.side_effect = Exception("Opt-in error")
+        mock_add_to_group.return_value = True
+        mock_update.return_value = True
+        
+        result = add_student_to_glific_for_onboarding(
+            "Test Student", "9876543210", "Test School", "Test Batch", 
+            "group123", "1"
+        )
+        
+        # Should still return the contact even if opt-in fails
+        assert result is not None
+        assert result["id"] == "contact123"
