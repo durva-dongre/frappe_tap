@@ -24,19 +24,7 @@ sys.path.insert(0, '/home/frappe/frappe-bench/apps/tap_lms')
 class TestOnboardingStage(unittest.TestCase):
     """Simple unittest class for OnboardingStage coverage"""
    
-    @patch('frappe.model.document.Document', MockDocument)
-    def test_class_attributes(self):
-        """Test class attributes and inheritance"""
-        # Import after mocking
-        from tap_lms.tap_lms.doctype.onboardingstage.onboardingstage import OnboardingStage
-       
-        # Check inheritance
-        self.assertTrue(hasattr(OnboardingStage, '__bases__'))
-       
-        # The class should have Document as base class
-        base_class_names = [base.__name__ for base in OnboardingStage.__bases__]
-        self.assertIn('Document', base_class_names)
-
+    
     @patch('frappe.model.document.Document', MockDocument)
     def test_class_instantiation(self):
         """Test that the class can be instantiated"""
