@@ -560,21 +560,21 @@ def create_glific_group(label, description=""):
         frappe.logger().error(f"Error creating Glific group: {str(e)}")
         return None
 
-def create_or_get_glific_group_for_batch(batch_id):
+def create_or_get_glific_group_for_batch(set_id):
     """Create a Glific group for a backend onboarding batch or get existing one"""
     # Get the batch document
-    batch = frappe.get_doc("Backend Student Onboarding", batch_id)
+    set = frappe.get_doc("Backend Student Onboarding", set_id)
 
     # Check if we already have a mapping for this batch
     existing_mapping = frappe.get_all("GlificContactGroup",
-                                   filters={"backend_onboarding_set": batch_id},
+                                   filters={"backend_onboarding_set": set_id},
                                    fields=["name", "group_id", "label"])
 
     if existing_mapping:
         return existing_mapping[0]
 
     # Derive group label from batch name
-    group_label = f"Set: {batch.set_name}"
+    group_label = f"Set: {set.set_name}"
 
     # Check if this group already exists in Glific
     existing_group = check_glific_group_exists(group_label)
@@ -584,8 +584,8 @@ def create_or_get_glific_group_for_batch(batch_id):
         glific_group = frappe.new_doc("GlificContactGroup")
         glific_group.group_id = existing_group["id"]
         glific_group.label = existing_group["label"]
-        glific_group.description = f"Auto-created for backend onboarding batch {batch.set_name}"
-        glific_group.backend_onboarding_set = batch_id
+        glific_group.description = f"Auto-created for backend onboarding batch {set.set_name}"
+        glific_group.backend_onboarding_set = set_id
         glific_group.insert()
         return {
             "group_id": existing_group["id"],
@@ -593,15 +593,15 @@ def create_or_get_glific_group_for_batch(batch_id):
         }
 
     # Group doesn't exist, create it in Glific
-    new_group = create_glific_group(group_label, f"Students from batch {batch.set_name}")
+    new_group = create_glific_group(group_label, f"Students from batch {set.set_name}")
 
     if new_group:
         # Create mapping
         glific_group = frappe.new_doc("GlificContactGroup")
         glific_group.group_id = new_group["id"]
         glific_group.label = new_group["label"]
-        glific_group.description = f"Auto-created for backend onboarding batch {batch.set_name}"
-        glific_group.backend_onboarding_set = batch_id
+        glific_group.description = f"Auto-created for backend onboarding batch {set.set_name}"
+        glific_group.backend_onboarding_set = set_id
         glific_group.insert()
         return {
             "group_id": new_group["id"],
@@ -664,7 +664,7 @@ def add_contact_to_group(contact_id, group_id):
 
 
 
-def add_student_to_glific_for_onboarding(student_name, phone, school_name, batch_name, group_id, language_id=None, course_level_name=None, course_vertical_name=None, grade=None):
+def add_student_to_glific_for_onboarding(student_name, phone, school_name, batch_id, group_id, language_id=None, course_level_name=None, course_vertical_name=None, grade=None):
     """
     Function dedicated to backend onboarding that:
     1. Formats the phone number correctly
@@ -725,7 +725,7 @@ def add_student_to_glific_for_onboarding(student_name, phone, school_name, batch
         # Optionally update fields to ensure they're current
         fields_to_update = {
             "buddy_name": student_name,
-            "batch_id": batch_name
+            "batch_id": batch_id
         }
         if school_name:
             fields_to_update["school"] = school_name
@@ -793,9 +793,9 @@ def add_student_to_glific_for_onboarding(student_name, phone, school_name, batch
                 "inserted_at": datetime.now(timezone.utc).isoformat()
             }
 
-        if batch_name:
+        if batch_id:
             fields["batch_id"] = {
-                "value": batch_name,
+                "value": batch_id,
                 "type": "string",
                 "inserted_at": datetime.now(timezone.utc).isoformat()
             }

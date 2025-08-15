@@ -187,16 +187,16 @@ def process_batch(batch_id, use_background_job=False):
         # Process immediately
         return process_batch_job(batch_id)
 
-def process_batch_job(batch_id):
+def process_batch_job(set_id):
     """Background job function to process the batch"""
     try:
         frappe.db.commit() # Commit any pending changes before starting job
         
-        batch = frappe.get_doc("Backend Student Onboarding", batch_id)
+        batch = frappe.get_doc("Backend Student Onboarding", set_id)
         
         # Get students to process (only pending or failed)
         students = frappe.get_all("Backend Students", 
-                                 filters={"parent": batch_id, "processing_status": ["in", ["Pending", "Failed"]]},
+                                 filters={"parent": set_id, "processing_status": ["in", ["Pending", "Failed"]]},
                                  fields=["name","batch_skeyword"])
         
         success_count = 0
@@ -208,7 +208,7 @@ def process_batch_job(batch_id):
         
         # Get or create Glific group for this batch
         try:
-            glific_group = create_or_get_glific_group_for_batch(batch_id)
+            glific_group = create_or_get_glific_group_for_batch(set_id)
         except Exception as e:
             frappe.log_error(f"Error creating Glific group: {str(e)}", "Backend Student Onboarding")
             glific_group = None
@@ -272,7 +272,7 @@ def process_batch_job(batch_id):
                         glific_contact = None
                     
                     # 2. Create/update student record
-                    student_doc = process_student_record(student, glific_contact, batch_id, initial_stage, course_level_for_glific)
+                    student_doc = process_student_record(student, glific_contact, set_id, initial_stage, course_level_for_glific)
                     
                     # 3. Update Backend Students record
                     update_backend_student_status(student, "Success", student_doc)
@@ -417,7 +417,7 @@ def process_glific_contact(student, glific_group, course_level=None):
     # Get batch name for Glific
     batch_name = ""
     if student.batch:
-        batch_name = frappe.get_value("Batch", student.batch, "name1") or ""
+        batch_id = frappe.get_value("Batch", student.batch, "name") or ""
     
     # Get language ID for Glific from TAP Language
     language_id = None
@@ -486,7 +486,7 @@ def process_glific_contact(student, glific_group, course_level=None):
             student.student_name,
             phone,
             school_name,
-            batch_name,
+            batch_id,
             glific_group.get("group_id") if glific_group else None,
             language_id,
             course_level_name,

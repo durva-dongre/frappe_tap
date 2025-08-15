@@ -1891,7 +1891,7 @@ def update_teacher_role():
             return {"status": "error", "message": "teacher_role is required"}
 
         # Validate teacher_role value
-        valid_roles = ["HM", "Nodal_Officer_POC", "Teacher", "Master_Trainers"]
+        valid_roles = ["HM", "Nodal_Officer_POC", "Teacher", "Master_Trainers", "Zonal_Coordinator"]
         if teacher_role not in valid_roles:
             frappe.response.http_status_code = 400
             return {
