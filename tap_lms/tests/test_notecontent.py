@@ -115,7 +115,7 @@ class TestNotecontentEdgeCases:
         
     def test_module_verification(self):
         """Test that the class is from the expected module."""
-        expected_module = "tap_lms.tap_lms.doctype.notecontent.notecontent"
+        expected_module = "tap_lms.tap_lms.tap_lms.doctype.notecontent.notecontent"
         assert Notecontent.__module__ == expected_module
         
     def test_class_docstring(self):
