@@ -32,16 +32,16 @@ sys.modules['frappe.model.document'] = frappe_mock.model.document
 # Import the Document class from our mock
 from frappe.model.document import Document
 
-# Try to import the actual class with comprehensive fallback
-try:
-    from tap_lms.tap_lms.doctype.modalityeffectiveness.modalityeffectiveness import ModalityEffectiveness
-    IMPORT_SUCCESS = True
-except ImportError:
-    # Create the class locally to ensure tests pass
-    class ModalityEffectiveness(Document):
-        """Mock ModalityEffectiveness class that mimics the real one."""
-        pass
-    IMPORT_SUCCESS = False
+# # Try to import the actual class with comprehensive fallback
+# try:
+#     from tap_lms.tap_lms.doctype.modalityeffectiveness.modalityeffectiveness import ModalityEffectiveness
+#     IMPORT_SUCCESS = True
+# except ImportError:
+#     # Create the class locally to ensure tests pass
+#     class ModalityEffectiveness(Document):
+#         """Mock ModalityEffectiveness class that mimics the real one."""
+#         pass
+#     IMPORT_SUCCESS = False
 
 
 class TestModalityEffectiveness:
