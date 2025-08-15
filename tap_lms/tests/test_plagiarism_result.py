@@ -136,85 +136,199 @@
 #         print("✅ Simulated full coverage of plagiarism_result.py")
 #!/usr/bin/env python3
 """
-Test to achieve 0% missing coverage for plagiarism_result.py
-This will execute all 3 lines and achieve 100% coverage.
+Test case for PlagiarismResult to achieve 100% coverage
+Covers all lines in tap_lms/tap_lms/doctype/plagiarism_result/plagiarism_result.py
 """
-
 import unittest
 import sys
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import Mock, MagicMock
 
-class TestZeroMissing(unittest.TestCase):
-    """Test class to achieve 0 missing lines."""
+def setup_frappe_mocks():
+    """Setup comprehensive frappe mocks"""
+    # Create frappe mock
+    frappe_mock = MagicMock()
+    frappe_model_mock = MagicMock()
+    frappe_model_document_mock = MagicMock()
     
-    def setUp(self):
-        """Set up mocks before each test."""
-        # Mock all frappe modules
-        self.frappe_mock = MagicMock()
-        self.frappe_model_mock = MagicMock()
-        self.frappe_document_mock = MagicMock()
+    # Create a mock Document class
+    class MockDocument:
+        """Mock Document class to replace frappe.model.document.Document"""
+        def __init__(self, *args, **kwargs):
+            self.name = None
+            self.doctype = None
+            pass
         
-        # Create a proper Document class mock
-        class MockDocument:
-            def __init__(self, *args, **kwargs):
-                pass
-        
-        self.MockDocument = MockDocument
-        
-        # Set up module mocks
-        sys.modules['frappe'] = self.frappe_mock
-        sys.modules['frappe.model'] = self.frappe_model_mock
-        sys.modules['frappe.model.document'] = self.frappe_document_mock
-        sys.modules['frappe.model.document'].Document = self.MockDocument
-        
-        # Add the correct path to sys.path
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        plagiarism_result_dir = os.path.join(current_dir, 'tap_lms', 'tap_lms', 'doctype', 'plagiarism_result')
-        
-        if os.path.exists(plagiarism_result_dir):
-            if plagiarism_result_dir not in sys.path:
-                sys.path.insert(0, plagiarism_result_dir)
+        def save(self):
+            pass
+            
+        def delete(self):
+            pass
+    
+    # Set up the mock hierarchy
+    frappe_model_document_mock.Document = MockDocument
+    frappe_model_mock.document = frappe_model_document_mock
+    frappe_mock.model = frappe_model_mock
+    
+    # Install mocks in sys.modules
+    sys.modules['frappe'] = frappe_mock
+    sys.modules['frappe.model'] = frappe_model_mock
+    sys.modules['frappe.model.document'] = frappe_model_document_mock
+    
+    return MockDocument
 
+class TestPlagiarismResult(unittest.TestCase):
+    """Test class to achieve 100% coverage for PlagiarismResult"""
+    
+    @classmethod
+    def setUpClass(cls):
+        """Set up mocks before any tests run"""
+        cls.MockDocument = setup_frappe_mocks()
+        
+        # Ensure the app path is in sys.path
+        app_path = '/home/frappe/frappe-bench/apps/tap_lms'
+        if app_path not in sys.path:
+            sys.path.insert(0, app_path)
+    
+    def test_line_5_import_document(self):
+        """Test line 5: from frappe.model.document import Document"""
+        try:
+            # This import executes line 5
+            import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result
+            self.assertTrue(True, "Import successful - line 5 covered")
+        except ImportError as e:
+            self.fail(f"Import failed: {e}")
     
     def test_line_7_class_definition(self):
-        """Test that covers line 7: class PlagiarismResult(Document):"""
-        import plagiarism_result
+        """Test line 7: class PlagiarismResult(Document):"""
+        # Import the module to execute the class definition
+        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr_module
         
-        # Access the class to ensure line 7 is executed
-        PlagiarismResult = plagiarism_result.PlagiarismResult
+        # Verify the class exists (this ensures line 7 is executed)
+        self.assertTrue(hasattr(pr_module, 'PlagiarismResult'))
         
-        # Verify class properties
+        # Get the class
+        PlagiarismResult = pr_module.PlagiarismResult
+        
+        # Verify it's a class
+        self.assertTrue(isinstance(PlagiarismResult, type))
+        
+        # Verify inheritance from MockDocument
+        self.assertTrue(issubclass(PlagiarismResult, self.MockDocument))
+        
+        # Verify class name
         self.assertEqual(PlagiarismResult.__name__, 'PlagiarismResult')
-        self.assertTrue(callable(PlagiarismResult))
     
     def test_line_8_pass_statement(self):
-        """Test that covers line 8: pass"""
-        import plagiarism_result
+        """Test line 8: pass"""
+        # Import the module
+        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr_module
         
-        # Create an instance - this executes the class body including 'pass'
-        instance = plagiarism_result.PlagiarismResult()
+        # Get the class
+        PlagiarismResult = pr_module.PlagiarismResult
         
-        # Verify instance was created
+        # Create an instance - this MUST execute the pass statement in the class body
+        instance = PlagiarismResult()
+        
+        # Verify the instance was created successfully
         self.assertIsNotNone(instance)
-        self.assertIsInstance(instance, plagiarism_result.PlagiarismResult)
+        self.assertIsInstance(instance, PlagiarismResult)
+        self.assertIsInstance(instance, self.MockDocument)
+        
+        # Create multiple instances to ensure the pass statement is executed multiple times
+        instance2 = PlagiarismResult()
+        instance3 = PlagiarismResult()
+        
+        self.assertIsNotNone(instance2)
+        self.assertIsNotNone(instance3)
+        
+        # Verify they are different instances
+        self.assertIsNot(instance, instance2)
+        self.assertIsNot(instance2, instance3)
     
     def test_complete_coverage(self):
-        """Single test that covers all lines 5, 7, and 8."""
-        # Force a fresh import to ensure all lines are executed
-        if 'plagiarism_result' in sys.modules:
-            del sys.modules['plagiarism_result']
+        """Comprehensive test to ensure all lines are executed"""
+        # Import and fully exercise the module
+        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr_module
         
-        # This import covers line 5
-        import plagiarism_result
+        # Line 5 - import statement (executed during import)
+        self.assertTrue(hasattr(pr_module, 'PlagiarismResult'))
         
-        # This access covers line 7
-        cls = plagiarism_result.PlagiarismResult
+        # Line 7 - class definition (executed when accessing the class)
+        PlagiarismResultClass = pr_module.PlagiarismResult
+        self.assertTrue(isinstance(PlagiarismResultClass, type))
         
-        # This instantiation covers line 8
-        instance = cls()
+        # Line 8 - pass statement (executed when creating instance)
+        instance = PlagiarismResultClass()
+        self.assertIsInstance(instance, PlagiarismResultClass)
         
-        # Verifications
-        self.assertIsNotNone(instance)
-        self.assertEqual(cls.__name__, 'PlagiarismResult')
-        self.assertIsInstance(instance, plagiarism_result.PlagiarismResult)
+        # Additional verification
+        self.assertEqual(PlagiarismResultClass.__module__, pr_module.__name__)
+        
+        # Test class attributes
+        self.assertTrue(hasattr(PlagiarismResultClass, '__init__'))
+        self.assertTrue(callable(PlagiarismResultClass))
+        
+        # Verify the class has proper method resolution order
+        mro = PlagiarismResultClass.__mro__
+        self.assertIn(PlagiarismResultClass, mro)
+        self.assertIn(self.MockDocument, mro)
+    
+    def test_inheritance_functionality(self):
+        """Test that inheritance from Document works correctly"""
+        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr_module
+        
+        PlagiarismResult = pr_module.PlagiarismResult
+        instance = PlagiarismResult()
+        
+        # Should inherit methods from MockDocument
+        self.assertTrue(hasattr(instance, 'save'))
+        self.assertTrue(hasattr(instance, 'delete'))
+        self.assertTrue(callable(getattr(instance, 'save')))
+        self.assertTrue(callable(getattr(instance, 'delete')))
+        
+        # Test calling inherited methods (should not raise exceptions)
+        try:
+            instance.save()
+            instance.delete()
+        except Exception as e:
+            self.fail(f"Inherited methods should work: {e}")
+    
+    def test_multiple_imports_and_instances(self):
+        """Test multiple imports and instances to ensure consistent coverage"""
+        # Import multiple times (should be cached)
+        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr1
+        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr2
+        
+        # They should be the same module
+        self.assertIs(pr1, pr2)
+        
+        # Create multiple instances from different references
+        instance1 = pr1.PlagiarismResult()
+        instance2 = pr2.PlagiarismResult()
+        
+        # Both should be valid instances
+        self.assertIsInstance(instance1, pr1.PlagiarismResult)
+        self.assertIsInstance(instance2, pr2.PlagiarismResult)
+        
+        # They should be different instances of the same class
+        self.assertIsNot(instance1, instance2)
+        self.assertEqual(type(instance1), type(instance2))
+    
+    def test_class_attributes_and_structure(self):
+        """Test class attributes and structure"""
+        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr_module
+        
+        PlagiarismResult = pr_module.PlagiarismResult
+        
+        # Check basic class attributes
+        self.assertTrue(hasattr(PlagiarismResult, '__name__'))
+        self.assertEqual(PlagiarismResult.__name__, 'PlagiarismResult')
+        
+        # Check that it has the docstring or basic class structure
+        self.assertTrue(hasattr(PlagiarismResult, '__doc__'))
+        
+        # Verify it's callable (can be instantiated)
+        self.assertTrue(callable(PlagiarismResult))
+        
+        # Check base classes
+        self.assertIn(self.MockDocument, PlagiarismResult.__bases__)
