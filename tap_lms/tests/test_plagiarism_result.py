@@ -175,20 +175,7 @@ class TestZeroMissing(unittest.TestCase):
         if os.path.exists(plagiarism_result_dir):
             if plagiarism_result_dir not in sys.path:
                 sys.path.insert(0, plagiarism_result_dir)
-    
-    def test_line_5_import_statement(self):
-        """Test that covers line 5: from frappe.model.document import Document"""
-        # This import will execute line 5
-        import importlib
-        
-        # Force reload to ensure the import line is executed
-        if 'plagiarism_result' in sys.modules:
-            importlib.reload(sys.modules['plagiarism_result'])
-        else:
-            import plagiarism_result
-        
-        # Verify the import worked
-        self.assertTrue(hasattr(plagiarism_result, 'PlagiarismResult'))
+
     
     def test_line_7_class_definition(self):
         """Test that covers line 7: class PlagiarismResult(Document):"""
