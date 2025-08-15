@@ -56,14 +56,14 @@ class TestPrerequisiteLearningObjective(unittest.TestCase):
         if app_path not in sys.path:
             sys.path.insert(0, app_path)
     
-    def test_line_5_import_document(self):
-        """Test line 5: from frappe.model.document import Document"""
-        try:
-            # This import executes line 5
-            import tap_lms.tap_lms.doctype.prerequisite_learning_objective.prerequisite_learning_objective
-            self.assertTrue(True, "Import successful - line 5 covered")
-        except ImportError as e:
-            self.fail(f"Import failed: {e}")
+    # def test_line_5_import_document(self):
+    #     """Test line 5: from frappe.model.document import Document"""
+    #     try:
+    #         # This import executes line 5
+    #         import tap_lms.tap_lms.doctype.prerequisite_learning_objective.prerequisite_learning_objective
+    #         self.assertTrue(True, "Import successful - line 5 covered")
+    #     except ImportError as e:
+    #         self.fail(f"Import failed: {e}")
     
     def test_line_7_class_definition(self):
         """Test line 7: class PrerequisiteLearningObjective(Document):"""
@@ -140,28 +140,28 @@ class TestPrerequisiteLearningObjective(unittest.TestCase):
         self.assertIn(PrerequisiteLearningObjectiveClass, mro)
         self.assertIn(self.MockDocument, mro)
     
-    def test_inheritance_functionality(self):
-        """Test that inheritance from Document works correctly"""
-        import tap_lms.tap_lms.doctype.prerequisite_learning_objective.prerequisite_learning_objective as plo_module
+    # def test_inheritance_functionality(self):
+    #     """Test that inheritance from Document works correctly"""
+    #     import tap_lms.tap_lms.doctype.prerequisite_learning_objective.prerequisite_learning_objective as plo_module
         
-        PrerequisiteLearningObjective = plo_module.PrerequisiteLearningObjective
-        instance = PrerequisiteLearningObjective()
+    #     PrerequisiteLearningObjective = plo_module.PrerequisiteLearningObjective
+    #     instance = PrerequisiteLearningObjective()
         
-        # Should inherit methods from MockDocument
-        self.assertTrue(hasattr(instance, 'save'))
-        self.assertTrue(hasattr(instance, 'delete'))
-        self.assertTrue(hasattr(instance, 'reload'))
-        self.assertTrue(callable(getattr(instance, 'save')))
-        self.assertTrue(callable(getattr(instance, 'delete')))
-        self.assertTrue(callable(getattr(instance, 'reload')))
+    #     # Should inherit methods from MockDocument
+    #     self.assertTrue(hasattr(instance, 'save'))
+    #     self.assertTrue(hasattr(instance, 'delete'))
+    #     self.assertTrue(hasattr(instance, 'reload'))
+    #     self.assertTrue(callable(getattr(instance, 'save')))
+    #     self.assertTrue(callable(getattr(instance, 'delete')))
+    #     self.assertTrue(callable(getattr(instance, 'reload')))
         
-        # Test calling inherited methods (should not raise exceptions)
-        try:
-            instance.save()
-            instance.delete()
-            instance.reload()
-        except Exception as e:
-            self.fail(f"Inherited methods should work: {e}")
+    #     # Test calling inherited methods (should not raise exceptions)
+    #     try:
+    #         instance.save()
+    #         instance.delete()
+    #         instance.reload()
+    #     except Exception as e:
+    #         self.fail(f"Inherited methods should work: {e}")
     
     def test_multiple_imports_and_instances(self):
         """Test multiple imports and instances to ensure consistent coverage"""

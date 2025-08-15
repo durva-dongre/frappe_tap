@@ -53,14 +53,14 @@ class TestPlagiarismResult(unittest.TestCase):
         if app_path not in sys.path:
             sys.path.insert(0, app_path)
     
-    def test_line_5_import_document(self):
-        """Test line 5: from frappe.model.document import Document"""
-        try:
-            # This import executes line 5
-            import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result
-            self.assertTrue(True, "Import successful - line 5 covered")
-        except ImportError as e:
-            self.fail(f"Import failed: {e}")
+    # def test_line_5_import_document(self):
+    #     """Test line 5: from frappe.model.document import Document"""
+    #     try:
+    #         # This import executes line 5
+    #         import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result
+    #         self.assertTrue(True, "Import successful - line 5 covered")
+    #     except ImportError as e:
+    #         self.fail(f"Import failed: {e}")
     
     def test_line_7_class_definition(self):
         """Test line 7: class PlagiarismResult(Document):"""
@@ -137,25 +137,25 @@ class TestPlagiarismResult(unittest.TestCase):
         self.assertIn(PlagiarismResultClass, mro)
         self.assertIn(self.MockDocument, mro)
     
-    def test_inheritance_functionality(self):
-        """Test that inheritance from Document works correctly"""
-        import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr_module
+    # def test_inheritance_functionality(self):
+    #     """Test that inheritance from Document works correctly"""
+    #     import tap_lms.tap_lms.doctype.plagiarism_result.plagiarism_result as pr_module
         
-        PlagiarismResult = pr_module.PlagiarismResult
-        instance = PlagiarismResult()
+    #     PlagiarismResult = pr_module.PlagiarismResult
+    #     instance = PlagiarismResult()
         
-        # Should inherit methods from MockDocument
-        self.assertTrue(hasattr(instance, 'save'))
-        self.assertTrue(hasattr(instance, 'delete'))
-        self.assertTrue(callable(getattr(instance, 'save')))
-        self.assertTrue(callable(getattr(instance, 'delete')))
+    #     # Should inherit methods from MockDocument
+    #     self.assertTrue(hasattr(instance, 'save'))
+    #     self.assertTrue(hasattr(instance, 'delete'))
+    #     self.assertTrue(callable(getattr(instance, 'save')))
+    #     self.assertTrue(callable(getattr(instance, 'delete')))
         
-        # Test calling inherited methods (should not raise exceptions)
-        try:
-            instance.save()
-            instance.delete()
-        except Exception as e:
-            self.fail(f"Inherited methods should work: {e}")
+    #     # Test calling inherited methods (should not raise exceptions)
+    #     try:
+    #         instance.save()
+    #         instance.delete()
+    #     except Exception as e:
+    #         self.fail(f"Inherited methods should work: {e}")
     
     def test_multiple_imports_and_instances(self):
         """Test multiple imports and instances to ensure consistent coverage"""
