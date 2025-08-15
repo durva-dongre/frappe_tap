@@ -1,215 +1,337 @@
 import pytest
 import sys
+import os
 from unittest.mock import Mock, patch
+
+# Add the parent directory to Python path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 def test_generate_unique_batch_keyword_basic():
     """Test basic functionality of generate_unique_batch_keyword"""
     
-    # Import with fallback
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
+    # Mock frappe and other dependencies before importing
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        # Set up the mocks
+        mock_frappe = sys.modules['frappe']
+        mock_random = sys.modules['random']
+        mock_string = sys.modules['string']
+        
+        # Configure frappe mocks
+        mock_school = Mock()
+        mock_school.name1 = "Test School"
+        mock_batch = Mock()
+        mock_batch.name1 = "Test Batch"
+        
+        mock_frappe.get_doc.side_effect = [mock_school, mock_batch]
+        mock_frappe.db.exists.return_value = False
+        
+        # Configure random mocks
+        mock_random.randint.return_value = 42
+        mock_random.choices.return_value = ['A', 'B']
+        
+        # Configure string mock
+        mock_string.ascii_uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        
         try:
             from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    # Test that the function exists and is callable
-    assert callable(generate_unique_batch_keyword)
-    
-    # Create a test document
-    mock_doc = Mock()
-    mock_doc.school = "test_school"
-    mock_doc.batch = "test_batch"
-    
-    # Call the function
-    result = generate_unique_batch_keyword(mock_doc)
-    
-    # Verify basic properties
-    assert isinstance(result, str)
-    assert len(result) > 0
-
-
-def test_generate_unique_batch_keyword_with_different_inputs():
-    """Test with different input values"""
-    
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
-        try:
-            from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    # Test with different school/batch combinations
-    test_cases = [
-        ("school1", "batch1"),
-        ("school2", "batch2"), 
-        ("different_school", "different_batch")
-    ]
-    
-    for school, batch in test_cases:
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+        
+        # Create test document
         mock_doc = Mock()
-        mock_doc.school = school
-        mock_doc.batch = batch
+        mock_doc.school = "school1"
+        mock_doc.batch = "batch1"
+        
+        # Call the function
+        result = generate_unique_batch_keyword(mock_doc)
+        
+        # Verify the result format: TETE42AB
+        expected = "TETE42AB"
+        assert result == expected
+        
+        # Verify frappe calls
+        mock_frappe.get_doc.assert_any_call("School", "school1")
+        mock_frappe.get_doc.assert_any_call("Batch", "batch1")
+        mock_frappe.db.exists.assert_called_with("Batch onboarding", {"batch_skeyword": expected})
+
+
+def test_generate_unique_batch_keyword_collision_handling():
+    """Test collision handling when keyword already exists"""
+    
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        mock_frappe = sys.modules['frappe']
+        mock_random = sys.modules['random']
+        mock_string = sys.modules['string']
+        
+        # Configure mocks
+        mock_school = Mock()
+        mock_school.name1 = "Collision School"
+        mock_batch = Mock()
+        mock_batch.name1 = "Collision Batch"
+        
+        mock_frappe.get_doc.side_effect = [mock_school, mock_batch]
+        
+        # First attempt exists, second doesn't
+        mock_frappe.db.exists.side_effect = [True, False]
+        
+        # Random values for two attempts
+        mock_random.randint.side_effect = [11, 22]
+        mock_random.choices.side_effect = [['X', 'Y'], ['Z', 'A']]
+        mock_string.ascii_uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        
+        try:
+            from batch_onboarding_utils import generate_unique_batch_keyword
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+        
+        mock_doc = Mock()
+        mock_doc.school = "school1"
+        mock_doc.batch = "batch1"
         
         result = generate_unique_batch_keyword(mock_doc)
-        assert isinstance(result, str)
-        assert len(result) > 0
+        
+        # Should use the second attempt: COCO22ZA
+        expected = "COCO22ZA"
+        assert result == expected
+        
+        # Verify collision handling
+        assert mock_random.randint.call_count == 2
+        assert mock_random.choices.call_count == 2
+        assert mock_frappe.db.exists.call_count == 2
 
 
-def test_generate_unique_batch_keyword_returns_unique_values():
-    """Test that function returns different values on multiple calls"""
+def test_generate_unique_batch_keyword_short_names():
+    """Test with short school and batch names"""
     
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        mock_frappe = sys.modules['frappe']
+        mock_random = sys.modules['random']
+        mock_string = sys.modules['string']
+        
+        # Short names
+        mock_school = Mock()
+        mock_school.name1 = "A"
+        mock_batch = Mock()
+        mock_batch.name1 = "B"
+        
+        mock_frappe.get_doc.side_effect = [mock_school, mock_batch]
+        mock_frappe.db.exists.return_value = False
+        
+        mock_random.randint.return_value = 77
+        mock_random.choices.return_value = ['R', 'S']
+        mock_string.ascii_uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        
         try:
             from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    mock_doc = Mock()
-    mock_doc.school = "test_school"
-    mock_doc.batch = "test_batch"
-    
-    # Call multiple times
-    results = []
-    for _ in range(3):
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+        
+        mock_doc = Mock()
+        mock_doc.school = "school1"
+        mock_doc.batch = "batch1"
+        
         result = generate_unique_batch_keyword(mock_doc)
-        results.append(result)
-        assert isinstance(result, str)
-        assert len(result) > 0
+        
+        # Expected: A + B + 77 + RS = AB77RS
+        expected = "AB77RS"
+        assert result == expected
+
+
+def test_generate_unique_batch_keyword_empty_names():
+    """Test with empty school and batch names"""
     
-    # Results might be different due to randomness (though not guaranteed)
-    assert len(results) == 3
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        mock_frappe = sys.modules['frappe']
+        mock_random = sys.modules['random']
+        mock_string = sys.modules['string']
+        
+        # Empty names
+        mock_school = Mock()
+        mock_school.name1 = ""
+        mock_batch = Mock()
+        mock_batch.name1 = ""
+        
+        mock_frappe.get_doc.side_effect = [mock_school, mock_batch]
+        mock_frappe.db.exists.return_value = False
+        
+        mock_random.randint.return_value = 88
+        mock_random.choices.return_value = ['T', 'U']
+        mock_string.ascii_uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        
+        try:
+            from batch_onboarding_utils import generate_unique_batch_keyword
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+        
+        mock_doc = Mock()
+        mock_doc.school = "school1"
+        mock_doc.batch = "batch1"
+        
+        result = generate_unique_batch_keyword(mock_doc)
+        
+        # Expected: "" + "" + 88 + TU = 88TU
+        expected = "88TU"
+        assert result == expected
+
+
+def test_generate_unique_batch_keyword_long_names():
+    """Test with long school and batch names (should be truncated)"""
+    
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        mock_frappe = sys.modules['frappe']
+        mock_random = sys.modules['random']
+        mock_string = sys.modules['string']
+        
+        # Long names that should be truncated to first 2 chars
+        mock_school = Mock()
+        mock_school.name1 = "Very Long School Name"
+        mock_batch = Mock()
+        mock_batch.name1 = "Very Long Batch Name"
+        
+        mock_frappe.get_doc.side_effect = [mock_school, mock_batch]
+        mock_frappe.db.exists.return_value = False
+        
+        mock_random.randint.return_value = 55
+        mock_random.choices.return_value = ['P', 'Q']
+        mock_string.ascii_uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        
+        try:
+            from batch_onboarding_utils import generate_unique_batch_keyword
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+        
+        mock_doc = Mock()
+        mock_doc.school = "school1"
+        mock_doc.batch = "batch1"
+        
+        result = generate_unique_batch_keyword(mock_doc)
+        
+        # Expected: VE + VE + 55 + PQ = VEVE55PQ
+        expected = "VEVE55PQ"
+        assert result == expected
 
 
 def test_function_signature():
     """Test function signature"""
     
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
         try:
             from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    import inspect
-    sig = inspect.signature(generate_unique_batch_keyword)
-    assert len(sig.parameters) == 1
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+        
+        import inspect
+        sig = inspect.signature(generate_unique_batch_keyword)
+        assert len(sig.parameters) == 1
+        assert 'doc' in sig.parameters
 
 
-def test_function_with_minimal_doc():
-    """Test function with minimal document structure"""
+def test_multiple_collisions():
+    """Test multiple collisions before finding unique keyword"""
     
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        mock_frappe = sys.modules['frappe']
+        mock_random = sys.modules['random']
+        mock_string = sys.modules['string']
+        
+        mock_school = Mock()
+        mock_school.name1 = "Multi School"
+        mock_batch = Mock()
+        mock_batch.name1 = "Multi Batch"
+        
+        mock_frappe.get_doc.side_effect = [mock_school, mock_batch]
+        
+        # 3 collisions, then success
+        mock_frappe.db.exists.side_effect = [True, True, True, False]
+        
+        mock_random.randint.side_effect = [10, 20, 30, 40]
+        mock_random.choices.side_effect = [['A', 'A'], ['B', 'B'], ['C', 'C'], ['D', 'D']]
+        mock_string.ascii_uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        
         try:
             from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    # Test with minimal mock document
-    mock_doc = Mock()
-    mock_doc.school = "s"
-    mock_doc.batch = "b"
-    
-    result = generate_unique_batch_keyword(mock_doc)
-    assert isinstance(result, str)
-    assert len(result) > 0
-
-
-def test_function_imports():
-    """Test that imports work"""
-    
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-        assert callable(generate_unique_batch_keyword)
-    except ImportError:
-        try:
-            from batch_onboarding_utils import generate_unique_batch_keyword
-            assert callable(generate_unique_batch_keyword)
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-
-
-def test_complete_workflow():
-    """Test complete workflow with all components"""
-    
-    # Import with fallback
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
-        try:
-            from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    # Create a simple test that verifies the function works
-    mock_doc = Mock()
-    mock_doc.school = "test_school"
-    mock_doc.batch = "test_batch"
-    
-    # Call the function - just verify it returns a string
-    result = generate_unique_batch_keyword(mock_doc)
-    
-    # Basic assertions about the result
-    assert isinstance(result, str)
-    assert len(result) > 0
-    assert "generated_keyword" in result or len(result) >= 6  # Either the pattern we saw or a reasonable length
-
-
-def test_function_handles_string_inputs():
-    """Test function behavior with string inputs in doc attributes"""
-    
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
-        try:
-            from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    # Test with longer string inputs
-    mock_doc = Mock()
-    mock_doc.school = "long_school_name_for_testing"
-    mock_doc.batch = "long_batch_name_for_testing"
-    
-    result = generate_unique_batch_keyword(mock_doc)
-    assert isinstance(result, str)
-    assert len(result) > 0
-
-
-def test_function_coverage_verification():
-    """Test to ensure function execution covers all code paths"""
-    
-    try:
-        from tap_lms.batch_onboarding_utils import generate_unique_batch_keyword
-    except ImportError:
-        try:
-            from batch_onboarding_utils import generate_unique_batch_keyword
-        except ImportError:
-            pytest.skip("Module batch_onboarding_utils not found")
-    
-    # Execute function multiple times to potentially hit different code paths
-    test_docs = [
-        {"school": "School_A", "batch": "Batch_1"},
-        {"school": "School_B", "batch": "Batch_2"},
-        {"school": "S", "batch": "B"},  # Short names
-        {"school": "Very_Long_School_Name", "batch": "Very_Long_Batch_Name"},  # Long names
-    ]
-    
-    for doc_data in test_docs:
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+        
         mock_doc = Mock()
-        mock_doc.school = doc_data["school"]
-        mock_doc.batch = doc_data["batch"]
+        mock_doc.school = "school1"
+        mock_doc.batch = "batch1"
         
         result = generate_unique_batch_keyword(mock_doc)
-        assert isinstance(result, str)
-        assert len(result) > 0
         
-        # Verify the function was executed (basic smoke test)
-        assert result is not None
+        # Should use 4th attempt: MUMU40DD
+        expected = "MUMU40DD"
+        assert result == expected
+        
+        assert mock_random.randint.call_count == 4
+        assert mock_random.choices.call_count == 4
+        assert mock_frappe.db.exists.call_count == 4
+
+
+def test_import_statements_coverage():
+    """Test to cover import statements in the module"""
+    
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        try:
+            # This import covers the import statements in the file
+            import batch_onboarding_utils
+            assert hasattr(batch_onboarding_utils, 'generate_unique_batch_keyword')
+            assert callable(batch_onboarding_utils.generate_unique_batch_keyword)
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
+
+
+def test_function_definition_coverage():
+    """Test to cover function definition line"""
+    
+    with patch.dict('sys.modules', {
+        'frappe': Mock(),
+        'random': Mock(),
+        'string': Mock(),
+    }):
+        try:
+            from batch_onboarding_utils import generate_unique_batch_keyword
+            
+            # Verify function exists (covers def line)
+            assert callable(generate_unique_batch_keyword)
+            
+            # Verify function name
+            assert generate_unique_batch_keyword.__name__ == 'generate_unique_batch_keyword'
+            
+        except ImportError as e:
+            pytest.skip(f"Could not import module: {e}")
