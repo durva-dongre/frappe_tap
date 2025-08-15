@@ -503,10 +503,15 @@ def test_update_student_glific_ids(mock_frappe):
         pytest.skip(f"Could not import module: {e}")
     
     with patch('glific_integration.get_contact_by_phone') as mock_get_contact:
-        # Mock students data - fix: students are dicts, not objects
+        # Mock students data - create objects with attributes, not dicts
+        class MockStudent:
+            def __init__(self, name, phone):
+                self.name = name
+                self.phone = phone
+        
         mock_students = [
-            {"name": "student1", "phone": "9876543210"},
-            {"name": "student2", "phone": "9876543211"}
+            MockStudent("student1", "9876543210"),
+            MockStudent("student2", "9876543211")
         ]
         mock_frappe.get_all.return_value = mock_students
         
@@ -527,9 +532,14 @@ def test_update_student_glific_ids_invalid_phone(mock_frappe):
     except ImportError as e:
         pytest.skip(f"Could not import module: {e}")
     
-    # Mock students with invalid phone - fix: students are dicts, not objects
+    # Mock students with invalid phone - create objects with attributes, not dicts
+    class MockStudent:
+        def __init__(self, name, phone):
+            self.name = name
+            self.phone = phone
+    
     mock_students = [
-        {"name": "student1", "phone": "invalid_phone"}
+        MockStudent("student1", "invalid_phone")
     ]
     mock_frappe.get_all.return_value = mock_students
     
