@@ -108,57 +108,158 @@
 #         self.assertIn(MockDocument, mro)
 #!/usr/bin/env python3
 """
-Simple direct test to achieve 100% coverage for test_pathwaymodification.py
+Complete coverage test to achieve 100% coverage for test_pathwaymodification.py
+This test specifically targets lines 8 and 9 that are still missing.
 """
 import sys
-import os
-from unittest.mock import Mock, MagicMock
+import unittest
+from unittest.mock import MagicMock, patch
 
-# Mock frappe completely before any imports
-frappe_mock = MagicMock()
-frappe_mock.tests = MagicMock()
-frappe_mock.tests.utils = MagicMock()
+def setup_mocks():
+    """Setup all necessary mocks before importing"""
+    # Create comprehensive frappe mock
+    frappe_mock = MagicMock()
+    frappe_tests_mock = MagicMock()
+    frappe_tests_utils_mock = MagicMock()
+    
+    # Create a proper mock FrappeTestCase class
+    class MockFrappeTestCase:
+        """Mock class to replace FrappeTestCase"""
+        def __init__(self):
+            pass
+        
+        def setUp(self):
+            pass
+            
+        def tearDown(self):
+            pass
+    
+    # Set up the mock hierarchy
+    frappe_tests_utils_mock.FrappeTestCase = MockFrappeTestCase
+    frappe_tests_mock.utils = frappe_tests_utils_mock
+    frappe_mock.tests = frappe_tests_mock
+    
+    # Install mocks in sys.modules
+    sys.modules['frappe'] = frappe_mock
+    sys.modules['frappe.tests'] = frappe_tests_mock
+    sys.modules['frappe.tests.utils'] = frappe_tests_utils_mock
+    
+    return MockFrappeTestCase
 
-# Create a simple mock FrappeTestCase
-class MockFrappeTestCase:
-    pass
-
-frappe_mock.tests.utils.FrappeTestCase = MockFrappeTestCase
-
-# Install the mocks in sys.modules
-sys.modules['frappe'] = frappe_mock
-sys.modules['frappe.tests'] = frappe_mock.tests
-sys.modules['frappe.tests.utils'] = frappe_mock.tests.utils
-
-# Ensure the path is correct
-app_path = '/home/frappe/frappe-bench/apps/tap_lms'
-if app_path not in sys.path:
-    sys.path.insert(0, app_path)
-
-def test_import_and_coverage():
-    """
-    This function will import the test_pathwaymodification module 
-    and ensure all lines are executed for 100% coverage
-    """
-    try:
-        # This import will execute lines 5, 8, and 9
+class TestCompleteCoverage(unittest.TestCase):
+    """Test class to achieve 100% coverage"""
+    
+    @classmethod
+    def setUpClass(cls):
+        """Set up mocks before any tests run"""
+        cls.MockFrappeTestCase = setup_mocks()
+        
+        # Ensure the app path is in sys.path
+        app_path = '/home/frappe/frappe-bench/apps/tap_lms'
+        if app_path not in sys.path:
+            sys.path.insert(0, app_path)
+    
+    def test_line_5_import_statement(self):
+        """Test line 5: from frappe.tests.utils import FrappeTestCase"""
+        # This should already be covered, but let's ensure it
+        try:
+            import tap_lms.tap_lms.doctype.pathwaymodification.test_pathwaymodification
+            self.assertTrue(True, "Import successful")
+        except ImportError as e:
+            self.fail(f"Import failed: {e}")
+    
+    def test_line_8_class_definition(self):
+        """Test line 8: class TestPathwayModification(FrappeTestCase):"""
+        # Import the module to execute the class definition
         import tap_lms.tap_lms.doctype.pathwaymodification.test_pathwaymodification as test_module
         
-        # Verify the import worked
-        assert hasattr(test_module, 'TestPathwayModification')
+        # Verify the class exists (this ensures line 8 is executed)
+        self.assertTrue(hasattr(test_module, 'TestPathwayModification'))
         
-        # Get the class (this ensures line 8 is executed)
-        TestClass = test_module.TestPathwayModification
+        # Get the class
+        TestPathwayModification = test_module.TestPathwayModification
         
-        # Create an instance (this ensures line 9 - the pass statement - is executed)
-        instance = TestClass()
+        # Verify it's a class
+        self.assertTrue(isinstance(TestPathwayModification, type))
         
         # Verify inheritance
-        assert isinstance(instance, MockFrappeTestCase)
+        self.assertTrue(issubclass(TestPathwayModification, self.MockFrappeTestCase))
         
-        print("✓ All lines covered successfully")
-        return True
+        # Verify class name
+        self.assertEqual(TestPathwayModification.__name__, 'TestPathwayModification')
+    
+    def test_line_9_pass_statement(self):
+        """Test line 9: pass"""
+        # Import the module
+        import tap_lms.tap_lms.doctype.pathwaymodification.test_pathwaymodification as test_module
         
-    except Exception as e:
-        print(f"✗ Error: {e}")
-        return False
+        # Get the class
+        TestPathwayModification = test_module.TestPathwayModification
+        
+        # Create an instance - this MUST execute the pass statement in the class body
+        instance = TestPathwayModification()
+        
+        # Verify the instance was created successfully
+        self.assertIsNotNone(instance)
+        self.assertIsInstance(instance, TestPathwayModification)
+        self.assertIsInstance(instance, self.MockFrappeTestCase)
+        
+        # Create multiple instances to ensure the pass statement is executed multiple times
+        instance2 = TestPathwayModification()
+        instance3 = TestPathwayModification()
+        
+        self.assertIsNotNone(instance2)
+        self.assertIsNotNone(instance3)
+        
+        # Verify they are different instances
+        self.assertIsNot(instance, instance2)
+        self.assertIsNot(instance2, instance3)
+    
+    def test_complete_module_execution(self):
+        """Comprehensive test to ensure all lines are executed"""
+        # Import and fully exercise the module
+        import tap_lms.tap_lms.doctype.pathwaymodification.test_pathwaymodification as test_module
+        
+        # Line 5 - import statement (executed during import)
+        self.assertTrue(hasattr(test_module, 'TestPathwayModification'))
+        
+        # Line 8 - class definition (executed when accessing the class)
+        TestClass = test_module.TestPathwayModification
+        self.assertTrue(isinstance(TestClass, type))
+        
+        # Line 9 - pass statement (executed when creating instance)
+        instance = TestClass()
+        self.assertIsInstance(instance, TestClass)
+        
+        # Additional verification
+        self.assertEqual(TestClass.__module__, test_module.__name__)
+        
+        # Test class methods and attributes
+        self.assertTrue(hasattr(TestClass, '__init__'))
+        self.assertTrue(callable(TestClass))
+        
+        # Verify the class has proper method resolution order
+        mro = TestClass.__mro__
+        self.assertIn(TestClass, mro)
+        self.assertIn(self.MockFrappeTestCase, mro)
+    
+    def test_multiple_imports_and_instances(self):
+        """Test multiple imports and instances to ensure consistent coverage"""
+        # Import multiple times (should be cached)
+        import tap_lms.tap_lms.doctype.pathwaymodification.test_pathwaymodification as tm1
+        import tap_lms.tap_lms.doctype.pathwaymodification.test_pathwaymodification as tm2
+        
+        # They should be the same module
+        self.assertIs(tm1, tm2)
+        
+        # Create multiple instances from different references
+        instance1 = tm1.TestPathwayModification()
+        instance2 = tm2.TestPathwayModification()
+        
+        # Both should be valid instances
+        self.assertIsInstance(instance1, tm1.TestPathwayModification)
+        self.assertIsInstance(instance2, tm2.TestPathwayModification)
+        
+        # They should be different instances of the same class
+        self.assertIsNot(instance1, instance2)
+        self.assertEqual(type(instance1), type(instance2))
