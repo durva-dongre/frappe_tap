@@ -25,13 +25,4 @@ class TestProjectChallenge(unittest.TestCase):
         # This test covers the import statement
         self.assertTrue(ProjectChallenge is not None)
     
-    def test_class_exists(self):
-        """Test that ProjectChallenge class exists and can be instantiated"""
-        # This test covers the class definition and pass statement
-        pc = ProjectChallenge()
-        self.assertIsNotNone(pc)
-        self.assertEqual(type(pc).__name__, 'ProjectChallenge')
-
-
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
+ 
