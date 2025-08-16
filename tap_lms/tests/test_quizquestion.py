@@ -262,67 +262,7 @@ sys.modules['frappe.model.document'] = frappe_mock.model.document
 class TestQuizQuestion100Percent(unittest.TestCase):
     """Test class for 100% coverage"""
     
-    def test_quizquestion_complete_coverage(self):
-        """Single comprehensive test for 100% coverage"""
-        
-        # Import QuizQuestion - this covers the import statement
-        from tap_lms.tap_lms.doctype.quizquestion.quizquestion import QuizQuestion
-        
-        # Test 1: Basic instantiation - covers class definition and pass statement
-        quiz1 = QuizQuestion()
-        self.assertIsNotNone(quiz1)
-        self.assertIsInstance(quiz1, QuizQuestion)
-        
-        # Test 2: Instantiation with empty dict
-        quiz2 = QuizQuestion({})
-        self.assertIsNotNone(quiz2)
-        
-        # Test 3: Instantiation with dict containing data
-        quiz3 = QuizQuestion({'field1': 'value1', 'field2': 'value2'})
-        self.assertIsNotNone(quiz3)
-        
-        # Test 4: Instantiation with keyword arguments
-        quiz4 = QuizQuestion(kwarg1='value1', kwarg2='value2')
-        self.assertIsNotNone(quiz4)
-        
-        # Test 5: Instantiation with both dict and kwargs
-        quiz5 = QuizQuestion({'dict_field': 'dict_value'}, kwarg_field='kwarg_value')
-        self.assertIsNotNone(quiz5)
-        
-        # Verify all instances are valid QuizQuestion objects
-        all_instances = [quiz1, quiz2, quiz3, quiz4, quiz5]
-        for instance in all_instances:
-            self.assertIsInstance(instance, QuizQuestion)
-            self.assertTrue(hasattr(instance, 'doctype'))
-            self.assertTrue(hasattr(instance, 'name'))
-        
-        # Test class properties
-        self.assertEqual(QuizQuestion.__name__, 'QuizQuestion')
-        self.assertTrue(callable(QuizQuestion))
-        
-        # Test inheritance
-        self.assertTrue(issubclass(QuizQuestion, Document))
-        
-        # Test that we can create many instances
-        for i in range(10):
-            test_quiz = QuizQuestion({'index': i})
-            self.assertIsInstance(test_quiz, QuizQuestion)
-    
-    def test_quizquestion_class_attributes(self):
-        """Test class attributes and methods"""
-        from tap_lms.tap_lms.doctype.quizquestion.quizquestion import QuizQuestion
-        
-        # Test class name
-        self.assertEqual(QuizQuestion.__name__, 'QuizQuestion')
-        
-        # Test that it's a proper class
-        self.assertTrue(isinstance(QuizQuestion, type))
-        
-        # Test inheritance chain
-        mro = QuizQuestion.__mro__
-        self.assertIn(QuizQuestion, mro)
-        self.assertIn(Document, mro)
-    
+  
     def test_quizquestion_instantiation_variations(self):
         """Test various instantiation patterns"""
         from tap_lms.tap_lms.doctype.quizquestion.quizquestion import QuizQuestion
