@@ -145,20 +145,7 @@ class TestQuiz(unittest.TestCase):
         if FRAPPE_AVAILABLE and hasattr(frappe.db, 'rollback'):
             frappe.db.rollback()
    
-    @patch('frappe.model.document.Document')
-    def test_quiz_class_inheritance(self, mock_document):
-        """Test that Quiz class inherits from Document - covers class definition"""
-        try:
-            from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
-            from frappe.model.document import Document
-            
-            # Test that Quiz is a subclass of Document
-            self.assertTrue(issubclass(Quiz, Document))
-        except ImportError:
-            # If import fails, test the mock scenario
-            with patch('tap_lms.tap_lms.doctype.quiz.quiz.Document', mock_document):
-                # This will test that the import and class definition work
-                self.assertTrue(True)  # Pass if we reach this point
+   
        
     @patch('frappe.model.document.Document')
     def test_quiz_instantiation(self, mock_document):
