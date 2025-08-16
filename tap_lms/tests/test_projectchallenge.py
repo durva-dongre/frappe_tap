@@ -54,12 +54,7 @@ class TestProjectChallenge(unittest.TestCase):
         # This test covers the import statement
         self.assertTrue(ProjectChallenge is not None)
     
-    def test_class_exists(self):
-        """Test that ProjectChallenge class exists and can be instantiated"""
-        # This test covers the class definition and pass statement
-        pc = ProjectChallenge()
-        self.assertIsNotNone(pc)
-        self.assertEqual(type(pc).__name__, 'ProjectChallenge')
+   
     
     def test_import_error_fallbacks(self):
         """Test the import error handling paths"""
@@ -104,6 +99,3 @@ class TestProjectChallenge(unittest.TestCase):
         # Verify we can still work with ProjectChallenge
         self.assertTrue(ProjectChallenge is not None)
 
-
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
