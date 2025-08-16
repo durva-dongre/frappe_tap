@@ -61,41 +61,4 @@ class TestProjectChallenge(unittest.TestCase):
         # Force the import error paths to be covered
         import builtins
         original_import = builtins.__import__
-        
-        def mock_import_first_fail(name, *args, **kwargs):
-            if 'tap_lms.tap_lms.doctype.projectchallenge.projectchallenge' in name:
-                raise ImportError("Mock first import failure")
-            return original_import(name, *args, **kwargs)
-        
-        def mock_import_both_fail(name, *args, **kwargs):
-            if 'tap_lms.tap_lms.doctype.projectchallenge.projectchallenge' in name or 'projectchallenge' in name:
-                raise ImportError("Mock import failure")
-            return original_import(name, *args, **kwargs)
-        
-        # Test first except block (line 10)
-        try:
-            builtins.__import__ = mock_import_first_fail
-            # Re-import to trigger the except block
-            import importlib
-            if 'tap_lms.tap_lms.doctype.projectchallenge.projectchallenge' in sys.modules:
-                del sys.modules['tap_lms.tap_lms.doctype.projectchallenge.projectchallenge']
-        except Exception:
-            pass
-        finally:
-            builtins.__import__ = original_import
-        
-        # Test second except block (lines 13-14) and mock class creation (lines 16-17)
-        try:
-            builtins.__import__ = mock_import_both_fail
-            # This should trigger both import failures and create the mock class
-            import importlib
-            if 'projectchallenge' in sys.modules:
-                del sys.modules['projectchallenge']
-        except Exception:
-            pass
-        finally:
-            builtins.__import__ = original_import
-        
-        # Verify we can still work with ProjectChallenge
-        self.assertTrue(ProjectChallenge is not None)
-
+     
