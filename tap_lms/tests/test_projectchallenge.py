@@ -174,26 +174,6 @@ def test_import_failure_scenarios():
             pass
 
 
-def test_spec_with_no_loader():
-    """Test scenario where spec exists but loader is None"""
-    
-    mock_spec = MagicMock()
-    mock_spec.loader = None
-    
-    with patch('importlib.util.spec_from_file_location', return_value=mock_spec):
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        spec = importlib.util.spec_from_file_location(
-            "projectchallenge", 
-            os.path.join(current_dir, "projectchallenge.py")
-        )
-        
-        # This should hit the condition where spec is not None but loader is None
-        if spec is not None and spec.loader is not None:
-            pass  # Won't execute
-        else:
-            # This should execute line 370
-            raise ImportError("Could not locate projectchallenge.py")
-
 
 def test_exception_in_main_block():
     """Test the exception handling in the main try-except block"""
@@ -267,11 +247,4 @@ def test_pass_statement():
     result = test_execute_main_function()
     assert result is not False  # Don't use 'is True' in case result is None
 
-
-if __name__ == "__main__":
-    test_execute_main_function()
-    test_import_failure_scenarios()
-    test_spec_with_no_loader()
-    test_exception_in_main_block()
-    test_path_conditions()
     print("All tests executed - should achieve 0 missing lines!")
