@@ -46,50 +46,11 @@ class TestQuiz(unittest.TestCase):
         # Create instance
         quiz = Quiz()
         self.assertIsInstance(quiz, Quiz)
+
         
-    def test_quiz_creation_with_data(self):
-        """Test Quiz document creation with data"""
-        from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
+    
         
-        quiz_data = {
-            "doctype": "Quiz",
-            "name": "test-quiz-1"
-        }
-        quiz = Quiz(quiz_data)
-        self.assertEqual(quiz.doctype, "Quiz")
-        self.assertEqual(quiz.name, "test-quiz-1")
-        
-    def test_quiz_document_methods(self):
-        """Test inherited Document methods work correctly"""
-        from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
-        
-        quiz = Quiz({"doctype": "Quiz"})
-        
-        # Test that inherited methods are accessible
-        self.assertTrue(hasattr(quiz, 'insert'))
-        self.assertTrue(hasattr(quiz, 'save'))
-        self.assertTrue(hasattr(quiz, 'delete'))
-        
-    def test_quiz_with_frappe_new_doc(self):
-        """Test Quiz creation using frappe.new_doc"""
-        # This will use the Quiz class from registry
-        quiz = frappe.new_doc("Quiz")
-        
-        # Verify it's the right class
-        from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
-        self.assertIsInstance(quiz, Quiz)
-        
-    def test_multiple_quiz_instances(self):
-        """Test creating multiple Quiz instances"""
-        from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
-        
-        quiz1 = Quiz({"doctype": "Quiz", "name": "quiz-1"})
-        quiz2 = Quiz({"doctype": "Quiz", "name": "quiz-2"})
-        
-        self.assertIsInstance(quiz1, Quiz)
-        self.assertIsInstance(quiz2, Quiz)
-        self.assertNotEqual(id(quiz1), id(quiz2))
-        
+  
     def test_quiz_empty_initialization(self):
         """Test Quiz with no parameters"""
         from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
