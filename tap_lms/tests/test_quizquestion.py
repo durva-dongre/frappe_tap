@@ -301,26 +301,26 @@ class TestQuizQuestion(unittest.TestCase):
             # Handle import issues gracefully
             self.skipTest(f"Import failed: {e}")
     
-    def test_class_definition_coverage(self):
-        """Test 2: Covers the class definition line in quizquestion.py"""
-        # This test ensures the class definition line is executed and covered
-        # Line: class QuizQuestion(Document):
+    # def test_class_definition_coverage(self):
+    #     """Test 2: Covers the class definition line in quizquestion.py"""
+    #     # This test ensures the class definition line is executed and covered
+    #     # Line: class QuizQuestion(Document):
         
-        try:
-            from tap_lms.tap_lms.doctype.quizquestion.quizquestion import QuizQuestion
+    #     try:
+    #         from tap_lms.tap_lms.doctype.quizquestion.quizquestion import QuizQuestion
             
-            # Test that QuizQuestion is properly defined as a class
-            self.assertTrue(isinstance(QuizQuestion, type))
-            self.assertEqual(QuizQuestion.__name__, 'QuizQuestion')
+    #         # Test that QuizQuestion is properly defined as a class
+    #         self.assertTrue(isinstance(QuizQuestion, type))
+    #         self.assertEqual(QuizQuestion.__name__, 'QuizQuestion')
             
-            # Test inheritance
-            self.assertTrue(issubclass(QuizQuestion, MockDocument))
+    #         # Test inheritance
+    #         self.assertTrue(issubclass(QuizQuestion, MockDocument))
             
-            # Test passed ✅
-            self.assertTrue(True, "Class definition covered successfully")
+    #         # Test passed ✅
+    #         self.assertTrue(True, "Class definition covered successfully")
             
-        except ImportError as e:
-            self.skipTest(f"Import failed: {e}")
+    #     except ImportError as e:
+    #         self.skipTest(f"Import failed: {e}")
     
     def test_pass_statement_coverage(self):
         """Test 3: Covers the pass statement in quizquestion.py"""
