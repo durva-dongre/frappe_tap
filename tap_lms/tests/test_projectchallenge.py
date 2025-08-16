@@ -263,89 +263,45 @@
 #         assert final_objects - initial_objects < 50  # Reasonable threshold
 
 
-# """
-# Direct test for projectchallenge.py to achieve 100% coverage
-# This test directly imports and tests the original module without complex mocking
-# """
-
-# import sys
-# import os
-# from unittest.mock import MagicMock
-
-# # Mock frappe BEFORE any imports to avoid ImportError
-# mock_frappe = MagicMock()
-# mock_document = MagicMock()
-
-# # Set up the mock hierarchy
-# mock_frappe.model = MagicMock()
-# mock_frappe.model.document = MagicMock()
-# mock_frappe.model.document.Document = mock_document
-
-# # Insert mocks into sys.modules
-# sys.modules['frappe'] = mock_frappe
-# sys.modules['frappe.model'] = mock_frappe.model  
-# sys.modules['frappe.model.document'] = mock_frappe.model.document
-
-# # Now import the actual module - this should work without ImportError
-# from tap_lms.tap_lms.doctype.projectchallenge.projectchallenge import ProjectChallenge, Document
-
-
-# def test_import_statement():
-#     """Test that the import statement is covered"""
-#     # The import above covers line 5: from frappe.model.document import Document
-#     assert Document is not None
-#     assert Document == mock_document
-
-
-
-# def test_pass_statement():
-#     """Test that the pass statement is covered"""
-#     # Creating an instance covers line 8: pass
-#     instance = ProjectChallenge()
-#     assert instance is not None
-
-
 """
-Working test for projectchallenge.py that will pass
-Place this file in: apps/tap_lms/tap_lms/tests/test_projectchallenge.py
+Direct test for projectchallenge.py to achieve 100% coverage
+This test directly imports and tests the original module without complex mocking
 """
 
 import sys
 import os
 from unittest.mock import MagicMock
 
-# Add the apps directory to Python path
-current_dir = os.path.dirname(os.path.abspath(__file__))
-apps_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
-if apps_dir not in sys.path:
-    sys.path.insert(0, apps_dir)
+# Mock frappe BEFORE any imports to avoid ImportError
+mock_frappe = MagicMock()
+mock_document = MagicMock()
 
-# Mock frappe before any imports
-frappe_mock = MagicMock()
-document_mock = MagicMock()
+# Set up the mock hierarchy
+mock_frappe.model = MagicMock()
+mock_frappe.model.document = MagicMock()
+mock_frappe.model.document.Document = mock_document
 
-# Set up the mock hierarchy  
-frappe_mock.model = MagicMock()
-frappe_mock.model.document = MagicMock()
-frappe_mock.model.document.Document = document_mock
+# Insert mocks into sys.modules
+sys.modules['frappe'] = mock_frappe
+sys.modules['frappe.model'] = mock_frappe.model  
+sys.modules['frappe.model.document'] = mock_frappe.model.document
 
-# Install mocks in sys.modules
-sys.modules['frappe'] = frappe_mock
-sys.modules['frappe.model'] = frappe_mock.model
-sys.modules['frappe.model.document'] = frappe_mock.model.document
-
-# Now import the module - this should work
-from tap_lms.tap_lms.doctype.projectchallenge.projectchallenge import ProjectChallenge
+# Now import the actual module - this should work without ImportError
+from tap_lms.tap_lms.doctype.projectchallenge.projectchallenge import ProjectChallenge, Document
 
 
-class TestProjectChallenge:
-    """Test class for ProjectChallenge with 100% coverage"""
+def test_import_statement():
+    """Test that the import statement is covered"""
+    # The import above covers line 5: from frappe.model.document import Document
+    assert Document is not None
+    assert Document == mock_document
 
-    def test_pass_statement_coverage(self):
-        """Test that pass statement is covered"""
-        # Creating an instance executes the pass statement
-        instance = ProjectChallenge()
-        assert instance is not None
 
-   
-   
+
+def test_pass_statement():
+    """Test that the pass statement is covered"""
+    # Creating an instance covers line 8: pass
+    instance = ProjectChallenge()
+    assert instance is not None
+
+
