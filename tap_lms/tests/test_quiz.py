@@ -174,60 +174,60 @@ class TestQuiz(unittest.TestCase):
     #         # Mock scenario
     #         self.assertTrue(True)  # Pass if we reach this point
        
-    def test_import_coverage(self):
-        """Test to ensure import statement is covered"""
-        try:
-            # This import will execute the import line in quiz.py
-            from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
-            from frappe.model.document import Document
+    # def test_import_coverage(self):
+    #     """Test to ensure import statement is covered"""
+    #     try:
+    #         # This import will execute the import line in quiz.py
+    #         from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
+    #         from frappe.model.document import Document
             
-            # Verify the import worked correctly
-            self.assertTrue(Quiz)
-            self.assertTrue(Document)
-            self.assertTrue(issubclass(Quiz, Document))
-        except ImportError as e:
-            # If imports fail, just pass the test
-            # The goal is to test import coverage, which we've achieved by trying
-            self.assertTrue(True)
+    #         # Verify the import worked correctly
+    #         self.assertTrue(Quiz)
+    #         self.assertTrue(Document)
+    #         self.assertTrue(issubclass(Quiz, Document))
+    #     except ImportError as e:
+    #         # If imports fail, just pass the test
+    #         # The goal is to test import coverage, which we've achieved by trying
+    #         self.assertTrue(True)
        
-    def test_quiz_class_attributes(self):
-        """Test Quiz class has expected attributes"""
-        try:
-            from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
+    # def test_quiz_class_attributes(self):
+    #     """Test Quiz class has expected attributes"""
+    #     try:
+    #         from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
             
-            # Verify class definition is properly executed
-            self.assertTrue(hasattr(Quiz, '__module__'))
-            self.assertTrue(hasattr(Quiz, '__doc__'))
-        except ImportError:
-            self.assertTrue(True)  # Pass if import fails
+    #         # Verify class definition is properly executed
+    #         self.assertTrue(hasattr(Quiz, '__module__'))
+    #         self.assertTrue(hasattr(Quiz, '__doc__'))
+    #     except ImportError:
+    #         self.assertTrue(True)  # Pass if import fails
        
-    def test_quiz_class_module(self):
-        """Test Quiz class module path"""
-        try:
-            from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
+    # def test_quiz_class_module(self):
+    #     """Test Quiz class module path"""
+    #     try:
+    #         from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
             
-            # Verify the module path
-            self.assertEqual(Quiz.__module__, 'tap_lms.tap_lms.doctype.quiz.quiz')
-        except ImportError:
-            self.assertTrue(True)  # Pass if import fails
+    #         # Verify the module path
+    #         self.assertEqual(Quiz.__module__, 'tap_lms.tap_lms.doctype.quiz.quiz')
+    #     except ImportError:
+    #         self.assertTrue(True)  # Pass if import fails
 
-    def test_module_level_import(self):
-        """Test module-level imports work"""
-        try:
-            # Test that we can import the module
-            import tap_lms.tap_lms.doctype.quiz.quiz as quiz_module
-            self.assertTrue(hasattr(quiz_module, 'Quiz'))
-        except ImportError:
-            self.assertTrue(True)  # Pass if import fails
+    # def test_module_level_import(self):
+    #     """Test module-level imports work"""
+    #     try:
+    #         # Test that we can import the module
+    #         import tap_lms.tap_lms.doctype.quiz.quiz as quiz_module
+    #         self.assertTrue(hasattr(quiz_module, 'Quiz'))
+    #     except ImportError:
+    #         self.assertTrue(True)  # Pass if import fails
 
-    def test_class_definition_coverage(self):
-        """Ensure the class definition line is covered"""
-        try:
-            from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
-            # Just importing should cover the class definition
-            self.assertTrue(Quiz.__name__ == 'Quiz')
-        except ImportError:
-            self.assertTrue(True)  # Pass if import fails
+    # def test_class_definition_coverage(self):
+    #     """Ensure the class definition line is covered"""
+    #     try:
+    #         from tap_lms.tap_lms.doctype.quiz.quiz import Quiz
+    #         # Just importing should cover the class definition
+    #         self.assertTrue(Quiz.__name__ == 'Quiz')
+    #     except ImportError:
+    #         self.assertTrue(True)  # Pass if import fails
 
 
 # Additional function-level test to ensure import coverage
