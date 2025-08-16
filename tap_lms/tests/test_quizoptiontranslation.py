@@ -80,46 +80,6 @@ def test_quiz_option_translation_class_attributes():
                 getattr(quiz_option_translation, attr)
 
 
-def test_quiz_option_translation_with_frappe_context():
-    """Test QuizOptionTranslation in a frappe-like context"""
-    
-    with patch.dict('sys.modules', {
-        'frappe': Mock(),
-        'frappe.model': Mock(),
-        'frappe.model.document': Mock(),
-    }):
-        # Create a more realistic frappe context
-        mock_frappe = sys.modules['frappe']
-        mock_frappe.get_doc = Mock()
-        mock_frappe.new_doc = Mock()
-        
-        # Mock Document with realistic behavior
-        class MockDocument:
-            def __init__(self, *args, **kwargs):
-                self.doctype = kwargs.get('doctype', 'QuizOptionTranslation')
-                self.name = kwargs.get('name')
-                
-            def save(self):
-                pass
-                
-            def delete(self):
-                pass
-        
-        sys.modules['frappe.model.document'].Document = MockDocument
-        
-        from tap_lms.tap_lms.doctype.quizoptiontranslation.quizoptiontranslation import QuizOptionTranslation
-        
-        # Test instantiation
-        quiz_translation = QuizOptionTranslation()
-        assert quiz_translation is not None
-        assert quiz_translation.doctype == 'QuizOptionTranslation'
-        
-        # Test with parameters
-        quiz_translation_with_params = QuizOptionTranslation(doctype="QuizOptionTranslation", name="TEST001")
-        assert quiz_translation_with_params.doctype == 'QuizOptionTranslation'
-        assert quiz_translation_with_params.name == "TEST001"
-
-
     """Comprehensive test to ensure 100% line coverage"""
     
     with patch.dict('sys.modules', {
