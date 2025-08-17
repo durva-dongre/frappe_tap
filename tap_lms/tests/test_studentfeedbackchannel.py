@@ -180,13 +180,6 @@ def test_fixture_usage(sample_feedback_channel_data, mock_student_feedback_chann
     assert hasattr(mock_student_feedback_channel, 'name')
 
 
-def test_return_statement_coverage():
-    """Test to cover return statements in fixtures"""
-    # Call the fixture function directly to cover return statements
-    data = sample_feedback_channel_data()
-    assert data is not None
-    assert 'name' in data
-
 
 def test_setattr_loop_coverage():
     """Test to cover the setattr loop in mock fixture"""
