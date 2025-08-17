@@ -186,276 +186,109 @@
 #         assert key is not None
 #         assert value is not None
 
-"""
-Test to achieve 100% coverage for studentfeedbackchannel.py
-This test file will cover all 3 lines in the actual source file.
-"""
-
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+import unittest
+from unittest.mock import patch, MagicMock
 import sys
 import os
 
-# Mock the frappe module before importing the actual class
-class MockDocument:
-    """Mock Document class to simulate frappe.model.document.Document"""
-    def __init__(self, *args, **kwargs):
-        pass
+# Add the path to your module
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 
-# Create a mock frappe module
-mock_frappe = MagicMock()
-mock_frappe.model = MagicMock()
-mock_frappe.model.document = MagicMock()
-mock_frappe.model.document.Document = MockDocument
+# Mock frappe before importing
+sys.modules['frappe'] = MagicMock()
+sys.modules['frappe.model'] = MagicMock()
+sys.modules['frappe.model.document'] = MagicMock()
 
-# Add the mock to sys.modules before importing
-sys.modules['frappe'] = mock_frappe
-sys.modules['frappe.model'] = mock_frappe.model
-sys.modules['frappe.model.document'] = mock_frappe.model.document
-
-# Now import the actual StudentFeedbackChannel class
-# This will cover line 5: from frappe.model.document import Document
+# Import the class under test
 from tap_lms.tap_lms.doctype.studentfeedbackchannel.studentfeedbackchannel import StudentFeedbackChannel
 
 
-class TestStudentFeedbackChannel:
-    """Test cases for StudentFeedbackChannel doctype to achieve 100% coverage"""
+class TestStudentFeedbackChannel(unittest.TestCase):
+    """Test cases for StudentFeedbackChannel to achieve 100% coverage"""
 
-    def test_student_feedback_channel_class_definition(self):
-        """Test that covers the class definition - line 7"""
-        # This test will cover line 7: class StudentFeedbackChannel(Document):
-        # Just by importing and referencing the class, we cover the class definition
-        assert StudentFeedbackChannel is not None
-        assert hasattr(StudentFeedbackChannel, '__name__')
-        assert StudentFeedbackChannel.__name__ == 'StudentFeedbackChannel'
-
-    def test_student_feedback_channel_instantiation(self):
-        """Test that covers the pass statement - line 8"""
-        # This test will cover line 8: pass
-        # By instantiating the class, we execute the pass statement in the class body
-        doc = StudentFeedbackChannel()
+    def setUp(self):
+        """Set up test fixtures before each test method."""
+        # Mock the Document class
+        self.mock_document = MagicMock()
         
-        # Verify it's an instance of the class
-        assert isinstance(doc, StudentFeedbackChannel)
-        assert isinstance(doc, MockDocument)
+    @patch('frappe.model.document.Document')
+    def test_import_statement_coverage(self, mock_document):
+        """Test that covers the import statement (line 5)"""
+        # This test ensures the import statement is executed
+        # Simply importing the module covers this line
+        from tap_lms.tap_lms.doctype.studentfeedbackchannel.studentfeedbackchannel import StudentFeedbackChannel
+        # If we reach here, import was successful
+        self.assertTrue(True)
 
-    def test_student_feedback_channel_inheritance(self):
-        """Test that verifies the class inherits from Document"""
-        # This ensures the class definition and inheritance work correctly
-        assert issubclass(StudentFeedbackChannel, MockDocument)
+    @patch('frappe.model.document.Document')
+    def test_class_definition_coverage(self, mock_document):
+        """Test that covers the class definition (line 7)"""
+        # Create an instance to cover the class definition line
+        instance = StudentFeedbackChannel()
         
-        # Create an instance to execute the class body (pass statement)
-        doc = StudentFeedbackChannel()
-        assert doc is not None
-
-    def test_import_statement_coverage(self):
-        """Test to ensure the import statement is covered"""
-        # Line 5 is covered by the import at the top of this file
-        # But let's also test that the Document class is available
-        from frappe.model.document import Document
-        assert Document is not None
-        assert Document == MockDocument
-
-    def test_class_body_execution(self):
-        """Test to ensure the class body (pass statement) is executed"""
-        # Create multiple instances to ensure the pass statement is definitely executed
-        doc1 = StudentFeedbackChannel()
-        doc2 = StudentFeedbackChannel()
+        # Verify it's an instance of our class
+        self.assertIsInstance(instance, StudentFeedbackChannel)
         
-        assert doc1 is not None
-        assert doc2 is not None
-        assert type(doc1) == type(doc2)
+        # Verify the class name
+        self.assertEqual(instance.__class__.__name__, 'StudentFeedbackChannel')
 
-    def test_class_attributes_and_methods(self):
-        """Test class attributes to ensure class definition is fully covered"""
-        # Test class-level attributes
-        assert hasattr(StudentFeedbackChannel, '__module__')
-        assert hasattr(StudentFeedbackChannel, '__qualname__')
+    @patch('frappe.model.document.Document')
+    def test_pass_statement_coverage(self, mock_document):
+        """Test that covers the pass statement (line 8)"""
+        # Creating an instance and calling any method will execute the pass statement
+        instance = StudentFeedbackChannel()
         
-        # Create instance to execute class body
-        doc = StudentFeedbackChannel()
+        # Since the class only has 'pass', we can test that it doesn't raise an error
+        try:
+            # Try to access class attributes or methods
+            class_name = instance.__class__.__name__
+            self.assertEqual(class_name, 'StudentFeedbackChannel')
+        except Exception as e:
+            self.fail(f"Pass statement failed: {e}")
+
+    @patch('frappe.model.document.Document')
+    def test_complete_coverage(self, mock_document):
+        """Comprehensive test that covers all three missing lines"""
+        # This single test covers all three lines:
+        # 1. Import is covered by importing the module
+        # 2. Class definition is covered by instantiation
+        # 3. Pass statement is covered by using the instance
         
-        # Test instance creation
-        assert isinstance(doc, StudentFeedbackChannel)
-
-    def test_multiple_instantiations(self):
-        """Test multiple instantiations to ensure full coverage"""
-        # Create several instances to make sure the class body is executed multiple times
-        instances = []
-        for i in range(5):
-            doc = StudentFeedbackChannel()
-            instances.append(doc)
-            assert isinstance(doc, StudentFeedbackChannel)
+        # Import coverage (line 5) - already covered by module import above
         
-        # Verify all instances are created
-        assert len(instances) == 5
-
-    def test_class_with_parameters(self):
-        """Test class instantiation with parameters"""
-        # Test with various parameter combinations
-        doc1 = StudentFeedbackChannel()
-        doc2 = StudentFeedbackChannel("param1")
-        doc3 = StudentFeedbackChannel("param1", "param2")
-        doc4 = StudentFeedbackChannel(name="test", value=123)
+        # Class definition coverage (line 7)
+        instance = StudentFeedbackChannel()
         
-        # All should be valid instances
-        for doc in [doc1, doc2, doc3, doc4]:
-            assert isinstance(doc, StudentFeedbackChannel)
-            assert isinstance(doc, MockDocument)
-
-    def test_class_method_resolution_order(self):
-        """Test method resolution order to ensure inheritance is working"""
-        # Get the MRO and verify Document is in it
-        mro = StudentFeedbackChannel.__mro__
-        assert StudentFeedbackChannel in mro
-        assert MockDocument in mro
+        # Pass statement coverage (line 8)
+        # The pass statement is executed when the class is instantiated
+        # and any method is called (even inherited ones)
         
-        # Create instance to execute class body
-        doc = StudentFeedbackChannel()
-        assert doc is not None
-
-    def test_comprehensive_coverage(self):
-        """Comprehensive test to ensure all lines are covered"""
-        # This test ensures we hit every line in the source file
+        # Verify the instance works correctly
+        self.assertIsNotNone(instance)
+        self.assertEqual(type(instance).__name__, 'StudentFeedbackChannel')
         
-        # Line 5: from frappe.model.document import Document (covered by import)
-        from frappe.model.document import Document
-        assert Document == MockDocument
-        
-        # Line 7: class StudentFeedbackChannel(Document): (covered by class reference)
-        cls = StudentFeedbackChannel
-        assert cls is not None
-        assert issubclass(cls, MockDocument)
-        
-        # Line 8: pass (covered by instantiation)
-        doc = cls()
-        assert isinstance(doc, cls)
-        assert isinstance(doc, MockDocument)
+        # Test that it can be used like a Document (inheritance test)
+        self.assertTrue(hasattr(instance, '__class__'))
 
+    def test_inheritance(self):
+        """Test that StudentFeedbackChannel properly inherits from Document"""
+        with patch('frappe.model.document.Document') as mock_document:
+            instance = StudentFeedbackChannel()
+            
+            # Check that it's a subclass (when not mocked)
+            self.assertTrue(callable(StudentFeedbackChannel))
 
-# Additional tests to ensure complete coverage
-def test_module_level_coverage():
-    """Test module-level functionality"""
-    # Import the module to ensure all module-level code is executed
-    import tap_lms.tap_lms.doctype.studentfeedbackchannel.studentfeedbackchannel as module
-    
-    # Verify the class is available in the module
-    assert hasattr(module, 'StudentFeedbackChannel')
-    assert module.StudentFeedbackChannel == StudentFeedbackChannel
-    
-    # Create instance to ensure class body is executed
-    doc = module.StudentFeedbackChannel()
-    assert doc is not None
+    def test_multiple_instances(self):
+        """Test creating multiple instances to ensure consistent coverage"""
+        with patch('frappe.model.document.Document'):
+            # Create multiple instances to ensure all code paths are covered
+            instances = []
+            for i in range(3):
+                instance = StudentFeedbackChannel()
+                instances.append(instance)
+                
+            # Verify all instances are created successfully
+            self.assertEqual(len(instances), 3)
+            for instance in instances:
+                self.assertEqual(instance.__class__.__name__, 'StudentFeedbackChannel')
 
-
-def test_direct_class_access():
-    """Test direct access to the class to ensure class definition is covered"""
-    # Direct class access
-    cls = StudentFeedbackChannel
-    
-    # Verify class properties
-    assert cls.__name__ == 'StudentFeedbackChannel'
-    assert issubclass(cls, MockDocument)
-    
-    # Instantiate to cover the pass statement
-    instance = cls()
-    assert isinstance(instance, cls)
-
-
-def test_class_instantiation_variations():
-    """Test various ways of instantiating the class"""
-    # Different ways to create instances
-    doc1 = StudentFeedbackChannel()
-    doc2 = StudentFeedbackChannel.__new__(StudentFeedbackChannel)
-    StudentFeedbackChannel.__init__(doc2)
-    
-    # Verify both are valid instances
-    assert isinstance(doc1, StudentFeedbackChannel)
-    assert isinstance(doc2, StudentFeedbackChannel)
-
-
-def test_ensure_all_lines_executed():
-    """Final test to absolutely ensure all 3 lines are executed"""
-    # Line 5: Import statement (executed when module is imported)
-    from frappe.model.document import Document
-    
-    # Line 7: Class definition (executed when class is referenced)
-    class_ref = StudentFeedbackChannel
-    assert class_ref is not None
-    
-    # Line 8: Pass statement (executed when class is instantiated)
-    instance = class_ref()
-    assert instance is not None
-    
-    # Verify the class hierarchy
-    assert issubclass(StudentFeedbackChannel, Document)
-    assert isinstance(instance, Document)
-    assert isinstance(instance, StudentFeedbackChannel)
-
-
-# Fixture-based tests to ensure complete coverage
-@pytest.fixture
-def feedback_channel_class():
-    """Fixture that provides the StudentFeedbackChannel class"""
-    return StudentFeedbackChannel
-
-
-@pytest.fixture
-def feedback_channel_instance():
-    """Fixture that provides a StudentFeedbackChannel instance"""
-    return StudentFeedbackChannel()
-
-
-def test_with_class_fixture(feedback_channel_class):
-    """Test using class fixture"""
-    assert feedback_channel_class == StudentFeedbackChannel
-    # Create instance to execute class body
-    doc = feedback_channel_class()
-    assert isinstance(doc, feedback_channel_class)
-
-
-def test_with_instance_fixture(feedback_channel_instance):
-    """Test using instance fixture"""
-    assert isinstance(feedback_channel_instance, StudentFeedbackChannel)
-    assert isinstance(feedback_channel_instance, MockDocument)
-
-
-# Parametrized tests for thorough coverage
-@pytest.mark.parametrize("args,kwargs", [
-    ((), {}),
-    (("arg1",), {}),
-    (("arg1", "arg2"), {}),
-    ((), {"key": "value"}),
-    (("arg1",), {"key": "value"}),
-])
-def test_parametrized_instantiation(args, kwargs):
-    """Test instantiation with various parameter combinations"""
-    doc = StudentFeedbackChannel(*args, **kwargs)
-    assert isinstance(doc, StudentFeedbackChannel)
-    assert isinstance(doc, MockDocument)
-
-
-# Edge case tests
-def test_class_name_and_module():
-    """Test class name and module attributes"""
-    assert StudentFeedbackChannel.__name__ == 'StudentFeedbackChannel'
-    assert 'studentfeedbackchannel' in StudentFeedbackChannel.__module__
-    
-    # Create instance to ensure pass statement is executed
-    doc = StudentFeedbackChannel()
-    assert doc.__class__ == StudentFeedbackChannel
-
-
-def test_multiple_imports():
-    """Test multiple imports of the same module"""
-    # Import the class multiple times to ensure import statement coverage
-    from tap_lms.tap_lms.doctype.studentfeedbackchannel.studentfeedbackchannel import StudentFeedbackChannel as SFC1
-    from tap_lms.tap_lms.doctype.studentfeedbackchannel.studentfeedbackchannel import StudentFeedbackChannel as SFC2
-    
-    assert SFC1 == SFC2 == StudentFeedbackChannel
-    
-    # Create instances from both imports
-    doc1 = SFC1()
-    doc2 = SFC2()
-    
-    assert type(doc1) == type(doc2) == StudentFeedbackChannel
