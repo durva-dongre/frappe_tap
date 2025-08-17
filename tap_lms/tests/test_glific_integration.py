@@ -68,7 +68,7 @@ def test_get_glific_settings_exception():
         try:
             from glific_integration import get_glific_settings
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         # Test that exception is raised
         with pytest.raises(Exception):
@@ -98,7 +98,7 @@ def test_get_glific_auth_headers_valid_token():
         try:
             from glific_integration import get_glific_auth_headers
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         # Call the function
         result = get_glific_auth_headers()
@@ -133,7 +133,7 @@ def test_get_glific_auth_headers_timezone_replacement():
         try:
             from glific_integration import get_glific_auth_headers
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         # Call the function
         result = get_glific_auth_headers()
@@ -169,7 +169,7 @@ def test_get_glific_auth_headers_timezone_replacement():
 #         try:
 #             from glific_integration import get_glific_auth_headers
 #         except ImportError as e:
-#             pytest.skip(f"Could not import module: {e}")
+#             pytest.skip("Could not import module: " + str(e))
         
 #         # Check if refresh_access_token exists in the module first
 #         import glific_integration
@@ -227,7 +227,7 @@ def test_create_contact_success():
         try:
             from glific_integration import create_contact
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         # Mock other functions that are called
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
@@ -275,7 +275,7 @@ def test_create_contact_api_error():
         try:
             from glific_integration import create_contact
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -345,7 +345,7 @@ def test_update_contact_fields_success():
         try:
             from glific_integration import update_contact_fields
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -410,7 +410,7 @@ def test_update_contact_fields_json_decode_error():
         try:
             from glific_integration import update_contact_fields
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers, \
@@ -446,7 +446,7 @@ def test_update_contact_fields_general_exception():
         try:
             from glific_integration import update_contact_fields
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         # Set up basic mocks that work (these are called before the try block)
         mock_settings = Mock()
@@ -504,7 +504,7 @@ def test_get_contact_by_phone_success():
         try:
             from glific_integration import get_contact_by_phone
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -553,7 +553,7 @@ def test_optin_contact_success():
         try:
             from glific_integration import optin_contact
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -597,7 +597,7 @@ def test_check_glific_group_exists_found():
         try:
             from glific_integration import check_glific_group_exists
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -643,7 +643,7 @@ def test_add_contact_to_group_success():
         try:
             from glific_integration import add_contact_to_group
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -670,7 +670,7 @@ def test_add_contact_to_group_invalid_params():
         try:
             from glific_integration import add_contact_to_group
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
         
         # Test with None contact_id
         result = add_contact_to_group(None, "group123")
@@ -698,7 +698,7 @@ def test_import_statements_coverage():
             assert hasattr(glific_integration, 'get_glific_settings')
             assert callable(glific_integration.get_glific_settings)
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
 
 
 def test_function_signatures():
@@ -740,7 +740,7 @@ def test_function_signatures():
                 assert callable(func)
                 
         except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+            pytest.skip("Could not import module: " + str(e))
 
 
 # if __name__ == "__main__":
