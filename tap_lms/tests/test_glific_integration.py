@@ -743,5 +743,5 @@ def test_function_signatures():
             pytest.skip(f"Could not import module: {e}")
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+# if __name__ == "__main__":
+#     pytest.main([__file__, "-v"])
