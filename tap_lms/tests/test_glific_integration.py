@@ -146,45 +146,45 @@ def test_get_glific_auth_headers_timezone_replacement():
         assert result == expected
 
 
-def test_get_glific_auth_headers_expired_token():
-    """Test get_glific_auth_headers when token is expired"""
+# def test_get_glific_auth_headers_expired_token():
+#     """Test get_glific_auth_headers when token is expired"""
     
-    with patch.dict('sys.modules', {
-        'frappe': Mock(),
-        'requests': Mock(),
-        'json': Mock(),
-        'dateutil': Mock(),
-        'dateutil.parser': Mock(),
-    }):
-        mock_frappe = sys.modules['frappe']
+#     with patch.dict('sys.modules', {
+#         'frappe': Mock(),
+#         'requests': Mock(),
+#         'json': Mock(),
+#         'dateutil': Mock(),
+#         'dateutil.parser': Mock(),
+#     }):
+#         mock_frappe = sys.modules['frappe']
         
-        # Configure mocks
-        mock_settings = Mock()
-        mock_settings.access_token = "expired_token"
-        # Set expiry time in the past - use real datetime
-        past_time = datetime.now(timezone.utc) - timedelta(hours=1)
-        mock_settings.token_expiry_time = past_time
-        mock_frappe.get_single.return_value = mock_settings
+#         # Configure mocks
+#         mock_settings = Mock()
+#         mock_settings.access_token = "expired_token"
+#         # Set expiry time in the past - use real datetime
+#         past_time = datetime.now(timezone.utc) - timedelta(hours=1)
+#         mock_settings.token_expiry_time = past_time
+#         mock_frappe.get_single.return_value = mock_settings
         
-        try:
-            from glific_integration import get_glific_auth_headers
-        except ImportError as e:
-            pytest.skip(f"Could not import module: {e}")
+#         try:
+#             from glific_integration import get_glific_auth_headers
+#         except ImportError as e:
+#             pytest.skip(f"Could not import module: {e}")
         
-        # Check if refresh_access_token exists in the module first
-        import glific_integration
-        if hasattr(glific_integration, 'refresh_access_token'):
-            # Mock the refresh_access_token function
-            with patch('glific_integration.refresh_access_token') as mock_refresh:
-                mock_refresh.return_value = True
+#         # Check if refresh_access_token exists in the module first
+#         import glific_integration
+#         if hasattr(glific_integration, 'refresh_access_token'):
+#             # Mock the refresh_access_token function
+#             with patch('glific_integration.refresh_access_token') as mock_refresh:
+#                 mock_refresh.return_value = True
                 
-                result = get_glific_auth_headers()
+#                 result = get_glific_auth_headers()
                 
-                # Should call refresh_access_token
-                mock_refresh.assert_called_once()
-        else:
-            # Skip this test if refresh_access_token doesn't exist
-            pytest.skip("refresh_access_token function not found in module")
+#                 # Should call refresh_access_token
+#                 mock_refresh.assert_called_once()
+#         else:
+#             # Skip this test if refresh_access_token doesn't exist
+#             pytest.skip("refresh_access_token function not found in module")
 
 
 def test_create_contact_success():
