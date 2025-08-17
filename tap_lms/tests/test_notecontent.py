@@ -27,7 +27,7 @@ def test_note_content_coverage():
     sys.modules['frappe.model.document'] = mock_frappe.model.document
     
     # Import and instantiate - this covers all 3 lines
-    from your_app.your_app.doctype.notecontent.notecontent import NoteContent
+    from tap_lms.tap_lms.doctype.notecontent.notecontent import NoteContent
     note_content = NoteContent()
     
     # Basic assertions
@@ -38,14 +38,14 @@ def test_note_content_coverage():
 
 def test_note_content_inheritance():
     """Test NoteContent inherits from Document"""
-    from your_app.your_app.doctype.notecontent.notecontent import NoteContent
+    from tap_lms.tap_lms.doctype.notecontent.notecontent import NoteContent
     note_content = NoteContent()
     assert note_content is not None
 
 
 def test_note_content_multiple_instances():
     """Test multiple NoteContent instances"""
-    from your_app.your_app.doctype.notecontent.notecontent import NoteContent
+    from tap_lms.tap_lms.doctype.notecontent.notecontent import NoteContent
     
     content1 = NoteContent()
     content2 = NoteContent()
