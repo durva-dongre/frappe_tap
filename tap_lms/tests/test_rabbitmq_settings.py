@@ -80,3 +80,7 @@ def test_pass_statement_coverage():
     # Create an instance to ensure the class body (pass statement) is executed
     instance = RabbitmqSettings({"doctype": "RabbitmqSettings"})
     assert instance is not None
+
+
+
+    
