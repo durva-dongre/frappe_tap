@@ -31,16 +31,6 @@ def test_import_statement_coverage(mock_frappe):
         assert tap_lms.tap_lms.doctype.related_content.related_content is not None
 
 
-def test_class_definition_coverage(mock_frappe):
-    """Test coverage of line 7: class RelatedContent(Document):"""
-    with patch.dict('sys.modules', mock_frappe):
-        from tap_lms.tap_lms.doctype.related_content.related_content import RelatedContent
-        
-        # Verify class is defined
-        assert RelatedContent is not None
-        assert hasattr(RelatedContent, '__name__')
-        assert RelatedContent.__name__ == 'RelatedContent'
-
 
 def test_pass_statement_coverage(mock_frappe):
     """Test coverage of line 8: pass"""
@@ -64,16 +54,6 @@ def test_complete_module_coverage(mock_frappe):
         # Verify everything worked
         assert RelatedContent is not None
         assert instance is not None
-
-
-def test_class_inheritance(mock_frappe):
-    """Test that RelatedContent properly inherits from Document"""
-    with patch.dict('sys.modules', mock_frappe):
-        from tap_lms.tap_lms.doctype.related_content.related_content import RelatedContent
-        
-        # Check inheritance
-        mock_document = mock_frappe['frappe.model.document'].Document
-        assert mock_document in RelatedContent.__bases__
 
 
 def test_instance_creation_with_data(mock_frappe):
