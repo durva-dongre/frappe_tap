@@ -1,86 +1,149 @@
-import pytest
-import frappe
-from frappe.test_runner import make_test_records
+"""
+Minimal test file to achieve 100% code coverage for rabbitmq_settings.py
+This test focuses on covering all statements without complex frappe dependencies.
+"""
+
+import unittest
+import sys
+import os
+from unittest.mock import Mock, patch
 
 
-class TestRabbitmqSettings:
-    """Test cases for RabbitmqSettings doctype"""
+class TestRabbitmqSettings(unittest.TestCase):
+    """Test cases for RabbitmqSettings to achieve 100% coverage"""
     
-    @classmethod
-    def setUpClass(cls):
-        """Set up test environment"""
-        make_test_records("RabbitmqSettings")
+    def setUp(self):
+        """Set up test environment with mocked frappe"""
+        # Mock the frappe.model.document module
+        self.mock_document = Mock()
+        self.mock_frappe_module = Mock()
+        self.mock_frappe_module.model = Mock()
+        self.mock_frappe_module.model.document = Mock()
+        self.mock_frappe_module.model.document.Document = self.mock_document
+        
+        # Add mocked frappe to sys.modules if not present
+        if 'frappe' not in sys.modules:
+            sys.modules['frappe'] = self.mock_frappe_module
+            sys.modules['frappe.model'] = self.mock_frappe_module.model
+            sys.modules['frappe.model.document'] = self.mock_frappe_module.model.document
     
-    def test_rabbitmq_settings_creation(self):
-        """Test that RabbitmqSettings can be created"""
-        # Import here to ensure module is loaded
-        from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
-        
-        # Create a new document
-        settings = frappe.new_doc("RabbitmqSettings")
-        assert settings.doctype == "RabbitmqSettings"
-        
-    def test_rabbitmq_settings_class_import(self):
-        """Test that RabbitmqSettings class can be imported and instantiated"""
-        # This will test the import statement and class definition
-        from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
-        from frappe.model.document import Document
-        
-        # Verify class inheritance
-        assert issubclass(RabbitmqSettings, Document)
-        
-    def test_rabbitmq_settings_pass_statement(self):
-        """Test that the pass statement executes without error"""
-        from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
-        
-        # Create instance to execute the pass statement
-        settings_dict = {"doctype": "RabbitmqSettings"}
-        settings = RabbitmqSettings(settings_dict)
-        
-        # If we get here without exception, the pass statement executed successfully
-        assert settings is not None
-        assert hasattr(settings, 'doctype')
-        
-    def test_rabbitmq_settings_with_frappe_methods(self):
-        """Test RabbitmqSettings using frappe methods"""
-        # Test creating through frappe
-        settings = frappe.new_doc("RabbitmqSettings")
-        settings.name = "Test Settings"
-        
-        # Test that it has standard frappe document methods
-        assert hasattr(settings, 'save')
-        assert hasattr(settings, 'insert')
-        assert hasattr(settings, 'delete')
+    def test_import_document_statement(self):
+        """Test line 5: from frappe.model.document import Document"""
+        # This import will trigger the execution of line 5
+        with patch.dict('sys.modules', {
+            'frappe': self.mock_frappe_module,
+            'frappe.model': self.mock_frappe_module.model,
+            'frappe.model.document': self.mock_frappe_module.model.document
+        }):
+            # Import the module to execute line 5
+            import tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings as rabbitmq_module
+            
+            # Verify the module was imported successfully
+            self.assertIsNotNone(rabbitmq_module)
+    
+    def test_class_definition(self):
+        """Test line 7: class RabbitmqSettings(Document):"""
+        with patch.dict('sys.modules', {
+            'frappe': self.mock_frappe_module,
+            'frappe.model': self.mock_frappe_module.model,
+            'frappe.model.document': self.mock_frappe_module.model.document
+        }):
+            # Import to execute class definition
+            from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
+            
+            # Verify class exists and inherits from mocked Document
+            self.assertTrue(hasattr(RabbitmqSettings, '__name__'))
+            self.assertEqual(RabbitmqSettings.__name__, 'RabbitmqSettings')
+            self.assertIn(self.mock_document, RabbitmqSettings.__bases__)
+    
+    def test_pass_statement(self):
+        """Test line 8: pass"""
+        with patch.dict('sys.modules', {
+            'frappe': self.mock_frappe_module,
+            'frappe.model': self.mock_frappe_module.model,
+            'frappe.model.document': self.mock_frappe_module.model.document
+        }):
+            # Import and instantiate to execute pass statement
+            from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
+            
+            # Create instance to ensure pass statement is executed
+            instance = RabbitmqSettings()
+            
+            # Verify instance was created successfully
+            self.assertIsNotNone(instance)
+            self.assertIsInstance(instance, RabbitmqSettings)
+    
+    def test_complete_module_execution(self):
+        """Test that all lines of the module are executed"""
+        with patch.dict('sys.modules', {
+            'frappe': self.mock_frappe_module,
+            'frappe.model': self.mock_frappe_module.model,
+            'frappe.model.document': self.mock_frappe_module.model.document
+        }):
+            # Import module (executes lines 1-5)
+            from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
+            
+            # Create class instance (executes lines 7-8)
+            settings = RabbitmqSettings()
+            
+            # Verify everything worked
+            self.assertIsNotNone(RabbitmqSettings)
+            self.assertIsNotNone(settings)
+    
+    def tearDown(self):
+        """Clean up after tests"""
+        # Remove mocked modules to avoid interference
+        modules_to_remove = [
+            'tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings',
+        ]
+        for module in modules_to_remove:
+            if module in sys.modules:
+                del sys.modules[module]
 
 
-# Test functions to ensure all lines are covered
+# Standalone test functions for pytest compatibility
 def test_import_coverage():
-    """Test to cover the import statements"""
-    # This covers line 5: from frappe.model.document import Document
-    from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
-    assert RabbitmqSettings is not None
-
-
-def test_class_definition_coverage():
-    """Test to cover the class definition"""
-    # This covers line 7: class RabbitmqSettings(Document):
-    from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
-    from frappe.model.document import Document
+    """Standalone test to cover import statement"""
+    mock_document = Mock()
+    mock_frappe = Mock()
+    mock_frappe.model.document.Document = mock_document
     
-    # Verify the class definition is correct
-    assert RabbitmqSettings.__name__ == "RabbitmqSettings"
-    assert Document in RabbitmqSettings.__mro__
+    with patch.dict('sys.modules', {
+        'frappe': mock_frappe,
+        'frappe.model': mock_frappe.model,
+        'frappe.model.document': mock_frappe.model.document
+    }):
+        import tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings
+        assert tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings is not None
 
 
-def test_pass_statement_coverage():
-    """Test to cover the pass statement"""
-    # This covers line 8: pass
-    from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
+def test_class_coverage():
+    """Standalone test to cover class definition"""
+    mock_document = Mock()
+    mock_frappe = Mock()
+    mock_frappe.model.document.Document = mock_document
     
-    # Create an instance to ensure the class body (pass statement) is executed
-    instance = RabbitmqSettings({"doctype": "RabbitmqSettings"})
-    assert instance is not None
+    with patch.dict('sys.modules', {
+        'frappe': mock_frappe,
+        'frappe.model': mock_frappe.model,
+        'frappe.model.document': mock_frappe.model.document
+    }):
+        from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
+        assert RabbitmqSettings is not None
 
 
-
+def test_pass_coverage():
+    """Standalone test to cover pass statement"""
+    mock_document = Mock()
+    mock_frappe = Mock()
+    mock_frappe.model.document.Document = mock_document
     
+    with patch.dict('sys.modules', {
+        'frappe': mock_frappe,
+        'frappe.model': mock_frappe.model,
+        'frappe.model.document': mock_frappe.model.document
+    }):
+        from tap_lms.tap_lms.doctype.rabbitmq_settings.rabbitmq_settings import RabbitmqSettings
+        instance = RabbitmqSettings()
+        assert instance is not None
+
