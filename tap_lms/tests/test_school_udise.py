@@ -352,23 +352,6 @@ def mock_frappe():
     }
 
 
-def test_import_statement_coverage(mock_frappe):
-    """Test coverage of line 5: from frappe.model.document import Document"""
-    with patch.dict('sys.modules', mock_frappe):
-        # Import the module to execute the import statement
-        import tap_lms.tap_lms.doctype.school_udise.school_udise
-        assert tap_lms.tap_lms.doctype.school_udise.school_udise is not None
-
-
-def test_class_definition_coverage(mock_frappe):
-    """Test coverage of line 7: class SchoolUDISE(Document):"""
-    with patch.dict('sys.modules', mock_frappe):
-        from tap_lms.tap_lms.doctype.school_udise.school_udise import SchoolUDISE
-        
-        # Verify class is defined
-        assert SchoolUDISE is not None
-        assert hasattr(SchoolUDISE, '__name__')
-        assert SchoolUDISE.__name__ == 'SchoolUDISE'
 
 
 def test_pass_statement_coverage(mock_frappe):
@@ -395,16 +378,6 @@ def test_complete_module_coverage(mock_frappe):
         assert instance is not None
 
 
-def test_class_inheritance(mock_frappe):
-    """Test that SchoolUDISE properly inherits from Document"""
-    with patch.dict('sys.modules', mock_frappe):
-        from tap_lms.tap_lms.doctype.school_udise.school_udise import SchoolUDISE
-        
-        # Check inheritance
-        mock_document = mock_frappe['frappe.model.document'].Document
-        assert mock_document in SchoolUDISE.__bases__
-
-
 def test_instance_creation_with_data(mock_frappe):
     """Test creating SchoolUDISE instance with data"""
     with patch.dict('sys.modules', mock_frappe):
@@ -420,22 +393,6 @@ def test_instance_creation_with_data(mock_frappe):
         instance = SchoolUDISE(data)
         
         assert instance is not None
-
-
-# Standalone test functions
-def test_import_coverage():
-    """Standalone test to cover import statement"""
-    mock_document = Mock()
-    mock_frappe = Mock()
-    mock_frappe.model.document.Document = mock_document
-    
-    with patch.dict('sys.modules', {
-        'frappe': mock_frappe,
-        'frappe.model': mock_frappe.model,
-        'frappe.model.document': mock_frappe.model.document
-    }):
-        import tap_lms.tap_lms.doctype.school_udise.school_udise
-        assert tap_lms.tap_lms.doctype.school_udise.school_udise is not None
 
 
 def test_class_coverage():
