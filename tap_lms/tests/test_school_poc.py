@@ -129,8 +129,31 @@
 
 import unittest
 import frappe
-from frappe.tests.utils import FrappeTestCase
-from tap_lms.tap_lms.doctype.school_poc.school_poc import School_POC
+import sys
+import os
+
+# Add the app path to Python path
+app_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if app_path not in sys.path:
+    sys.path.insert(0, app_path)
+
+# Try different import approaches for Frappe testing
+try:
+    from frappe.tests.utils import FrappeTestCase
+except ImportError:
+    try:
+        import frappe.test_runner
+        FrappeTestCase = unittest.TestCase
+    except ImportError:
+        FrappeTestCase = unittest.TestCase
+
+# Import the class we're testing
+try:
+    from tap_lms.tap_lms.doctype.school_poc.school_poc import School_POC
+except ImportError:
+    # Alternative import path
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'doctype', 'school_poc'))
+    from school_poc import School_POC
 
 
 class TestSchoolPOC(FrappeTestCase):
@@ -138,15 +161,28 @@ class TestSchoolPOC(FrappeTestCase):
     
     def setUp(self):
         """Set up test data before each test"""
+        # Initialize Frappe if not already done
+        if not hasattr(frappe.local, 'site'):
+            frappe.init_site()
+        
+        # Set user context
+        frappe.set_user("Administrator")
+        
         # Clean up any existing test documents
-        frappe.db.delete("School POC", {"name": ["like", "TEST-%"]})
-        frappe.db.commit()
+        try:
+            frappe.db.delete("School POC", {"name": ["like", "TEST-%"]})
+            frappe.db.commit()
+        except Exception:
+            pass  # Table might not exist yet
     
     def tearDown(self):
         """Clean up after each test"""
-        # Remove test documents
-        frappe.db.delete("School POC", {"name": ["like", "TEST-%"]})
-        frappe.db.commit()
+        try:
+            # Remove test documents
+            frappe.db.delete("School POC", {"name": ["like", "TEST-%"]})
+            frappe.db.commit()
+        except Exception:
+            pass
     
     def test_school_poc_creation(self):
         """Test basic School_POC document creation - covers import and class definition"""
