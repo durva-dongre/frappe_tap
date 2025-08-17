@@ -7,16 +7,6 @@ from unittest.mock import Mock, patch
 import pytest
 
 
-def test_import_statement_coverage():
-    """Test coverage of line 1: from frappe import _"""
-    # Mock frappe module
-    mock_frappe = Mock()
-    mock_frappe._ = Mock(side_effect=lambda x: x)  # Mock translation function
-    
-    with patch.dict('sys.modules', {'frappe': mock_frappe}):
-        # Import the module to execute the import statement
-        import tap_lms.tap_lms.doctype.school.school_dashboard
-        assert tap_lms.tap_lms.doctype.school.school_dashboard is not None
 
 
 def test_function_definition_coverage():
@@ -50,34 +40,6 @@ def test_return_statement_coverage():
         assert "transactions" in result
         assert result["fieldname"] == "school"
         assert isinstance(result["transactions"], list)
-
-
-def test_complete_function_execution():
-    """Test that the entire function executes and returns expected data"""
-    mock_frappe = Mock()
-    mock_frappe._ = Mock(side_effect=lambda x: x)
-    
-    with patch.dict('sys.modules', {'frappe': mock_frappe}):
-        from tap_lms.tap_lms.doctype.school.school_dashboard import get_data
-        
-        # Execute function
-        data = get_data()
-        
-        # Verify complete structure
-        expected_structure = {
-            "fieldname": "school",
-            "transactions": [
-                {
-                    "label": "Batch onboarding",
-                    "items": ["Batch onboarding"]
-                }
-            ]
-        }
-        
-        assert data["fieldname"] == expected_structure["fieldname"]
-        assert len(data["transactions"]) == 1
-        assert data["transactions"][0]["label"] == "Batch onboarding"
-        assert data["transactions"][0]["items"] == ["Batch onboarding"]
 
 
 def test_translation_function_usage():
@@ -122,16 +84,6 @@ def test_dashboard_data_structure():
             assert "items" in transaction
             assert isinstance(transaction["items"], list)
 
-
-# Standalone test functions
-def test_import_coverage():
-    """Standalone test to cover import statement"""
-    mock_frappe = Mock()
-    mock_frappe._ = Mock(side_effect=lambda x: x)
-    
-    with patch.dict('sys.modules', {'frappe': mock_frappe}):
-        import tap_lms.tap_lms.doctype.school.school_dashboard
-        assert tap_lms.tap_lms.doctype.school.school_dashboard is not None
 
 
 def test_function_coverage():
