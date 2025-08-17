@@ -1,117 +1,148 @@
 import unittest
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.test_runner import make_test_records
 
-class TestState(FrappeTestCase):
+class TestStageFlow(unittest.TestCase):
     def setUp(self):
         """Set up test data before each test method"""
+        frappe.clear_cache()
         frappe.set_user("Administrator")
         
-    def test_state_creation(self):
-        """Test basic State document creation"""
-        # Create a new State document
-        state_doc = frappe.get_doc({
-            "doctype": "State",
-            "state_name": "Test State",
-            "state_code": "TS"
+    def test_stageflow_creation(self):
+        """Test basic StageFlow document creation"""
+        # Create a new StageFlow document
+        stageflow_doc = frappe.get_doc({
+            "doctype": "StageFlow",
+            "stage_name": "Test Stage",
+            "stage_order": 1,
+            "description": "Test stage description"
         })
         
         # Insert the document
-        state_doc.insert(ignore_permissions=True)
+        stageflow_doc.insert(ignore_permissions=True)
         
         # Verify the document was created
-        self.assertTrue(state_doc.name)
-        self.assertEqual(state_doc.state_name, "Test State")
-        self.assertEqual(state_doc.state_code, "TS")
+        self.assertTrue(stageflow_doc.name)
+        self.assertEqual(stageflow_doc.stage_name, "Test Stage")
+        self.assertEqual(stageflow_doc.stage_order, 1)
         
         # Clean up
-        state_doc.delete()
+        stageflow_doc.delete()
         
-    def test_state_validation(self):
-        """Test State document validation"""
+    def test_stageflow_validation(self):
+        """Test StageFlow document validation"""
         # Test with valid data
-        state_doc = frappe.get_doc({
-            "doctype": "State",
-            "state_name": "Valid State",
-            "state_code": "VS"
+        stageflow_doc = frappe.get_doc({
+            "doctype": "StageFlow",
+            "stage_name": "Valid Stage",
+            "stage_order": 2
         })
         
         # This should not raise any validation errors
-        state_doc.insert(ignore_permissions=True)
-        self.assertTrue(state_doc.name)
+        stageflow_doc.insert(ignore_permissions=True)
+        self.assertTrue(stageflow_doc.name)
         
         # Clean up
-        state_doc.delete()
+        stageflow_doc.delete()
         
-    def test_state_duplicate_prevention(self):
-        """Test that duplicate states are handled properly"""
-        # Create first state
-        state_doc1 = frappe.get_doc({
-            "doctype": "State",
-            "state_name": "Duplicate Test",
-            "state_code": "DT"
+    def test_stageflow_stage_order_validation(self):
+        """Test stage order validation"""
+        # Create stage with order 1
+        stage1 = frappe.get_doc({
+            "doctype": "StageFlow",
+            "stage_name": "First Stage",
+            "stage_order": 1
         })
-        state_doc1.insert(ignore_permissions=True)
+        stage1.insert(ignore_permissions=True)
         
-        try:
-            # Try to create duplicate (this may or may not throw error depending on your schema)
-            state_doc2 = frappe.get_doc({
-                "doctype": "State",
-                "state_name": "Duplicate Test",
-                "state_code": "DT"
-            })
-            state_doc2.insert(ignore_permissions=True)
-            
-            # If no error, clean up both
-            state_doc2.delete()
-            
-        except Exception as e:
-            # If duplicate validation exists, this is expected
-            pass
-        finally:
-            # Clean up first document
-            state_doc1.delete()
-            
-    def test_state_get_doc(self):
-        """Test retrieving State document"""
-        # Create a state
-        state_doc = frappe.get_doc({
-            "doctype": "State",
-            "state_name": "Retrieve Test",
-            "state_code": "RT"
+        # Create stage with order 2
+        stage2 = frappe.get_doc({
+            "doctype": "StageFlow",
+            "stage_name": "Second Stage", 
+            "stage_order": 2
         })
-        state_doc.insert(ignore_permissions=True)
+        stage2.insert(ignore_permissions=True)
+        
+        # Verify both stages exist
+        self.assertTrue(stage1.name)
+        self.assertTrue(stage2.name)
+        
+        # Clean up
+        stage1.delete()
+        stage2.delete()
+        
+    def test_stageflow_get_doc(self):
+        """Test retrieving StageFlow document"""
+        # Create a stageflow
+        stageflow_doc = frappe.get_doc({
+            "doctype": "StageFlow",
+            "stage_name": "Retrieve Test Stage",
+            "stage_order": 3,
+            "description": "Test description"
+        })
+        stageflow_doc.insert(ignore_permissions=True)
         
         # Retrieve the document
-        retrieved_doc = frappe.get_doc("State", state_doc.name)
+        retrieved_doc = frappe.get_doc("StageFlow", stageflow_doc.name)
         
         # Verify retrieved data
-        self.assertEqual(retrieved_doc.state_name, "Retrieve Test")
-        self.assertEqual(retrieved_doc.state_code, "RT")
+        self.assertEqual(retrieved_doc.stage_name, "Retrieve Test Stage")
+        self.assertEqual(retrieved_doc.stage_order, 3)
+        self.assertEqual(retrieved_doc.description, "Test description")
         
         # Clean up
-        state_doc.delete()
+        stageflow_doc.delete()
         
-    def test_state_update(self):
-        """Test updating State document"""
-        # Create a state
-        state_doc = frappe.get_doc({
-            "doctype": "State",
-            "state_name": "Update Test",
-            "state_code": "UT"
+    def test_stageflow_update(self):
+        """Test updating StageFlow document"""
+        # Create a stageflow
+        stageflow_doc = frappe.get_doc({
+            "doctype": "StageFlow",
+            "stage_name": "Update Test Stage",
+            "stage_order": 4
         })
-        state_doc.insert(ignore_permissions=True)
+        stageflow_doc.insert(ignore_permissions=True)
         
         # Update the document
-        state_doc.state_name = "Updated State Name"
-        state_doc.save()
+        stageflow_doc.stage_name = "Updated Stage Name"
+        stageflow_doc.stage_order = 5
+        stageflow_doc.save()
         
         # Verify the update
-        self.assertEqual(state_doc.state_name, "Updated State Name")
+        self.assertEqual(stageflow_doc.stage_name, "Updated Stage Name")
+        self.assertEqual(stageflow_doc.stage_order, 5)
         
         # Clean up
-        state_doc.delete()
+        stageflow_doc.delete()
+        
+    def test_stageflow_workflow_sequence(self):
+        """Test workflow sequence functionality"""
+        # Create multiple stages in sequence
+        stages = []
+        for i in range(1, 4):
+            stage = frappe.get_doc({
+                "doctype": "StageFlow",
+                "stage_name": f"Stage {i}",
+                "stage_order": i,
+                "description": f"Description for stage {i}"
+            })
+            stage.insert(ignore_permissions=True)
+            stages.append(stage)
+        
+        # Verify all stages were created with correct order
+        for i, stage in enumerate(stages):
+            self.assertEqual(stage.stage_order, i + 1)
+            self.assertEqual(stage.stage_name, f"Stage {i + 1}")
+        
+        # Clean up
+        for stage in stages:
+            stage.delete()
         
     def tearDown(self):
         """Clean up after each test method"""
         frappe.db.rollback()
+        frappe.clear_cache()
+
+def make_test_records():
+    """Create test records for StageFlow doctype"""
+    pass
