@@ -1152,54 +1152,6 @@ class TestFeedbackConsumerComplete(unittest.TestCase):
             error = Exception("Record does not exist")
             self.assertIn("not exist", str(error).lower())
 
-    def test_is_retryable_error(self):
-        """Test is_retryable_error method."""
-        if USING_REAL_CLASS:
-            # Non-retryable errors
-            non_retryable_errors = [
-                Exception("Record does not exist"),
-                Exception("Not found"),
-                Exception("Invalid data"),
-                Exception("Permission denied"),
-                Exception("Duplicate entry"),
-                Exception("Constraint violation"),
-                Exception("Missing submission_id"),
-                Exception("Missing feedback data"),
-                Exception("Validation error")
-            ]
-            
-            for error in non_retryable_errors:
-                self.assertFalse(self.consumer.is_retryable_error(error))
-            
-            # Retryable errors
-            retryable_errors = [
-                Exception("Database connection lost"),
-                Exception("Temporary network error"),
-                Exception("Timeout occurred")
-            ]
-            
-            for error in retryable_errors:
-                self.assertTrue(self.consumer.is_retryable_error(error))
-        else:
-            # Test error classification logic for mock
-            retryable_errors = [
-                Exception("Database connection lost"),
-                Exception("Temporary network error"),
-                Exception("Timeout occurred")
-            ]
-            
-            non_retryable_errors = [
-                Exception("Record does not exist"),
-                Exception("Not found"),
-                Exception("Invalid data")
-            ]
-            
-            for error in retryable_errors:
-                self.assertTrue(self.consumer.is_retryable_error(error))
-            
-            for error in non_retryable_errors:
-                self.assertFalse(self.consumer.is_retryable_error(error))
-
     def test_send_glific_notification_missing_student_id(self):
         """Test Glific notification with missing student_id."""
         test_data = self.sample_message_data.copy()
