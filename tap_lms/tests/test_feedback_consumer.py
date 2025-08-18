@@ -1,4 +1,4 @@
-# test_feedback_consumer.py - FINAL VERSION FOR 100% COVERAGE
+# test_feedback_consumer.py - COMPLETE WORKING VERSION
 
 import unittest
 import sys
@@ -109,6 +109,146 @@ class TestFeedbackConsumer(unittest.TestCase):
         with self.assertRaises(Exception):
             self.consumer.setup_rabbitmq()
 
+    def test_get_queue_stats_no_channel(self):
+        """Test get_queue_stats when channel is None."""
+        self.consumer.channel = None
+        
+        with patch.object(self.consumer, 'setup_rabbitmq') as mock_setup:
+            mock_channel = Mock()
+            main_queue_response = Mock()
+            main_queue_response.method.message_count = 3
+            dl_queue_response = Mock()
+            dl_queue_response.method.message_count = 1
+            mock_channel.queue_declare.side_effect = [main_queue_response, dl_queue_response]
+            
+            self.consumer.channel = mock_channel
+            self.consumer.settings = self.mock_settings
+            
+            stats = self.consumer.get_queue_stats()
+            
+            mock_setup.assert_called_once()
+            self.assertEqual(stats["main_queue"], 3)
+            self.assertEqual(stats["dead_letter_queue"], 1)
+
+    @patch('frappe.get_doc')
+    @patch('frappe.logger')
+    def test_mark_submission_failed_success(self, mock_logger, mock_get_doc):
+        """Test successful mark_submission_failed."""
+        mock_submission = Mock()
+        mock_get_doc.return_value = mock_submission
+        
+        self.consumer.mark_submission_failed("test_123", "Test error")
+        
+        self.assertEqual(mock_submission.status, "Failed")
+        mock_submission.save.assert_called_once_with(ignore_permissions=True)
+
+    @patch('frappe.get_doc')
+    @patch('frappe.logger')
+    def test_mark_submission_failed_with_error_field(self, mock_logger, mock_get_doc):
+        """Test mark_submission_failed with error_message field."""
+        mock_submission = Mock()
+        # Mock the submission to have an error_message attribute
+        type(mock_submission).error_message = Mock()
+        mock_get_doc.return_value = mock_submission
+        
+        # Use a long error message to test truncation
+        long_error = "a" * 600
+        
+        self.consumer.mark_submission_failed("test_123", long_error)
+        
+        self.assertEqual(mock_submission.status, "Failed")
+        # The error message should be truncated to 500 characters
+        self.assertEqual(len(mock_submission.error_message), 500)
+
+    @patch('frappe.db')
+    @patch('frappe.logger')
+    @patch('frappe.db.exists')
+    def test_process_message_glific_failure(self, mock_exists, mock_logger, mock_db):
+        """Test message processing with Glific notification failure."""
+        mock_ch = Mock()
+        mock_method = Mock()
+        mock_method.delivery_tag = "test_tag"
+        mock_properties = Mock()
+        body = json.dumps(self.sample_message_data).encode('utf-8')
+        
+        mock_exists.return_value = True
+        
+        with patch.object(self.consumer, 'update_submission') as mock_update, \
+             patch.object(self.consumer, 'send_glific_notification') as mock_glific:
+            
+            mock_glific.side_effect = Exception("Glific error")
+            
+            self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
+            
+            # Should still commit and ack despite Glific failure
+            mock_db.commit.assert_called_once()
+            mock_ch.basic_ack.assert_called_once_with(delivery_tag="test_tag")
+
+    @patch('frappe.db')
+    @patch('frappe.logger')
+    @patch('frappe.db.exists')
+    def test_process_message_non_retryable_error(self, mock_exists, mock_logger, mock_db):
+        """Test message processing with non-retryable error."""
+        mock_ch = Mock()
+        mock_method = Mock()
+        mock_method.delivery_tag = "test_tag"
+        mock_properties = Mock()
+        body = json.dumps(self.sample_message_data).encode('utf-8')
+        
+        mock_exists.return_value = True
+        
+        with patch.object(self.consumer, 'update_submission') as mock_update, \
+             patch.object(self.consumer, 'is_retryable_error', return_value=False), \
+             patch.object(self.consumer, 'mark_submission_failed') as mock_mark_failed:
+            
+            mock_update.side_effect = Exception("Validation error")
+            
+            self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
+            
+            mock_db.rollback.assert_called()
+            mock_mark_failed.assert_called_once()
+            mock_ch.basic_reject.assert_called_once_with(delivery_tag="test_tag", requeue=False)
+
+    @patch('frappe.db')
+    @patch('frappe.logger')
+    @patch('frappe.db.exists')
+    def test_process_message_retryable_error(self, mock_exists, mock_logger, mock_db):
+        """Test message processing with retryable error."""
+        mock_ch = Mock()
+        mock_method = Mock()
+        mock_method.delivery_tag = "test_tag"
+        mock_properties = Mock()
+        body = json.dumps(self.sample_message_data).encode('utf-8')
+        
+        mock_exists.return_value = True
+        
+        with patch.object(self.consumer, 'update_submission') as mock_update, \
+             patch.object(self.consumer, 'is_retryable_error', return_value=True):
+            
+            mock_update.side_effect = Exception("Database lock error")
+            
+            self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
+            
+            mock_db.rollback.assert_called_once()
+            mock_ch.basic_nack.assert_called_once_with(delivery_tag="test_tag", requeue=True)
+
+    @patch('frappe.db')
+    @patch('frappe.logger')
+    @patch('frappe.db.exists')
+    def test_process_message_submission_not_found(self, mock_exists, mock_logger, mock_db):
+        """Test message processing when submission doesn't exist."""
+        mock_ch = Mock()
+        mock_method = Mock()
+        mock_method.delivery_tag = "test_tag"
+        mock_properties = Mock()
+        body = json.dumps(self.sample_message_data).encode('utf-8')
+        
+        mock_exists.return_value = False
+        
+        self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
+        
+        mock_ch.basic_reject.assert_called_once_with(delivery_tag="test_tag", requeue=False)
+
     @patch('frappe.db')
     @patch('frappe.logger')
     @patch('frappe.db.exists')
@@ -133,67 +273,40 @@ class TestFeedbackConsumer(unittest.TestCase):
             mock_db.commit.assert_called_once()
             mock_ch.basic_ack.assert_called_once_with(delivery_tag="test_tag")
 
-    @patch('frappe.db')
+    @patch('frappe.get_value')
     @patch('frappe.logger')
-    def test_cleanup_exception(self, mock_logger, mock_db):
-        """Test cleanup with exception."""
-        mock_channel = Mock()
-        mock_channel.is_closed = False
-        mock_channel.close.side_effect = Exception("Close error")
+    def test_send_glific_notification_flow_failure(self, mock_logger, mock_get_value):
+        """Test Glific notification with flow start failure."""
+        mock_get_value.return_value = "test_flow_id"
         
-        self.consumer.channel = mock_channel
-        self.consumer.connection = None
-        
-        # This should not raise an exception
-        self.consumer.cleanup()
+        with patch('tap_lms.feedback_consumer.feedback_consumer.start_contact_flow', return_value=False):
+            self.consumer.send_glific_notification(self.sample_message_data)
 
-    @patch('frappe.db')
+    @patch('frappe.get_value')
     @patch('frappe.logger')
-    def test_cleanup_success(self, mock_logger, mock_db):
-        """Test successful cleanup."""
-        mock_channel = Mock()
-        mock_channel.is_closed = False
-        mock_connection = Mock()
-        mock_connection.is_closed = False
+    def test_send_glific_notification_missing_feedback(self, mock_logger, mock_get_value):
+        """Test Glific notification with missing overall_feedback."""
+        test_data = self.sample_message_data.copy()
+        test_data["feedback"] = {}
         
-        self.consumer.channel = mock_channel
-        self.consumer.connection = mock_connection
-        
-        self.consumer.cleanup()
-        
-        mock_channel.close.assert_called_once()
-        mock_connection.close.assert_called_once()
+        self.consumer.send_glific_notification(test_data)
 
-    @patch('frappe.get_doc')
+    @patch('frappe.get_value')
     @patch('frappe.logger')
-    def test_mark_submission_failed_success(self, mock_logger, mock_get_doc):
-        """Test successful mark_submission_failed."""
-        mock_submission = Mock()
-        mock_get_doc.return_value = mock_submission
+    def test_send_glific_notification_missing_student_id(self, mock_logger, mock_get_value):
+        """Test Glific notification with missing student_id."""
+        test_data = self.sample_message_data.copy()
+        del test_data["student_id"]
         
-        self.consumer.mark_submission_failed("test_123", "Test error")
-        
-        self.assertEqual(mock_submission.status, "Failed")
-        mock_submission.save.assert_called_once_with(ignore_permissions=True)
+        self.consumer.send_glific_notification(test_data)
 
-    @patch('frappe.get_doc')
+    @patch('frappe.get_value')
     @patch('frappe.logger')
-    def test_mark_submission_failed_with_error_field(self, mock_logger, mock_get_doc):
-        """Test mark_submission_failed with error_message field."""
-        mock_submission = Mock()
-        # Mock hasattr to return True for error_message
-        mock_submission.error_message = ""
-        mock_get_doc.return_value = mock_submission
+    def test_send_glific_notification_no_flow_id(self, mock_logger, mock_get_value):
+        """Test Glific notification with no flow ID configured."""
+        mock_get_value.return_value = None
         
-        # Use a long error message to test truncation
-        long_error = "a" * 600
-        
-        with patch('builtins.hasattr', return_value=True):
-            self.consumer.mark_submission_failed("test_123", long_error)
-        
-        self.assertEqual(mock_submission.status, "Failed")
-        # Should be truncated to 500 characters
-        self.assertEqual(len(mock_submission.error_message), 500)
+        self.consumer.send_glific_notification(self.sample_message_data)
 
     @patch('frappe.get_value')
     @patch('frappe.logger')
@@ -206,16 +319,21 @@ class TestFeedbackConsumer(unittest.TestCase):
             self.consumer.send_glific_notification(self.sample_message_data)
 
     @patch('frappe.logger')
-    def test_setup_rabbitmq_connection_failure_detailed(self, mock_logger):
-        """Test detailed RabbitMQ setup connection failure."""
-        with patch('frappe.get_single') as mock_get_single, \
-             patch('pika.BlockingConnection') as mock_connection:
+    def test_start_consuming_with_setup(self, mock_logger):
+        """Test start_consuming when channel is None."""
+        self.consumer.channel = None
+        
+        with patch.object(self.consumer, 'setup_rabbitmq') as mock_setup:
+            mock_channel = Mock()
+            mock_channel.start_consuming.side_effect = KeyboardInterrupt()
+            self.consumer.channel = mock_channel
+            self.consumer.settings = self.mock_settings
             
-            mock_get_single.return_value = self.mock_settings
-            mock_connection.side_effect = Exception("Connection failed")
-            
-            with self.assertRaises(Exception):
-                self.consumer.setup_rabbitmq()
+            with patch.object(self.consumer, 'stop_consuming'), \
+                 patch.object(self.consumer, 'cleanup'):
+                
+                self.consumer.start_consuming()
+                mock_setup.assert_called_once()
 
     @patch('frappe.logger')
     def test_stop_consuming_exception(self, mock_logger):
@@ -241,6 +359,45 @@ class TestFeedbackConsumer(unittest.TestCase):
 
     @patch('frappe.get_doc')
     @patch('frappe.logger')
+    def test_update_submission_exception(self, mock_logger, mock_get_doc):
+        """Test submission update with exception."""
+        mock_get_doc.side_effect = Exception("Database error")
+        
+        with self.assertRaises(Exception):
+            self.consumer.update_submission(self.sample_message_data)
+
+    @patch('frappe.get_doc')
+    @patch('frappe.logger')
+    def test_update_submission_invalid_grade(self, mock_logger, mock_get_doc):
+        """Test submission update with invalid grade."""
+        mock_submission = Mock()
+        mock_get_doc.return_value = mock_submission
+        
+        test_data = self.sample_message_data.copy()
+        test_data["feedback"]["grade_recommendation"] = "invalid_grade"
+        
+        self.consumer.update_submission(test_data)
+        
+        mock_submission.update.assert_called_once()
+        mock_submission.save.assert_called_once_with(ignore_permissions=True)
+
+    @patch('frappe.get_doc')
+    @patch('frappe.logger')
+    def test_update_submission_numeric_grade(self, mock_logger, mock_get_doc):
+        """Test submission update with numeric grade."""
+        mock_submission = Mock()
+        mock_get_doc.return_value = mock_submission
+        
+        test_data = self.sample_message_data.copy()
+        test_data["feedback"]["grade_recommendation"] = 85.5
+        
+        self.consumer.update_submission(test_data)
+        
+        mock_submission.update.assert_called_once()
+        mock_submission.save.assert_called_once_with(ignore_permissions=True)
+
+    @patch('frappe.get_doc')
+    @patch('frappe.logger')
     def test_update_submission_success(self, mock_logger, mock_get_doc):
         """Test successful submission update."""
         mock_submission = Mock()
@@ -250,6 +407,24 @@ class TestFeedbackConsumer(unittest.TestCase):
         
         mock_submission.update.assert_called_once()
         mock_submission.save.assert_called_once_with(ignore_permissions=True)
+
+    @patch('frappe.get_doc')
+    @patch('frappe.logger')
+    def test_update_submission_with_string_grade(self, mock_logger, mock_get_doc):
+        """Test submission update with string grade that needs cleaning."""
+        mock_submission = Mock()
+        mock_get_doc.return_value = mock_submission
+        
+        # Test with grade that has non-numeric characters
+        test_data = self.sample_message_data.copy()
+        test_data["feedback"]["grade_recommendation"] = "85.5%"
+        
+        self.consumer.update_submission(test_data)
+        
+        mock_submission.update.assert_called_once()
+        mock_submission.save.assert_called_once_with(ignore_permissions=True)
+
+    # Additional tests to cover missing branches and edge cases
 
     def test_is_retryable_error(self):
         """Test is_retryable_error method."""
@@ -295,16 +470,15 @@ class TestFeedbackConsumer(unittest.TestCase):
 
     @patch('frappe.db')
     @patch('frappe.logger')
-    @patch('frappe.db.exists')
-    def test_process_message_submission_not_found(self, mock_exists, mock_logger, mock_db):
-        """Test message processing when submission doesn't exist."""
+    def test_process_message_missing_submission_id(self, mock_logger, mock_db):
+        """Test message processing with missing submission_id."""
         mock_ch = Mock()
         mock_method = Mock()
         mock_method.delivery_tag = "test_tag"
         mock_properties = Mock()
-        body = json.dumps(self.sample_message_data).encode('utf-8')
         
-        mock_exists.return_value = False
+        invalid_data = {"feedback": "test"}
+        body = json.dumps(invalid_data).encode('utf-8')
         
         self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
         
@@ -312,151 +486,75 @@ class TestFeedbackConsumer(unittest.TestCase):
 
     @patch('frappe.db')
     @patch('frappe.logger')
-    @patch('frappe.db.exists')
-    def test_process_message_retryable_error(self, mock_exists, mock_logger, mock_db):
-        """Test message processing with retryable error."""
+    def test_process_message_missing_feedback(self, mock_logger, mock_db):
+        """Test message processing with missing feedback."""
         mock_ch = Mock()
         mock_method = Mock()
         mock_method.delivery_tag = "test_tag"
         mock_properties = Mock()
-        body = json.dumps(self.sample_message_data).encode('utf-8')
         
-        mock_exists.return_value = True
+        invalid_data = {"submission_id": "test_123"}
+        body = json.dumps(invalid_data).encode('utf-8')
         
-        with patch.object(self.consumer, 'update_submission') as mock_update, \
-             patch.object(self.consumer, 'is_retryable_error', return_value=True):
-            
-            mock_update.side_effect = Exception("Database lock error")
-            
-            self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
-            
-            mock_db.rollback.assert_called_once()
-            mock_ch.basic_nack.assert_called_once_with(delivery_tag="test_tag", requeue=True)
-
-    @patch('frappe.db')
-    @patch('frappe.logger')
-    @patch('frappe.db.exists')
-    def test_process_message_non_retryable_error(self, mock_logger, mock_exists, mock_db):
-        """Test message processing with non-retryable error."""
-        mock_ch = Mock()
-        mock_method = Mock()
-        mock_method.delivery_tag = "test_tag"
-        mock_properties = Mock()
-        body = json.dumps(self.sample_message_data).encode('utf-8')
+        self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
         
-        mock_exists.return_value = True
-        
-        with patch.object(self.consumer, 'update_submission') as mock_update, \
-             patch.object(self.consumer, 'is_retryable_error', return_value=False), \
-             patch.object(self.consumer, 'mark_submission_failed') as mock_mark_failed:
-            
-            mock_update.side_effect = Exception("Validation error")
-            
-            self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
-            
-            mock_db.rollback.assert_called()
-            mock_mark_failed.assert_called_once()
-            mock_ch.basic_reject.assert_called_once_with(delivery_tag="test_tag", requeue=False)
-
-    @patch('frappe.db')
-    @patch('frappe.logger')
-    @patch('frappe.db.exists')
-    def test_process_message_glific_failure(self, mock_exists, mock_logger, mock_db):
-        """Test message processing with Glific notification failure."""
-        mock_ch = Mock()
-        mock_method = Mock()
-        mock_method.delivery_tag = "test_tag"
-        mock_properties = Mock()
-        body = json.dumps(self.sample_message_data).encode('utf-8')
-        
-        mock_exists.return_value = True
-        
-        with patch.object(self.consumer, 'update_submission') as mock_update, \
-             patch.object(self.consumer, 'send_glific_notification') as mock_glific:
-            
-            mock_glific.side_effect = Exception("Glific error")
-            
-            self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
-            
-            # Should still commit and ack despite Glific failure
-            mock_db.commit.assert_called_once()
-            mock_ch.basic_ack.assert_called_once_with(delivery_tag="test_tag")
-
-    @patch('frappe.get_value')
-    @patch('frappe.logger')
-    def test_send_glific_notification_missing_student_id(self, mock_logger, mock_get_value):
-        """Test Glific notification with missing student_id."""
-        test_data = self.sample_message_data.copy()
-        del test_data["student_id"]
-        
-        self.consumer.send_glific_notification(test_data)
-
-    @patch('frappe.get_value')
-    @patch('frappe.logger')
-    def test_send_glific_notification_missing_feedback(self, mock_logger, mock_get_value):
-        """Test Glific notification with missing overall_feedback."""
-        test_data = self.sample_message_data.copy()
-        test_data["feedback"] = {}
-        
-        self.consumer.send_glific_notification(test_data)
-
-    @patch('frappe.get_value')
-    @patch('frappe.logger')
-    def test_send_glific_notification_no_flow_id(self, mock_logger, mock_get_value):
-        """Test Glific notification with no flow ID configured."""
-        mock_get_value.return_value = None
-        
-        self.consumer.send_glific_notification(self.sample_message_data)
-
-    @patch('frappe.get_value')
-    @patch('frappe.logger')
-    def test_send_glific_notification_flow_failure(self, mock_logger, mock_get_value):
-        """Test Glific notification with flow start failure."""
-        mock_get_value.return_value = "test_flow_id"
-        
-        with patch('tap_lms.feedback_consumer.feedback_consumer.start_contact_flow', return_value=False):
-            self.consumer.send_glific_notification(self.sample_message_data)
-
-    @patch('frappe.get_value')
-    @patch('frappe.logger')
-    def test_send_glific_notification_exception(self, mock_logger, mock_get_value):
-        """Test Glific notification with exception."""
-        mock_get_value.side_effect = Exception("Glific error")
-        
-        with self.assertRaises(Exception):
-            self.consumer.send_glific_notification(self.sample_message_data)
+        mock_ch.basic_reject.assert_called_once_with(delivery_tag="test_tag", requeue=False)
 
     @patch('frappe.logger')
-    def test_start_consuming_with_setup(self, mock_logger):
-        """Test start_consuming when channel is None."""
-        self.consumer.channel = None
-        
-        with patch.object(self.consumer, 'setup_rabbitmq') as mock_setup:
-            mock_channel = Mock()
-            mock_channel.start_consuming.side_effect = KeyboardInterrupt()
-            self.consumer.channel = mock_channel
-            self.consumer.settings = self.mock_settings
-            
-            with patch.object(self.consumer, 'stop_consuming'), \
-                 patch.object(self.consumer, 'cleanup'):
-                
-                self.consumer.start_consuming()
-                mock_setup.assert_called_once()
-
-    @patch('frappe.logger')
-    def test_start_consuming_exception(self, mock_logger):
-        """Test start_consuming with exception."""
+    def test_cleanup_success(self, mock_logger):
+        """Test successful cleanup."""
         mock_channel = Mock()
+        mock_channel.is_closed = False
+        mock_connection = Mock()
+        mock_connection.is_closed = False
+        
         self.consumer.channel = mock_channel
-        self.consumer.settings = self.mock_settings
+        self.consumer.connection = mock_connection
         
-        mock_channel.start_consuming.side_effect = Exception("Test error")
+        self.consumer.cleanup()
         
-        with patch.object(self.consumer, 'cleanup') as mock_cleanup:
-            with self.assertRaises(Exception):
-                self.consumer.start_consuming()
-            
-            mock_cleanup.assert_called_once()
+        mock_channel.close.assert_called_once()
+        mock_connection.close.assert_called_once()
+
+    @patch('frappe.logger')
+    def test_cleanup_exception(self, mock_logger):
+        """Test cleanup with exception."""
+        mock_channel = Mock()
+        mock_channel.is_closed = False
+        mock_channel.close.side_effect = Exception("Close error")
+        
+        self.consumer.channel = mock_channel
+        self.consumer.connection = None
+        
+        # This should not raise an exception
+        self.consumer.cleanup()
+
+    @patch('frappe.logger')
+    def test_cleanup_closed_connections(self, mock_logger):
+        """Test cleanup with closed connections."""
+        mock_channel = Mock()
+        mock_channel.is_closed = True
+        mock_connection = Mock()
+        mock_connection.is_closed = True
+        
+        self.consumer.channel = mock_channel
+        self.consumer.connection = mock_connection
+        
+        self.consumer.cleanup()
+        
+        mock_channel.close.assert_not_called()
+        mock_connection.close.assert_not_called()
+
+    @patch('frappe.logger')
+    def test_stop_consuming_closed_channel(self, mock_logger):
+        """Test stop_consuming with closed channel."""
+        mock_channel = Mock()
+        mock_channel.is_closed = True
+        self.consumer.channel = mock_channel
+        
+        self.consumer.stop_consuming()
+        
+        mock_channel.stop_consuming.assert_not_called()
 
     def test_get_queue_stats_success(self):
         """Test successful get_queue_stats."""
@@ -478,24 +576,6 @@ class TestFeedbackConsumer(unittest.TestCase):
         
         self.assertEqual(stats["main_queue"], 5)
         self.assertEqual(stats["dead_letter_queue"], 2)
-
-    def test_get_queue_stats_no_channel(self):
-        """Test get_queue_stats when channel is None."""
-        self.consumer.channel = None
-        
-        with patch.object(self.consumer, 'setup_rabbitmq') as mock_setup:
-            mock_channel = Mock()
-            main_queue_response = Mock()
-            main_queue_response.method.message_count = 3
-            mock_channel.queue_declare.return_value = main_queue_response
-            
-            self.consumer.channel = mock_channel
-            self.consumer.settings = self.mock_settings
-            
-            stats = self.consumer.get_queue_stats()
-            
-            mock_setup.assert_called_once()
-            self.assertEqual(stats["main_queue"], 3)
 
     def test_get_queue_stats_dl_queue_exception(self):
         """Test get_queue_stats when dead letter queue doesn't exist."""
@@ -558,66 +638,31 @@ class TestFeedbackConsumer(unittest.TestCase):
 
     @patch('frappe.get_doc')
     @patch('frappe.logger')
-    def test_update_submission_with_string_grade(self, mock_logger, mock_get_doc):
-        """Test submission update with string grade that needs cleaning."""
-        mock_submission = Mock()
-        mock_get_doc.return_value = mock_submission
-        
-        # Test with grade that has non-numeric characters
-        test_data = self.sample_message_data.copy()
-        test_data["feedback"]["grade_recommendation"] = "85.5%"
-        
-        self.consumer.update_submission(test_data)
-        
-        mock_submission.update.assert_called_once()
-        mock_submission.save.assert_called_once_with(ignore_permissions=True)
-
-    @patch('frappe.get_doc')
-    @patch('frappe.logger')
-    def test_update_submission_invalid_grade(self, mock_logger, mock_get_doc):
-        """Test submission update with invalid grade."""
-        mock_submission = Mock()
-        mock_get_doc.return_value = mock_submission
-        
-        test_data = self.sample_message_data.copy()
-        test_data["feedback"]["grade_recommendation"] = "invalid_grade"
-        
-        self.consumer.update_submission(test_data)
-        
-        mock_submission.update.assert_called_once()
-        mock_submission.save.assert_called_once_with(ignore_permissions=True)
-
-    @patch('frappe.get_doc')
-    @patch('frappe.logger')
-    def test_update_submission_numeric_grade(self, mock_logger, mock_get_doc):
-        """Test submission update with numeric grade."""
-        mock_submission = Mock()
-        mock_get_doc.return_value = mock_submission
-        
-        test_data = self.sample_message_data.copy()
-        test_data["feedback"]["grade_recommendation"] = 85.5
-        
-        self.consumer.update_submission(test_data)
-        
-        mock_submission.update.assert_called_once()
-        mock_submission.save.assert_called_once_with(ignore_permissions=True)
-
-    @patch('frappe.get_doc')
-    @patch('frappe.logger')
-    def test_update_submission_exception(self, mock_logger, mock_get_doc):
-        """Test submission update with exception."""
-        mock_get_doc.side_effect = Exception("Database error")
-        
-        with self.assertRaises(Exception):
-            self.consumer.update_submission(self.sample_message_data)
-
-    @patch('frappe.get_doc')
-    @patch('frappe.logger')
     def test_mark_submission_failed_exception(self, mock_logger, mock_get_doc):
         """Test mark_submission_failed with exception."""
         mock_get_doc.side_effect = Exception("Database error")
         
         self.consumer.mark_submission_failed("test_123", "Test error")
+
+    def test_reconnect(self):
+        """Test _reconnect method."""
+        # Setup mock connection and settings
+        mock_old_connection = Mock()
+        mock_old_connection.is_closed = False
+        self.consumer.connection = mock_old_connection
+        self.consumer.settings = self.mock_settings
+        
+        with patch('pika.BlockingConnection') as mock_connection:
+            mock_new_conn = Mock()
+            mock_new_channel = Mock()
+            mock_new_conn.channel.return_value = mock_new_channel
+            mock_connection.return_value = mock_new_conn
+            
+            self.consumer._reconnect()
+            
+            mock_old_connection.close.assert_called_once()
+            self.assertEqual(self.consumer.connection, mock_new_conn)
+            self.assertEqual(self.consumer.channel, mock_new_channel)
 
     def test_reconnect_with_closed_connection(self):
         """Test _reconnect with already closed connection."""
@@ -636,6 +681,26 @@ class TestFeedbackConsumer(unittest.TestCase):
             
             # Should not try to close already closed connection
             mock_connection.close.assert_not_called()
+
+    @patch('frappe.get_single')
+    @patch('pika.BlockingConnection')
+    def test_setup_rabbitmq_dlx_exchange_scenarios(self, mock_connection, mock_get_single):
+        """Test dead letter exchange setup scenarios."""
+        mock_get_single.return_value = self.mock_settings
+        mock_conn_instance = Mock()
+        mock_channel = Mock()
+        mock_conn_instance.channel.return_value = mock_channel
+        mock_connection.return_value = mock_conn_instance
+        
+        # Test case: Exchange doesn't exist, needs to be created
+        mock_channel.exchange_declare.side_effect = [
+            MockChannelClosedByBroker(200, "NOT_FOUND"),  # First passive check fails
+            None,  # Second declare succeeds
+        ]
+        
+        with patch.object(self.consumer, '_reconnect') as mock_reconnect:
+            self.consumer.setup_rabbitmq()
+            mock_reconnect.assert_called()
 
     @patch('frappe.get_single')
     @patch('pika.BlockingConnection')
@@ -679,64 +744,29 @@ class TestFeedbackConsumer(unittest.TestCase):
             self.consumer.setup_rabbitmq()
             mock_reconnect.assert_called()
 
-    @patch('frappe.db')
     @patch('frappe.logger')
-    def test_process_message_missing_submission_id(self, mock_logger, mock_db):
-        """Test message processing with missing submission_id."""
-        mock_ch = Mock()
-        mock_method = Mock()
-        mock_method.delivery_tag = "test_tag"
-        mock_properties = Mock()
-        
-        invalid_data = {"feedback": "test"}
-        body = json.dumps(invalid_data).encode('utf-8')
-        
-        self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
-        
-        mock_ch.basic_reject.assert_called_once_with(delivery_tag="test_tag", requeue=False)
-
-    @patch('frappe.db')
-    @patch('frappe.logger')
-    def test_process_message_missing_feedback(self, mock_logger, mock_db):
-        """Test message processing with missing feedback."""
-        mock_ch = Mock()
-        mock_method = Mock()
-        mock_method.delivery_tag = "test_tag"
-        mock_properties = Mock()
-        
-        invalid_data = {"submission_id": "test_123"}
-        body = json.dumps(invalid_data).encode('utf-8')
-        
-        self.consumer.process_message(mock_ch, mock_method, mock_properties, body)
-        
-        mock_ch.basic_reject.assert_called_once_with(delivery_tag="test_tag", requeue=False)
-
-    @patch('frappe.logger')
-    def test_stop_consuming_closed_channel(self, mock_logger):
-        """Test stop_consuming with closed channel."""
+    def test_start_consuming_exception(self, mock_logger):
+        """Test start_consuming with exception."""
         mock_channel = Mock()
-        mock_channel.is_closed = True
         self.consumer.channel = mock_channel
+        self.consumer.settings = self.mock_settings
         
-        self.consumer.stop_consuming()
+        mock_channel.start_consuming.side_effect = Exception("Test error")
         
-        mock_channel.stop_consuming.assert_not_called()
+        with patch.object(self.consumer, 'cleanup') as mock_cleanup:
+            with self.assertRaises(Exception):
+                self.consumer.start_consuming()
+            
+            mock_cleanup.assert_called_once()
 
+    @patch('frappe.get_value')
     @patch('frappe.logger')
-    def test_cleanup_closed_connections(self, mock_logger):
-        """Test cleanup with closed connections."""
-        mock_channel = Mock()
-        mock_channel.is_closed = True
-        mock_connection = Mock()
-        mock_connection.is_closed = True
+    def test_send_glific_notification_exception(self, mock_logger, mock_get_value):
+        """Test Glific notification with exception."""
+        mock_get_value.side_effect = Exception("Glific error")
         
-        self.consumer.channel = mock_channel
-        self.consumer.connection = mock_connection
-        
-        self.consumer.cleanup()
-        
-        mock_channel.close.assert_not_called()
-        mock_connection.close.assert_not_called()
+        with self.assertRaises(Exception):
+            self.consumer.send_glific_notification(self.sample_message_data)
 
 
 if __name__ == '__main__':
