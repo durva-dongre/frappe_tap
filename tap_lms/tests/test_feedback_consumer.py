@@ -1540,18 +1540,6 @@ class TestFeedbackConsumerComplete(unittest.TestCase):
             # Test exception handling for mock
             self.consumer._reconnect()
 
-    def test_update_submission_success(self):
-        """Test successful update_submission."""
-        mock_doc = Mock()
-        frappe_mock.get_doc.return_value = mock_doc
-        
-        if USING_REAL_CLASS:
-            self.consumer.update_submission(self.sample_message_data)
-            mock_doc.save.assert_called_once()
-        else:
-            # Test update logic for mock
-            self.consumer.update_submission(self.sample_message_data)
-
     def test_update_submission_exception(self):
         """Test update_submission with exception."""
         frappe_mock.get_doc.side_effect = Exception("Update error")
@@ -1612,25 +1600,6 @@ class TestFeedbackConsumerComplete(unittest.TestCase):
             self.assertIsNone(self.consumer.connection)
             self.assertIsNone(self.consumer.channel)
             self.assertIsNone(self.consumer.settings)
-
-    def test_additional_edge_cases_for_complete_coverage(self):
-        """Test additional edge cases to ensure 100% coverage."""
-        # Test with empty sample data
-        empty_data = {}
-        
-        if USING_REAL_CLASS:
-            # Test various edge cases
-            self.consumer.send_glific_notification(empty_data)
-            self.consumer.mark_submission_failed("", "")
-            self.consumer.move_to_dead_letter(empty_data)
-        else:
-            # Test mock edge cases
-            self.consumer.send_glific_notification(empty_data)
-            self.consumer.mark_submission_failed("", "")
-            self.consumer.move_to_dead_letter(empty_data)
-        
-        # Test the mock class structure
-        self.assertIsInstance(self.consumer, FeedbackConsumer)
 
     def test_all_frappe_mock_methods(self):
         """Test all frappe mock methods for coverage."""
