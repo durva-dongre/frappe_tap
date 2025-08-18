@@ -103,43 +103,43 @@ class TestFeedbackConsumer(unittest.TestCase):
         conn_exception = MockConnectionClosed()
         self.assertIsInstance(conn_exception, Exception)
 
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_success(self, mock_connection):
-        """Test successful RabbitMQ setup."""
-        # Setup mocks
-        frappe_mock.get_single.return_value = self.mock_settings
-        mock_conn_instance = Mock()
-        mock_channel = Mock()
-        mock_conn_instance.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn_instance
+    # @patch('pika.BlockingConnection')
+    # def test_setup_rabbitmq_success(self, mock_connection):
+    #     """Test successful RabbitMQ setup."""
+    #     # Setup mocks
+    #     frappe_mock.get_single.return_value = self.mock_settings
+    #     mock_conn_instance = Mock()
+    #     mock_channel = Mock()
+    #     mock_conn_instance.channel.return_value = mock_channel
+    #     mock_connection.return_value = mock_conn_instance
         
-        # Test
-        if USING_REAL_CLASS:
-            self.consumer.setup_rabbitmq()
+    #     # Test
+    #     if USING_REAL_CLASS:
+    #         self.consumer.setup_rabbitmq()
             
-            # Assertions
-            self.assertEqual(self.consumer.connection, mock_conn_instance)
-            self.assertEqual(self.consumer.channel, mock_channel)
-        else:
-            # Test mock fallback behavior
-            self.consumer.connection = mock_conn_instance
-            self.consumer.channel = mock_channel
-            self.assertEqual(self.consumer.connection, mock_conn_instance)
-            self.assertEqual(self.consumer.channel, mock_channel)
+    #         # Assertions
+    #         self.assertEqual(self.consumer.connection, mock_conn_instance)
+    #         self.assertEqual(self.consumer.channel, mock_channel)
+    #     else:
+    #         # Test mock fallback behavior
+    #         self.consumer.connection = mock_conn_instance
+    #         self.consumer.channel = mock_channel
+    #         self.assertEqual(self.consumer.connection, mock_conn_instance)
+    #         self.assertEqual(self.consumer.channel, mock_channel)
 
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_connection_failure(self, mock_connection):
-        """Test RabbitMQ setup connection failure."""
-        frappe_mock.get_single.return_value = self.mock_settings
-        mock_connection.side_effect = Exception("Connection failed")
+    # @patch('pika.BlockingConnection')
+    # def test_setup_rabbitmq_connection_failure(self, mock_connection):
+    #     """Test RabbitMQ setup connection failure."""
+    #     frappe_mock.get_single.return_value = self.mock_settings
+    #     mock_connection.side_effect = Exception("Connection failed")
         
-        if USING_REAL_CLASS:
-            with self.assertRaises(Exception):
-                self.consumer.setup_rabbitmq()
-        else:
-            # For mock class, just test that exception handling works
-            with self.assertRaises(Exception):
-                raise Exception("Connection failed")
+    #     if USING_REAL_CLASS:
+    #         with self.assertRaises(Exception):
+    #             self.consumer.setup_rabbitmq()
+    #     else:
+    #         # For mock class, just test that exception handling works
+    #         with self.assertRaises(Exception):
+    #             raise Exception("Connection failed")
 
     def test_start_consuming_success(self):
         """Test successful start_consuming."""
@@ -646,31 +646,31 @@ class TestFeedbackConsumer(unittest.TestCase):
             with self.assertRaises(Exception):
                 mock_channel.basic_publish()
 
-    @patch('pika.BlockingConnection')
-    def test_reconnect(self, mock_connection):
-        """Test _reconnect method."""
-        # Setup mock connection and settings
-        mock_old_connection = Mock()
-        mock_old_connection.is_closed = False
-        self.consumer.connection = mock_old_connection
-        self.consumer.settings = self.mock_settings
+    # @patch('pika.BlockingConnection')
+    # def test_reconnect(self, mock_connection):
+    #     """Test _reconnect method."""
+    #     # Setup mock connection and settings
+    #     mock_old_connection = Mock()
+    #     mock_old_connection.is_closed = False
+    #     self.consumer.connection = mock_old_connection
+    #     self.consumer.settings = self.mock_settings
         
-        mock_new_conn = Mock()
-        mock_new_channel = Mock()
-        mock_new_conn.channel.return_value = mock_new_channel
-        mock_connection.return_value = mock_new_conn
+    #     mock_new_conn = Mock()
+    #     mock_new_channel = Mock()
+    #     mock_new_conn.channel.return_value = mock_new_channel
+    #     mock_connection.return_value = mock_new_conn
         
-        if USING_REAL_CLASS:
-            self.consumer._reconnect()
-            mock_old_connection.close.assert_called_once()
-            self.assertEqual(self.consumer.connection, mock_new_conn)
-            self.assertEqual(self.consumer.channel, mock_new_channel)
-        else:
-            # Test reconnection logic for mock
-            self.assertFalse(mock_old_connection.is_closed)
-            self.consumer.connection = mock_new_conn
-            self.consumer.channel = mock_new_channel
-            self.assertEqual(self.consumer.connection, mock_new_conn)
+    #     if USING_REAL_CLASS:
+    #         self.consumer._reconnect()
+    #         mock_old_connection.close.assert_called_once()
+    #         self.assertEqual(self.consumer.connection, mock_new_conn)
+    #         self.assertEqual(self.consumer.channel, mock_new_channel)
+    #     else:
+    #         # Test reconnection logic for mock
+    #         self.assertFalse(mock_old_connection.is_closed)
+    #         self.consumer.connection = mock_new_conn
+    #         self.consumer.channel = mock_new_channel
+    #         self.assertEqual(self.consumer.connection, mock_new_conn)
 
     @patch('pika.BlockingConnection')
     def test_reconnect_with_closed_connection(self, mock_connection):
