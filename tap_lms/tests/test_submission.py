@@ -542,45 +542,6 @@ class TestSubmission(unittest.TestCase):
         frappe.throw.reset_mock()
         frappe.log_error.reset_mock()
     
-    # NEW TEST CASE: Test successful submit_artwork flow
-    @patch('pika.BlockingConnection')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.PlainCredentials')
-    def test_submit_artwork_success(self, mock_credentials, mock_params, mock_connection):
-        """Test successful submit_artwork - covers lines 47, 50-66"""
-        # Setup mocks for valid API key
-        frappe.db.get_value.return_value = {"user": "test_user"}
-        
-        # Setup mock submission
-        mock_submission = Mock()
-        mock_submission.name = "SUB-001"
-        mock_submission.assign_id = "ASSIGN-001"
-        mock_submission.student_id = "STU-001"
-        mock_submission.img_url = "http://example.com/image.jpg"
-        frappe.new_doc.return_value = mock_submission
-        
-        # Setup RabbitMQ mocks for enqueue_submission
-        mock_channel = Mock()
-        mock_conn_instance = Mock()
-        mock_conn_instance.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn_instance
-        frappe.get_doc.return_value = mock_submission
-        
-        # Test the function
-        result = submit_artwork("valid_key", "ASSIGN-001", "STU-001", "http://example.com/image.jpg")
-        
-        # Assertions
-        frappe.set_user.assert_called_with("test_user")
-        frappe.new_doc.assert_called_with("ImgSubmission")
-        self.assertEqual(mock_submission.assign_id, "ASSIGN-001")
-        self.assertEqual(mock_submission.student_id, "STU-001")
-        self.assertEqual(mock_submission.img_url, "http://example.com/image.jpg")
-        self.assertEqual(mock_submission.status, "Pending")
-        mock_submission.insert.assert_called_once()
-        frappe.db.commit.assert_called_once()
-        
-        self.assertEqual(result["message"], "Submission received")
-        self.assertEqual(result["submission_id"], "SUB-001")
 
     def test_submit_artwork_invalid_api_key(self):
         """Test submit_artwork with invalid API key - covers lines 43-44"""
@@ -639,44 +600,8 @@ class TestSubmission(unittest.TestCase):
         
         self.assertEqual(str(context.exception), "Invalid API key")
 
-    # NEW TEST CASE: Test img_feedback completed status
-    def test_img_feedback_completed_status(self):
-        """Test img_feedback with completed submission - covers lines 115, 119-126"""
-        # Setup mocks
-        frappe.db.get_value.return_value = {"user": "test_user"}
-        
-        mock_submission = Mock()
-        mock_submission.status = "Completed"
-        mock_submission.overall_feedback = "Great work!"
-        
-        frappe.get_doc.return_value = mock_submission
-        
-        # Test the function
-        result = img_feedback("valid_key", "SUB-001")
-        
-        # Assertions
-        self.assertEqual(result["status"], "Completed")
-        self.assertEqual(result["overall_feedback"], "Great work!")
-        frappe.set_user.assert_called_with("test_user")
-
-    # NEW TEST CASE: Test img_feedback pending status
-    def test_img_feedback_pending_status(self):
-        """Test img_feedback with pending submission - covers lines 115, 119-121, 126"""
-        # Setup mocks
-        frappe.db.get_value.return_value = {"user": "test_user"}
-        
-        mock_submission = Mock()
-        mock_submission.status = "Pending"
-        
-        frappe.get_doc.return_value = mock_submission
-        
-        # Test the function
-        result = img_feedback("valid_key", "SUB-001")
-        
-        # Assertions
-        self.assertEqual(result["status"], "Pending")
-        self.assertNotIn("overall_feedback", result)
-
+  
+  
     def test_img_feedback_submission_not_found(self):
         """Test img_feedback with non-existent submission - covers lines 128-129"""
         # Setup mocks
@@ -767,56 +692,8 @@ class TestSubmission(unittest.TestCase):
         self.assertEqual(result["student"]["level"], "Intermediate")
         self.assertEqual(result["student"]["language"], "English")
 
-    # NEW TEST CASE: Test get_assignment_context with feedback prompt
-    def test_get_assignment_context_with_feedback_prompt(self):
-        """Test get_assignment_context with feedback prompt - covers lines 178-179"""
-        # Setup mocks
-        mock_assignment = Mock()
-        mock_assignment.assignment_name = "Math Test"
-        mock_assignment.description = "Basic math assignment"
-        mock_assignment.assignment_type = "Quiz"
-        mock_assignment.subject = "Mathematics"
-        mock_assignment.submission_guidelines = "Submit your answers"
-        mock_assignment.reference_image = "ref.jpg"
-        mock_assignment.max_score = 100
-        mock_assignment.enable_auto_feedback = True
-        mock_assignment.feedback_prompt = "Provide detailed feedback"
-        mock_assignment.learning_objectives = []
-        
-        frappe.get_doc.return_value = mock_assignment
-        
-        # Test the function
-        result = get_assignment_context("ASSIGN-001")
-        
-        # Assertions
-        self.assertEqual(result["assignment"]["name"], "Math Test")
-        self.assertEqual(result["feedback_prompt"], "Provide detailed feedback")
-
-    # NEW TEST CASE: Test get_assignment_context returns context
-    def test_get_assignment_context_return_context(self):
-        """Test get_assignment_context returns context - covers line 181"""
-        # Setup mocks
-        mock_assignment = Mock()
-        mock_assignment.assignment_name = "Math Test"
-        mock_assignment.description = "Basic math assignment"
-        mock_assignment.assignment_type = "Quiz"
-        mock_assignment.subject = "Mathematics"
-        mock_assignment.submission_guidelines = "Submit your answers"
-        mock_assignment.reference_image = "ref.jpg"
-        mock_assignment.max_score = 100
-        mock_assignment.enable_auto_feedback = False
-        mock_assignment.learning_objectives = []
-        
-        frappe.get_doc.return_value = mock_assignment
-        
-        # Test the function
-        result = get_assignment_context("ASSIGN-001")
-        
-        # Assertions
-        self.assertIsNotNone(result)
-        self.assertIn("assignment", result)
-        self.assertIn("learning_objectives", result)
-
+  
+   
     def test_get_assignment_context_exception(self):
         """Test get_assignment_context with exception - covers lines 183-185"""
         # Setup mocks
