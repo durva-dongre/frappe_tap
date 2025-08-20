@@ -239,129 +239,27 @@ class TestOTPAPI(unittest.TestCase):
             self.assertEqual(result["status"], "success")
             self.assertIn("action_type", result)
 
-    # @patch('tap_lms.api.authenticate_api_key')
-    # @patch('tap_lms.api.frappe.get_all')  # Fixed patch path
-    # def test_send_otp_existing_teacher(self, mock_get_all, mock_auth):
-    #     """Test send_otp for existing teacher"""
-    #     mock_auth.return_value = "valid_key"
-    #     mock_get_all.return_value = [{"name": "TEACHER_001", "school_id": "SCHOOL_001"}]
+    @patch('tap_lms.api.authenticate_api_key')
+    @patch('tap_lms.api.frappe.get_all')  # Fixed patch path
+    def test_send_otp_existing_teacher(self, mock_get_all, mock_auth):
+        """Test send_otp for existing teacher"""
+        mock_auth.return_value = "valid_key"
+        mock_get_all.return_value = [{"name": "TEACHER_001", "school_id": "SCHOOL_001"}]
         
-    #     # Mock school and batch data
-    #     with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:  # Fixed patch path
-    #         mock_get_value.return_value = "Test School"
+        # Mock school and batch data
+        with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:  # Fixed patch path
+            mock_get_value.return_value = "Test School"
             
-    #         with patch('tap_lms.api.get_active_batch_for_school') as mock_get_batch:
-    #             mock_get_batch.return_value = {
-    #                 "batch_id": "no_active_batch_id",
-    #                 "batch_name": None
-    #             }
+            with patch('tap_lms.api.get_active_batch_for_school') as mock_get_batch:
+                mock_get_batch.return_value = {
+                    "batch_id": "no_active_batch_id",
+                    "batch_name": None
+                }
                 
-    #             result = send_otp()
+                result = send_otp()
                 
-    #             self.assertEqual(result["status"], "failure")
-    #             self.assertEqual(result["code"], "NO_ACTIVE_BATCH")
-
-
-
-# OPTION 1: Simple fix - remove the problematic assertion
-@patch('tap_lms.api.authenticate_api_key')
-@patch('tap_lms.api.frappe.get_all')
-def test_send_otp_existing_teacher_simple_fix(self, mock_get_all, mock_auth):
-    """Test send_otp for existing teacher - Simple fix"""
-    mock_auth.return_value = "valid_key"
-    mock_get_all.return_value = [{"name": "TEACHER_001", "school_id": "SCHOOL_001"}]
-
-    with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:
-        mock_get_value.return_value = "Test School"
-
-        with patch('tap_lms.api.get_active_batch_for_school') as mock_get_batch:
-            mock_get_batch.return_value = {
-                "batch_id": "no_active_batch_id",
-                "batch_name": None
-            }
-
-            result = send_otp()
-
-            # Only check what we know the function returns
-            self.assertEqual(result["status"], "failure")
-            # Remove the problematic assertion for "code" field
-            # self.assertEqual(result["code"], "NO_ACTIVE_BATCH")  # This line causes the error
-
-
-# OPTION 2: Diagnostic test - see what the function actually returns
-@patch('tap_lms.api.authenticate_api_key')
-@patch('tap_lms.api.frappe.get_all')
-def test_send_otp_existing_teacher_diagnostic(self, mock_get_all, mock_auth):
-    """Test send_otp for existing teacher - Diagnostic version"""
-    mock_auth.return_value = "valid_key"
-    mock_get_all.return_value = [{"name": "TEACHER_001", "school_id": "SCHOOL_001"}]
-
-    with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:
-        mock_get_value.return_value = "Test School"
-
-        with patch('tap_lms.api.get_active_batch_for_school') as mock_get_batch:
-            mock_get_batch.return_value = {
-                "batch_id": "no_active_batch_id",
-                "batch_name": None
-            }
-
-            result = send_otp()
-
-            # Print what the function actually returns for debugging
-            print(f"Actual result keys: {list(result.keys())}")
-            print(f"Actual result: {result}")
-
-            # Basic checks
-            self.assertEqual(result["status"], "failure")
-            
-            # Check if code exists, if not, check what does exist
-            if "code" in result:
+                self.assertEqual(result["status"], "failure")
                 self.assertEqual(result["code"], "NO_ACTIVE_BATCH")
-            else:
-                # Function doesn't return a code field, check message instead
-                self.assertIn("message", result)
-
-
-# OPTION 3: Robust fix - handle different response formats
-@patch('tap_lms.api.authenticate_api_key')
-@patch('tap_lms.api.frappe.get_all')
-def test_send_otp_existing_teacher_robust(self, mock_get_all, mock_auth):
-    """Test send_otp for existing teacher - Robust version"""
-    mock_auth.return_value = "valid_key"
-    mock_get_all.return_value = [{"name": "TEACHER_001", "school_id": "SCHOOL_001"}]
-
-    with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:
-        mock_get_value.return_value = "Test School"
-
-        with patch('tap_lms.api.get_active_batch_for_school') as mock_get_batch:
-            mock_get_batch.return_value = {
-                "batch_id": "no_active_batch_id",
-                "batch_name": None
-            }
-
-            result = send_otp()
-
-            # Check that the function returns failure status
-            self.assertEqual(result["status"], "failure")
-            
-            # Handle different possible response formats
-            if "code" in result:
-                # If the function returns a code field
-                self.assertEqual(result["code"], "NO_ACTIVE_BATCH")
-            elif "message" in result:
-                # If the function returns a message field instead
-                # Check that it indicates a batch-related issue
-                message = result["message"].lower()
-                self.assertTrue(
-                    any(keyword in message for keyword in ["batch", "no active", "not found"]),
-                    f"Expected batch-related error message, got: {result['message']}"
-                )
-            else:
-                # If neither, fail with helpful info
-                self.fail(
-                    f"Expected either 'code' or 'message' field in error response. "
-                    f"Got keys: {list(result.keys())}, values: {result}"
-                )
 
     @patch('tap_lms.api.authenticate_api_key')
     def test_send_otp_invalid_api_key(self, mock_auth):
