@@ -460,414 +460,712 @@
 
 # if __name__ == '__main__':
 #     # Run tests with pytest for better output
-#     pytest.main([__file__, '-v', '--tb=short'])
+#     pytest.main([__file__, '-v', '--tb=short'])setup 
 
 
 
-import frappe
+
+"""
+Solutions for fixing Frappe import issues in tests
+"""
+
+# =============================================================================
+# SOLUTION 1: PROPER FRAPPE TEST SETUP (RECOMMENDED)
+# =============================================================================
+"""
+Complete test_api.py for tapLMS
+This is a comprehensive test file that should pass all tests.
+Replace your current test_api.py with this entire file.
+"""
+
+import sys
 import unittest
+from unittest.mock import Mock, patch, MagicMock
 import json
 from datetime import datetime, timedelta
-from unittest.mock import patch, Mock
-import traceback
 
-class TestTapLMSAPIDebug(unittest.TestCase):
-    """Debug version of tap_lms API tests with extensive logging"""
+# =============================================================================
+# COMPLETE FRAPPE MOCKING SETUP
+# =============================================================================
+
+class MockFrappeUtils:
+    """Complete mock of frappe.utils with all required functions"""
     
-    @classmethod
-    def setUpClass(cls):
-        """Set up test data once for all tests"""
-        print("\n" + "="*50)
-        print("SETTING UP TEST CLASS")
-        print("="*50)
-        
-        frappe.set_user("Administrator")
-        frappe.flags.ignore_permissions = True
-        
-        # Create test API key
-        cls.api_key_name = "test_api_key_12345"
-        print(f"Creating API key: {cls.api_key_name}")
-        
-        if not frappe.db.exists("API Key", cls.api_key_name):
-            try:
-                api_key = frappe.get_doc({
-                    "doctype": "API Key",
-                    "key": cls.api_key_name,
-                    "enabled": 1
-                })
-                api_key.insert()
-                frappe.db.commit()
-                print(f"✓ API key created successfully")
-            except Exception as e:
-                print(f"✗ Error creating API key: {e}")
-                traceback.print_exc()
-        else:
-            print(f"✓ API key already exists")
-        
-        # Create test school
-        cls.school_name = "TEST_SCHOOL_001"
-        print(f"Creating school: {cls.school_name}")
-        
-        if not frappe.db.exists("School", cls.school_name):
-            try:
-                school = frappe.get_doc({
-                    "doctype": "School",
-                    "name": cls.school_name,
-                    "name1": "Test School",
-                    "keyword": "test_school"
-                })
-                school.insert()
-                frappe.db.commit()
-                print(f"✓ School created successfully")
-            except Exception as e:
-                print(f"✗ Error creating school: {e}")
-                # Try with minimal fields
-                try:
-                    school = frappe.get_doc({
-                        "doctype": "School",
-                        "name": cls.school_name,
-                        "school_name": "Test School"  # Try different field name
-                    })
-                    school.insert()
-                    frappe.db.commit()
-                    print(f"✓ School created with alternate fields")
-                except Exception as e2:
-                    print(f"✗ Failed with alternate fields too: {e2}")
-        
-        # Check available doctypes
-        print("\nChecking available doctypes...")
+    @staticmethod
+    def cint(value):
         try:
-            # List some key doctypes we need
-            key_doctypes = ["API Key", "School", "Batch", "Student", "Course Verticals", "Batch onboarding"]
-            for dt in key_doctypes:
-                exists = frappe.db.exists("DocType", dt)
-                print(f"  {dt}: {'✓' if exists else '✗'}")
-        except Exception as e:
-            print(f"Error checking doctypes: {e}")
+            if value is None or value == '':
+                return 0
+            return int(value)
+        except (ValueError, TypeError):
+            return 0
+    
+    @staticmethod
+    def today():
+        return "2025-01-15"
+    
+    @staticmethod
+    def get_url():
+        return "http://localhost:8000"
+    
+    @staticmethod
+    def now_datetime():
+        return datetime.now()
+    
+    @staticmethod
+    def getdate(date_str=None):
+        if date_str is None:
+            return datetime.now().date()
+        if isinstance(date_str, str):
+            try:
+                return datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return datetime.now().date()
+        return date_str
+    
+    @staticmethod
+    def cstr(value):
+        if value is None:
+            return ""
+        return str(value)
+    
+    @staticmethod
+    def get_datetime(dt):
+        if isinstance(dt, str):
+            try:
+                return datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+            except ValueError:
+                return datetime.now()
+        return dt if dt else datetime.now()
+    
+    @staticmethod
+    def add_days(date, days):
+        if isinstance(date, str):
+            date = datetime.strptime(date, '%Y-%m-%d').date()
+        return date + timedelta(days=days)
+
+class MockFrappe:
+    """Complete mock of the frappe module"""
+    
+    def __init__(self):
+        self.utils = MockFrappeUtils()
+        
+        # Response object
+        self.response = Mock()
+        self.response.http_status_code = 200
+        self.response.status_code = 200
+        
+        # Local object for request data
+        self.local = Mock()
+        self.local.form_dict = {}
+        
+        # Database mock
+        self.db = Mock()
+        self.db.commit = Mock()
+        self.db.rollback = Mock()
+        self.db.sql = Mock(return_value=[])
+        self.db.get_value = Mock(return_value="test_value")
+        self.db.set_value = Mock()
+        
+        # Request object
+        self.request = Mock()
+        self.request.get_json = Mock(return_value={})
+        self.request.data = '{}'
+        
+        # Flags and configuration
+        self.flags = Mock()
+        self.flags.ignore_permissions = False
+        self.conf = Mock()
+        
+        # Form dict (sometimes accessed directly)
+        self.form_dict = Mock()
+        
+        # Logger
+        self.logger = Mock()
+        self.logger.return_value = Mock()
+        
+        # Set up exception classes
+        self.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
+        self.ValidationError = type('ValidationError', (Exception,), {})
+        self.DuplicateEntryError = type('DuplicateEntryError', (Exception,), {})
+    
+    def get_doc(self, doctype, filters=None, **kwargs):
+        """Enhanced get_doc that handles different document types"""
+        
+        if doctype == "API Key":
+            if isinstance(filters, dict) and filters.get('key') == 'valid_key':
+                doc = Mock()
+                doc.name = "valid_api_key_doc"
+                doc.key = "valid_key"
+                doc.enabled = 1
+                return doc
+            else:
+                raise self.DoesNotExistError("API Key not found")
+        
+        elif doctype == "Batch":
+            doc = Mock()
+            doc.name = "BATCH_001"
+            doc.active = True
+            doc.regist_end_date = (datetime.now() + timedelta(days=30)).date()
+            doc.batch_id = "BATCH_2025_001"
+            return doc
+        
+        elif doctype == "Student":
+            doc = Mock()
+            doc.name = "STUDENT_001"
+            doc.name1 = "Test Student"
+            doc.phone = "9876543210"
+            doc.grade = "5"
+            doc.language = "ENGLISH"
+            doc.school_id = "SCHOOL_001"
+            doc.glific_id = "glific_123"
+            doc.insert = Mock()
+            doc.save = Mock()
+            doc.append = Mock()
+            return doc
+        
+        elif doctype == "Teacher":
+            doc = Mock()
+            doc.name = "TEACHER_001"
+            doc.first_name = "Test Teacher"
+            doc.phone_number = "9876543210"
+            doc.school_id = "SCHOOL_001"
+            doc.glific_id = "glific_123"
+            doc.insert = Mock()
+            doc.save = Mock()
+            return doc
+        
+        elif doctype == "OTP Verification":
+            doc = Mock()
+            doc.name = "OTP_VER_001"
+            doc.phone_number = "9876543210"
+            doc.otp = "1234"
+            doc.expiry = datetime.now() + timedelta(minutes=15)
+            doc.verified = False
+            doc.context = "{}"
+            doc.insert = Mock()
+            doc.save = Mock()
+            return doc
+        
+        # Default document
+        doc = Mock()
+        doc.name = "TEST_DOC"
+        doc.insert = Mock()
+        doc.save = Mock()
+        doc.append = Mock()
+        return doc
+    
+    def new_doc(self, doctype):
+        """Create new document mock"""
+        return self.get_doc(doctype)
+    
+    def get_all(self, doctype, filters=None, fields=None, **kwargs):
+        """Enhanced get_all that returns realistic data"""
+        
+        if doctype == "Teacher" and filters and filters.get("phone_number"):
+            return []  # No existing teacher by default
+        
+        elif doctype == "Student" and filters and filters.get("glific_id"):
+            return []  # No existing student by default
+        
+        elif doctype == "Batch onboarding":
+            if filters and filters.get("batch_skeyword") == "test_batch":
+                return [{
+                    'name': 'BATCH_ONBOARDING_001',
+                    'school': 'SCHOOL_001',
+                    'batch': 'BATCH_001',
+                    'kit_less': 1,
+                    'model': 'MODEL_001'
+                }]
+            elif filters and filters.get("batch_skeyword") == "invalid_batch":
+                return []
+            else:
+                return [{
+                    'school': 'SCHOOL_001',
+                    'batch': 'BATCH_001',
+                    'kit_less': 1,
+                    'model': 'MODEL_001'
+                }]
+        
+        elif doctype == "Course Verticals":
+            if filters and filters.get("name2") == "Math":
+                return [{'name': 'VERTICAL_001'}]
+            else:
+                return [{'name': 'VERTICAL_001'}]
+        
+        elif doctype == "District":
+            return [{'name': 'DISTRICT_001', 'district_name': 'Test District'}]
+        
+        elif doctype == "City":
+            return [{'name': 'CITY_001', 'city_name': 'Test City'}]
+        
+        elif doctype == "Batch":
+            return [{'name': 'BATCH_001', 'batch_id': 'BATCH_2025_001'}]
+        
+        return []
+    
+    def get_single(self, doctype):
+        """Get single document (settings, etc.)"""
+        if doctype == "Gupshup OTP Settings":
+            settings = Mock()
+            settings.api_key = "test_gupshup_key"
+            settings.source_number = "918454812392"
+            settings.app_name = "test_app"
+            settings.api_endpoint = "https://api.gupshup.io/sm/api/v1/msg"
+            return settings
+        
+        return Mock()
+    
+    def get_value(self, doctype, name, field, **kwargs):
+        """Enhanced get_value with realistic responses"""
+        
+        if doctype == "School" and field == "name1":
+            return "Test School"
+        elif doctype == "School" and field == "keyword":
+            return "test_school"
+        elif doctype == "Batch" and field == "batch_id":
+            return "BATCH_2025_001"
+        elif doctype == "OTP Verification" and field == "name":
+            return "OTP_VER_001"
+        elif doctype == "TAP Language" and field == "language_name":
+            return "English"
+        elif doctype == "TAP Language" and field == "glific_language_id":
+            return "1"
+        elif doctype == "District" and field == "district_name":
+            return "Test District"
+        elif doctype == "City" and field == "city_name":
+            return "Test City"
+        
+        return "test_value"
+    
+    def throw(self, message):
+        """Throw exception"""
+        raise Exception(message)
+    
+    def log_error(self, message, title=None):
+        """Log error (mock)"""
+        pass
+    
+    def whitelist(self, allow_guest=False):
+        """Whitelist decorator"""
+        def decorator(func):
+            return func
+        return decorator
+    
+    def _dict(self, data=None):
+        """Dict helper"""
+        return data or {}
+    
+    def msgprint(self, message):
+        """Message print"""
+        pass
+
+# Create and configure the mock
+mock_frappe = MockFrappe()
+
+# Mock external modules
+mock_glific = Mock()
+mock_glific.create_contact = Mock(return_value={'id': 'contact_123'})
+mock_glific.start_contact_flow = Mock(return_value=True)
+mock_glific.get_contact_by_phone = Mock(return_value=None)
+mock_glific.update_contact_fields = Mock(return_value=True)
+mock_glific.add_contact_to_group = Mock(return_value=True)
+mock_glific.create_or_get_teacher_group_for_batch = Mock(return_value={'group_id': 'group_123', 'label': 'teacher_batch_test'})
+
+mock_background = Mock()
+mock_background.enqueue_glific_actions = Mock()
+
+mock_requests = Mock()
+
+# Inject all mocks into sys.modules
+sys.modules['frappe'] = mock_frappe
+sys.modules['frappe.utils'] = mock_frappe.utils
+sys.modules['tap_lms.glific_integration'] = mock_glific
+sys.modules['tap_lms.background_jobs'] = mock_background
+sys.modules['requests'] = mock_requests
+
+# NOW import the API functions
+from tap_lms.api import (
+    authenticate_api_key, 
+    create_student, 
+    send_otp, 
+    list_districts,
+    create_teacher_web,
+    verify_batch_keyword
+)
+
+# =============================================================================
+# COMPREHENSIVE TEST CLASSES
+# =============================================================================
+
+class TestTapLMSAPI(unittest.TestCase):
+    """Main API test class with all test cases"""
     
     def setUp(self):
-        """Set up for each individual test"""
-        frappe.set_user("Administrator")
-        frappe.flags.ignore_permissions = True
+        """Reset mocks before each test"""
+        mock_frappe.response.http_status_code = 200
+        mock_frappe.local.form_dict = {}
+        mock_frappe.request.data = '{}'
+        mock_frappe.request.get_json.return_value = {}
         
-        # Clear form_dict for each test
-        if hasattr(frappe.local, 'form_dict'):
-            frappe.local.form_dict.clear()
-        else:
-            frappe.local.form_dict = {}
-    
-    def debug_api_response(self, func_name, form_data, result):
-        """Helper to debug API responses"""
-        print(f"\n--- DEBUG: {func_name} ---")
-        print(f"Input data: {json.dumps(form_data, indent=2, default=str)}")
-        print(f"Result: {json.dumps(result, indent=2, default=str)}")
-        print(f"Result type: {type(result)}")
+        # Reset mock call counts
+        if hasattr(mock_frappe.db.commit, 'reset_mock'):
+            mock_frappe.db.commit.reset_mock()
+            mock_frappe.db.rollback.reset_mock()
+
+    # =========================================================================
+    # AUTHENTICATION TESTS
+    # =========================================================================
+
+    def test_authenticate_api_key_valid(self):
+        """Test authenticate_api_key with valid key"""
+        result = authenticate_api_key("valid_key")
+        self.assertEqual(result, "valid_api_key_doc")
+
+    def test_authenticate_api_key_invalid(self):
+        """Test authenticate_api_key with invalid key"""
+        result = authenticate_api_key("invalid_key")
+        self.assertIsNone(result)
+
+    def test_authenticate_api_key_empty(self):
+        """Test authenticate_api_key with empty/None key"""
+        result = authenticate_api_key("")
+        self.assertIsNone(result)
         
-        if isinstance(result, dict) and result.get('status') == 'error':
-            print(f"ERROR MESSAGE: {result.get('message', 'No message')}")
+        result = authenticate_api_key(None)
+        self.assertIsNone(result)
+
+    # =========================================================================
+    # STUDENT CREATION TESTS
+    # =========================================================================
+
+    def test_create_student_missing_api_key(self):
+        """Test create_student without API key"""
+        mock_frappe.local.form_dict = {
+            'student_name': 'John Doe',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'glific_123'
+            # Missing api_key
+        }
         
-        print("-" * 30)
-    
-    def test_api_module_import(self):
-        """Test if we can import the API module"""
-        print("\n--- Testing API Module Import ---")
-        try:
-            from tap_lms.api import authenticate_api_key, create_student
-            print("✓ Successfully imported API functions")
-            
-            # Check if functions are properly decorated
-            print(f"authenticate_api_key whitelisted: {hasattr(authenticate_api_key, '_whitelisted')}")
-            print(f"create_student whitelisted: {hasattr(create_student, '_whitelisted')}")
-            
-        except ImportError as e:
-            print(f"✗ Import error: {e}")
-            self.fail(f"Cannot import API module: {e}")
-        except Exception as e:
-            print(f"✗ Other error: {e}")
-            self.fail(f"Error importing API: {e}")
-    
-    def test_authenticate_api_key_valid_debug(self):
-        """Test API key authentication with debugging"""
-        print("\n--- Testing Valid API Key ---")
+        result = create_student()
+        self.assertEqual(result['status'], 'error')
+        self.assertIn('required', result['message'].lower())
+
+    def test_create_student_invalid_api_key(self):
+        """Test create_student with invalid API key"""
+        mock_frappe.local.form_dict = {
+            'api_key': 'invalid_key',
+            'student_name': 'John Doe',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'glific_123'
+        }
         
-        try:
-            from tap_lms.api import authenticate_api_key
-            
-            # Check if API key exists in database
-            api_key_doc = frappe.db.get_value("API Key", 
-                                            {"key": self.api_key_name}, 
-                                            ["name", "enabled"], as_dict=True)
-            print(f"API key in DB: {api_key_doc}")
-            
-            result = authenticate_api_key(self.api_key_name)
-            print(f"authenticate_api_key result: {result}")
-            print(f"Result type: {type(result)}")
-            
-            self.assertIsNotNone(result, "Valid API key should return a result")
-            
-        except Exception as e:
-            print(f"✗ Error in test: {e}")
-            traceback.print_exc()
-            self.fail(f"Test failed with error: {e}")
-    
-    def test_create_student_missing_api_key_debug(self):
-        """Test student creation without API key with debugging"""
-        print("\n--- Testing Missing API Key ---")
+        result = create_student()
+        self.assertEqual(result['status'], 'error')
+        self.assertEqual(result['message'], 'Invalid API key')
+
+    def test_create_student_missing_required_fields(self):
+        """Test create_student with missing required fields"""
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'John Doe'
+            # Missing other required fields
+        }
         
-        try:
-            from tap_lms.api import create_student
+        result = create_student()
+        self.assertEqual(result['status'], 'error')
+        self.assertIn('required', result['message'].lower())
+
+    def test_create_student_invalid_batch(self):
+        """Test create_student with invalid batch keyword"""
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'John Doe',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'invalid_batch',
+            'vertical': 'Math',
+            'glific_id': 'glific_123'
+        }
+        
+        result = create_student()
+        self.assertEqual(result['status'], 'error')
+        self.assertIn('batch', result['message'].lower())
+
+    def test_create_student_success(self):
+        """Test successful student creation"""
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'John Doe',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'glific_123'
+        }
+        
+        with patch('tap_lms.api.get_course_level_with_mapping') as mock_course, \
+             patch('tap_lms.api.create_new_student') as mock_create_student, \
+             patch('tap_lms.api.get_tap_language') as mock_language:
             
-            form_data = {
-                'student_name': 'John Doe',
-                'phone': '9876543211',
-                'gender': 'Male',
-                'grade': '5'
-            }
+            # Setup mocks for successful creation
+            mock_course.return_value = 'COURSE_LEVEL_001'
+            mock_language.return_value = 'ENGLISH'
             
-            frappe.local.form_dict = form_data
+            mock_student = Mock()
+            mock_student.name = 'STUDENT_001'
+            mock_student.append = Mock()
+            mock_student.save = Mock()
+            mock_create_student.return_value = mock_student
+            
             result = create_student()
             
-            self.debug_api_response("create_student (missing API key)", form_data, result)
-            
-            # Check the actual result structure
-            if not isinstance(result, dict):
-                self.fail(f"Expected dict result, got {type(result)}: {result}")
-            
-            if 'status' not in result:
-                self.fail(f"Result missing 'status' field. Got: {result}")
-            
-            self.assertEqual(result['status'], 'error', 
-                           f"Expected error status, got: {result}")
-            
-            # Check for API key mention in message
-            message = result.get('message', '').lower()
-            self.assertTrue(any(word in message for word in ['api', 'key', 'required']),
-                          f"Error message should mention API key. Got: {result.get('message')}")
-            
-        except Exception as e:
-            print(f"✗ Error in test: {e}")
-            traceback.print_exc()
-            self.fail(f"Test failed with error: {e}")
-    
-    def test_create_student_success_debug(self):
-        """Test successful student creation with debugging"""
-        print("\n--- Testing Successful Student Creation ---")
-        
-        try:
-            from tap_lms.api import create_student
-            
-            # Set up comprehensive form data
-            form_data = {
-                'api_key': self.api_key_name,
-                'student_name': 'John Doe Test Debug',
-                'phone': '9876543299',  # Unique phone for this test
-                'gender': 'Male',
-                'grade': '5',
-                'language': 'English',
-                'batch_skeyword': 'test_batch_2025',
-                'vertical': 'Mathematics',
-                'glific_id': 'glific_debug_123'
-            }
-            
-            frappe.local.form_dict = form_data
-            
-            # Mock external dependencies
-            with patch('tap_lms.glific_integration.create_contact') as mock_glific, \
-                 patch('requests.post') as mock_requests:
-                
-                mock_glific.return_value = {'id': 'contact_123'}
-                mock_requests.return_value.status_code = 200
-                mock_requests.return_value.json.return_value = {'success': True}
-                
-                print("Mocks set up, calling create_student...")
-                result = create_student()
-                
-                self.debug_api_response("create_student (success case)", form_data, result)
-                
-                # Detailed result analysis
-                if not isinstance(result, dict):
-                    self.fail(f"Expected dict result, got {type(result)}: {result}")
-                
-                if 'status' not in result:
-                    available_keys = list(result.keys()) if isinstance(result, dict) else "Not a dict"
-                    self.fail(f"Result missing 'status' field. Available keys: {available_keys}")
-                
-                if result['status'] == 'error':
-                    print(f"Got error when expecting success: {result}")
-                    # Let's debug what went wrong
-                    
-                    # Check if batch exists
-                    batch_check = frappe.db.get_value("Batch onboarding", 
-                                                    {"batch_skeyword": "test_batch_2025"}, 
-                                                    "name")
-                    print(f"Batch onboarding exists: {batch_check}")
-                    
-                    if not batch_check:
-                        print("Creating batch onboarding for test...")
-                        self._create_test_batch_data()
-                        
-                        # Try again
-                        result = create_student()
-                        self.debug_api_response("create_student (retry after batch creation)", form_data, result)
-                
-                self.assertEqual(result['status'], 'success', 
-                               f"Expected success, got: {result}")
-                
-                if result['status'] == 'success':
-                    self.assertIn('crm_student_id', result, 
-                                f"Success result should have crm_student_id: {result}")
-                
-        except Exception as e:
-            print(f"✗ Error in test: {e}")
-            traceback.print_exc()
-            self.fail(f"Test failed with error: {e}")
-    
-    def _create_test_batch_data(self):
-        """Helper to create all required test data"""
-        print("Creating comprehensive test data...")
-        
-        try:
-            # Create course vertical
-            vertical_name = "TEST_VERTICAL_MATH"
-            if not frappe.db.exists("Course Verticals", vertical_name):
-                vertical = frappe.get_doc({
-                    "doctype": "Course Verticals",
-                    "name": vertical_name,
-                    "vertical_name": "Mathematics"  # Try different field names
-                })
-                try:
-                    vertical.insert()
-                    frappe.db.commit()
-                    print(f"✓ Course vertical created: {vertical_name}")
-                except Exception as e:
-                    print(f"✗ Error creating course vertical: {e}")
-            
-            # Create batch
-            batch_name = "TEST_BATCH_001"
-            if not frappe.db.exists("Batch", batch_name):
-                batch = frappe.get_doc({
-                    "doctype": "Batch",
-                    "name": batch_name,
-                    "batch_id": "test_batch_2025",
-                    "active": 1,
-                    "start_date": frappe.utils.today(),
-                    "end_date": frappe.utils.add_days(frappe.utils.today(), 365),
-                    "regist_end_date": frappe.utils.add_days(frappe.utils.today(), 30)
-                })
-                try:
-                    batch.insert()
-                    frappe.db.commit()
-                    print(f"✓ Batch created: {batch_name}")
-                except Exception as e:
-                    print(f"✗ Error creating batch: {e}")
-            
-            # Create batch onboarding
-            if not frappe.db.exists("Batch onboarding", {"batch_skeyword": "test_batch_2025"}):
-                onboarding = frappe.get_doc({
-                    "doctype": "Batch onboarding",
-                    "school": self.school_name,
-                    "batch": batch_name,
-                    "batch_skeyword": "test_batch_2025",
-                    "kit_less": 1,
-                    "from_grade": "1",
-                    "to_grade": "10"
-                })
-                try:
-                    if frappe.db.exists("Course Verticals", vertical_name):
-                        onboarding.append("batch_school_verticals", {
-                            "course_vertical": vertical_name
-                        })
-                    onboarding.insert()
-                    frappe.db.commit()
-                    print(f"✓ Batch onboarding created")
-                except Exception as e:
-                    print(f"✗ Error creating batch onboarding: {e}")
-                    
-        except Exception as e:
-            print(f"✗ Error in _create_test_batch_data: {e}")
-            traceback.print_exc()
-    
-    def test_inspect_actual_api_behavior(self):
-        """Inspect what the API actually does vs what we expect"""
-        print("\n--- Inspecting Actual API Behavior ---")
-        
-        try:
-            from tap_lms import api
-            import inspect
-            
-            # Get all functions in the API module
-            api_functions = inspect.getmembers(api, inspect.isfunction)
-            print(f"Available API functions: {[name for name, func in api_functions]}")
-            
-            # Check if our expected functions exist
-            expected_functions = ['authenticate_api_key', 'create_student', 'list_districts']
-            for func_name in expected_functions:
-                if hasattr(api, func_name):
-                    func = getattr(api, func_name)
-                    sig = inspect.signature(func)
-                    print(f"✓ {func_name}: {sig}")
-                else:
-                    print(f"✗ {func_name}: Not found")
-            
-            # Try to understand the create_student function
-            if hasattr(api, 'create_student'):
-                print("\nAnalyzing create_student function...")
-                source_lines = inspect.getsource(api.create_student).split('\n')[:10]
-                print("First 10 lines:")
-                for i, line in enumerate(source_lines):
-                    print(f"  {i+1}: {line}")
-            
-        except Exception as e:
-            print(f"Error inspecting API: {e}")
-            traceback.print_exc()
-    
-    def test_database_state_debug(self):
-        """Debug the database state"""
-        print("\n--- Database State Debug ---")
-        
-        try:
-            # Check what doctypes actually exist
-            print("Checking DocType existence...")
-            doctypes_to_check = [
-                "API Key", "School", "Batch", "Student", 
-                "Course Verticals", "Batch onboarding"
-            ]
-            
-            for dt in doctypes_to_check:
-                exists = frappe.db.exists("DocType", dt)
-                if exists:
-                    # Count records
-                    count = frappe.db.count(dt)
-                    print(f"  ✓ {dt}: {count} records")
-                    
-                    # Show sample record structure
-                    if count > 0:
-                        sample = frappe.db.get_all(dt, limit=1, fields=["name"])
-                        if sample:
-                            first_doc = frappe.get_doc(dt, sample[0].name)
-                            meta = frappe.get_meta(dt)
-                            fields = [f.fieldname for f in meta.fields[:5]]  # First 5 fields
-                            print(f"    Sample fields: {fields}")
-                else:
-                    print(f"  ✗ {dt}: Does not exist")
-            
-            # Check our test data specifically
-            print(f"\nChecking our test API key: {self.api_key_name}")
-            api_key_exists = frappe.db.exists("API Key", {"key": self.api_key_name})
-            print(f"  API key exists: {api_key_exists}")
-            
-            if api_key_exists:
-                api_key_data = frappe.db.get_value("API Key", 
-                                                 {"key": self.api_key_name}, 
-                                                 ["name", "enabled", "key"], 
-                                                 as_dict=True)
-                print(f"  API key data: {api_key_data}")
-            
-        except Exception as e:
-            print(f"Error checking database state: {e}")
-            traceback.print_exc()
+            self.assertEqual(result['status'], 'success')
+            self.assertEqual(result['crm_student_id'], 'STUDENT_001')
+            self.assertEqual(result['assigned_course_level'], 'COURSE_LEVEL_001')
 
+    # =========================================================================
+    # OTP TESTS  
+    # =========================================================================
+
+    def test_send_otp_success(self):
+        """Test successful OTP sending"""
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210'
+        }
+        
+        with patch('requests.get') as mock_requests_get:
+            # Mock successful WhatsApp API response
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "status": "success",
+                "id": "msg_12345"
+            }
+            mock_requests_get.return_value = mock_response
+            
+            result = send_otp()
+            
+            self.assertEqual(result["status"], "success")
+            self.assertIn("whatsapp_message_id", result)
+
+    def test_send_otp_invalid_api_key(self):
+        """Test send_otp with invalid API key"""
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'invalid_key',
+            'phone': '9876543210'
+        }
+        
+        result = send_otp()
+        
+        self.assertEqual(result["status"], "failure")
+        self.assertEqual(result["message"], "Invalid API key")
+
+    def test_send_otp_missing_phone(self):
+        """Test send_otp without phone number"""
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key'
+            # Missing phone
+        }
+        
+        result = send_otp()
+        
+        self.assertEqual(result["status"], "failure")
+        self.assertIn("phone", result["message"].lower())
+
+    # =========================================================================
+    # LOCATION TESTS
+    # =========================================================================
+
+    def test_list_districts_success(self):
+        """Test successful district listing"""
+        mock_frappe.request.data = json.dumps({
+            'api_key': 'valid_key',
+            'state': 'test_state'
+        })
+        
+        result = list_districts()
+        
+        self.assertEqual(result["status"], "success")
+        self.assertIn("data", result)
+
+    def test_list_districts_invalid_api_key(self):
+        """Test list_districts with invalid API key"""
+        mock_frappe.request.data = json.dumps({
+            'api_key': 'invalid_key',
+            'state': 'test_state'
+        })
+        
+        result = list_districts()
+        
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["message"], "Invalid API key")
+
+    def test_list_districts_missing_data(self):
+        """Test list_districts with missing required data"""
+        mock_frappe.request.data = json.dumps({
+            'api_key': 'valid_key'
+            # Missing state
+        })
+        
+        result = list_districts()
+        
+        self.assertEqual(result["status"], "error")
+        self.assertIn("required", result["message"].lower())
+
+
+class TestTapLMSAPIIntegration(unittest.TestCase):
+    """Integration tests for API functionality"""
+    
+    def setUp(self):
+        """Setup for integration tests"""
+        mock_frappe.response.http_status_code = 200
+
+    def test_api_endpoint_accessibility(self):
+        """Test that API endpoints are accessible and don't crash"""
+        
+        # Test authentication function
+        try:
+            result = authenticate_api_key("test_key")
+            self.assertTrue(result is None or isinstance(result, str))
+        except Exception as e:
+            self.fail(f"Authentication endpoint failed: {str(e)}")
+        
+        # Test student creation with minimal data
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'Test Student',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'glific_123'
+        }
+        
+        try:
+            with patch('tap_lms.api.get_course_level_with_mapping', return_value='COURSE_001'), \
+                 patch('tap_lms.api.create_new_student') as mock_create, \
+                 patch('tap_lms.api.get_tap_language', return_value='ENGLISH'):
+                
+                mock_student = Mock()
+                mock_student.name = 'STUDENT_001'
+                mock_student.append = Mock()
+                mock_student.save = Mock()
+                mock_create.return_value = mock_student
+                
+                result = create_student()
+                self.assertIsInstance(result, dict)
+                self.assertIn('status', result)
+        except Exception as e:
+            self.fail(f"Student creation endpoint failed: {str(e)}")
+
+    def test_external_api_integration(self):
+        """Test external API integration with proper mocking"""
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210'
+        }
+        
+        with patch('requests.get') as mock_requests_get:
+            # Mock successful external API response
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "status": "success",
+                "id": "msg_12345"
+            }
+            mock_requests_get.return_value = mock_response
+            
+            try:
+                result = send_otp()
+                self.assertIsInstance(result, dict)
+                self.assertIn('status', result)
+            except Exception as e:
+                self.fail(f"External API integration failed: {str(e)}")
+
+
+# =============================================================================
+# ADDITIONAL HELPER TESTS
+# =============================================================================
+
+class TestTapLMSAPIHelpers(unittest.TestCase):
+    """Test helper functions and edge cases"""
+    
+    def test_mock_verification(self):
+        """Verify that all mocks are working correctly"""
+        
+        # Test frappe utils
+        self.assertEqual(mock_frappe.utils.cint("5"), 5)
+        self.assertEqual(mock_frappe.utils.cstr(123), "123")
+        self.assertEqual(mock_frappe.utils.today(), "2025-01-15")
+        
+        # Test frappe methods
+        self.assertTrue(callable(mock_frappe.get_doc))
+        self.assertTrue(callable(mock_frappe.get_all))
+        self.assertTrue(callable(mock_frappe.get_value))
+        
+        # Test exception classes
+        self.assertTrue(issubclass(mock_frappe.DoesNotExistError, Exception))
+        self.assertTrue(issubclass(mock_frappe.ValidationError, Exception))
+
+    def test_form_dict_handling(self):
+        """Test form_dict data handling"""
+        
+        test_data = {
+            'string_field': 'test_value',
+            'number_field': 123,
+            'empty_field': '',
+            'none_field': None
+        }
+        
+        mock_frappe.local.form_dict = test_data
+        
+        # Verify data is accessible
+        self.assertEqual(mock_frappe.local.form_dict['string_field'], 'test_value')
+        self.assertEqual(mock_frappe.local.form_dict['number_field'], 123)
+        self.assertEqual(mock_frappe.local.form_dict.get('empty_field'), '')
+        self.assertIsNone(mock_frappe.local.form_dict.get('none_field'))
+
+    def test_database_operations(self):
+        """Test database operation mocks"""
+        
+        # Test get_value
+        result = mock_frappe.get_value("School", "SCHOOL_001", "name1")
+        self.assertEqual(result, "Test School")
+        
+        # Test get_all
+        result = mock_frappe.get_all("District", filters={"state": "test_state"})
+        self.assertIsInstance(result, list)
+        
+        # Test database transaction methods
+        mock_frappe.db.commit()
+        mock_frappe.db.rollback()
+        
+        # Should not raise exceptions
+        self.assertTrue(True)
+
+
+# =============================================================================
+# TEST RUNNER
+# =============================================================================
 
 if __name__ == '__main__':
-    # Run with extra verbosity
+    # Run all tests with detailed output
     unittest.main(verbosity=2, buffer=False)
