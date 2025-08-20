@@ -92,11 +92,11 @@ class MockFrappe:
     #     """Mock log_error method"""
     #     pass
         
-    # def whitelist(self, allow_guest=False):
-    #     """Mock whitelist decorator"""
-    #     def decorator(func):
-    #         return func
-    #     return decorator
+    def whitelist(self, allow_guest=False):
+        """Mock whitelist decorator"""
+        def decorator(func):
+            return func
+        return decorator
         
     # def _dict(self, data=None):
     #     """Mock _dict method"""
@@ -106,15 +106,15 @@ class MockFrappe:
     #     """Mock msgprint method"""
     #     pass
         
-    # # Exception classes
-    # class DoesNotExistError(Exception):
-    #     pass
+    # Exception classes
+    class DoesNotExistError(Exception):
+        pass
         
-    # class ValidationError(Exception):
-    #     pass
+    class ValidationError(Exception):
+        pass
         
-    # class DuplicateEntryError(Exception):
-    #     pass
+    class DuplicateEntryError(Exception):
+        pass
 
 # Initialize and inject mock frappe
 mock_frappe = MockFrappe()
