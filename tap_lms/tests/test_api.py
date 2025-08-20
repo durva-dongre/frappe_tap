@@ -54,57 +54,57 @@ class MockFrappe:
         self.logger = Mock()
         self.logger.return_value = Mock()
         
-    def get_doc(self, *args, **kwargs):
-        """Mock get_doc method"""
-        doc = Mock()
-        doc.name = "TEST_DOC"
-        doc.insert = Mock()
-        doc.save = Mock()
-        doc.append = Mock()
-        return doc
+    # def get_doc(self, *args, **kwargs):
+    #     """Mock get_doc method"""
+    #     doc = Mock()
+    #     doc.name = "TEST_DOC"
+    #     doc.insert = Mock()
+    #     doc.save = Mock()
+    #     doc.append = Mock()
+    #     return doc
         
-    def new_doc(self, doctype):
-        """Mock new_doc method"""
-        doc = Mock()
-        doc.name = f"NEW_{doctype}"
-        doc.insert = Mock()
-        doc.save = Mock()
-        doc.append = Mock()
-        return doc
+    # def new_doc(self, doctype):
+    #     """Mock new_doc method"""
+    #     doc = Mock()
+    #     doc.name = f"NEW_{doctype}"
+    #     doc.insert = Mock()
+    #     doc.save = Mock()
+    #     doc.append = Mock()
+    #     return doc
         
-    def get_all(self, *args, **kwargs):
-        """Mock get_all method"""
-        return []
+    # def get_all(self, *args, **kwargs):
+    #     """Mock get_all method"""
+    #     return []
         
-    def get_single(self, doctype):
-        """Mock get_single method"""
-        return Mock()
+    # def get_single(self, doctype):
+    #     """Mock get_single method"""
+    #     return Mock()
         
-    def get_value(self, *args, **kwargs):
-        """Mock get_value method"""
-        return "test_value"
+    # def get_value(self, *args, **kwargs):
+    #     """Mock get_value method"""
+    #     return "test_value"
         
-    def throw(self, message):
-        """Mock throw method"""
-        raise Exception(message)
+    # def throw(self, message):
+    #     """Mock throw method"""
+    #     raise Exception(message)
         
-    def log_error(self, message, title=None):
-        """Mock log_error method"""
-        pass
+    # def log_error(self, message, title=None):
+    #     """Mock log_error method"""
+    #     pass
         
-    def whitelist(self, allow_guest=False):
-        """Mock whitelist decorator"""
-        def decorator(func):
-            return func
-        return decorator
+    # def whitelist(self, allow_guest=False):
+    #     """Mock whitelist decorator"""
+    #     def decorator(func):
+    #         return func
+    #     return decorator
         
-    def _dict(self, data=None):
-        """Mock _dict method"""
-        return data or {}
+    # def _dict(self, data=None):
+    #     """Mock _dict method"""
+    #     return data or {}
         
-    def msgprint(self, message):
-        """Mock msgprint method"""
-        pass
+    # def msgprint(self, message):
+    #     """Mock msgprint method"""
+    #     pass
         
     # Exception classes
     class DoesNotExistError(Exception):
