@@ -896,12 +896,13 @@ class TestHelperFunctions(unittest.TestCase):
 def test_get_active_batch_for_school_found(self, mock_get_all):
     """Test get_active_batch_for_school when batch is found"""
     
-    # Use frappe._dict which supports both dict["key"] and dict.key access
-    batch_onboarding = mock_frappe._dict({"batch": "BATCH_001"})
+    # Create mock objects that support attribute access
+    mock_batch_onboarding = Mock()
+    mock_batch_onboarding.batch = "BATCH_001"
     
     mock_get_all.side_effect = [
         ["BATCH_001"],  # Active batches
-        [batch_onboarding]  # Active batch onboardings
+        [mock_batch_onboarding]  # Active batch onboardings - now with .batch attribute
     ]
 
     with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:  # Fixed patch path
@@ -911,6 +912,19 @@ def test_get_active_batch_for_school_found(self, mock_get_all):
         
         self.assertEqual(result["batch_name"], "BATCH_001")
         self.assertEqual(result["batch_id"], "test_batch_id")
+
+@patch('tap_lms.api.frappe.get_all')  # Fixed patch path
+def test_get_active_batch_for_school_not_found(self, mock_get_all):
+    """Test get_active_batch_for_school when no batch is found"""
+    mock_get_all.side_effect = [
+        ["BATCH_001"],  # Active batches
+        []  # No active batch onboardings
+    ]
+    
+    result = get_active_batch_for_school("SCHOOL_001")
+    
+    self.assertIsNone(result["batch_name"])
+    self.assertEqual(result["batch_id"], "no_active_batch_id")
     @patch('tap_lms.api.frappe.get_all')  # Fixed patch path
     def test_get_active_batch_for_school_not_found(self, mock_get_all):
         """Test get_active_batch_for_school when no batch is found"""
