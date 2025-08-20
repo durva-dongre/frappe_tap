@@ -877,22 +877,40 @@ class TestHelperFunctions(unittest.TestCase):
         
         self.assertEqual(result, "2024-25")
 
-    @patch('tap_lms.api.frappe.get_all')  # Fixed patch path
-    def test_get_active_batch_for_school_found(self, mock_get_all):
-        """Test get_active_batch_for_school when batch is found"""
-        mock_get_all.side_effect = [
-            ["BATCH_001"],  # Active batches
-            [{"batch": "BATCH_001"}]  # Active batch onboardings
-        ]
+    # @patch('tap_lms.api.frappe.get_all')  # Fixed patch path
+    # def test_get_active_batch_for_school_found(self, mock_get_all):
+    #     """Test get_active_batch_for_school when batch is found"""
+    #     mock_get_all.side_effect = [
+    #         ["BATCH_001"],  # Active batches
+    #         [{"batch": "BATCH_001"}]  # Active batch onboardings
+    #     ]
         
-        with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:  # Fixed patch path
-            mock_get_value.return_value = "test_batch_id"
+    #     with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:  # Fixed patch path
+    #         mock_get_value.return_value = "test_batch_id"
             
-            result = get_active_batch_for_school("SCHOOL_001")
+    #         result = get_active_batch_for_school("SCHOOL_001")
             
-            self.assertEqual(result["batch_name"], "BATCH_001")
-            self.assertEqual(result["batch_id"], "test_batch_id")
+    #         self.assertEqual(result["batch_name"], "BATCH_001")
+    #         self.assertEqual(result["batch_id"], "test_batch_id")
+@patch('tap_lms.api.frappe.get_all')  # Fixed patch path
+def test_get_active_batch_for_school_found(self, mock_get_all):
+    """Test get_active_batch_for_school when batch is found"""
+    
+    # Use frappe._dict which supports both dict["key"] and dict.key access
+    batch_onboarding = mock_frappe._dict({"batch": "BATCH_001"})
+    
+    mock_get_all.side_effect = [
+        ["BATCH_001"],  # Active batches
+        [batch_onboarding]  # Active batch onboardings
+    ]
 
+    with patch('tap_lms.api.frappe.db.get_value') as mock_get_value:  # Fixed patch path
+        mock_get_value.return_value = "test_batch_id"
+        
+        result = get_active_batch_for_school("SCHOOL_001")
+        
+        self.assertEqual(result["batch_name"], "BATCH_001")
+        self.assertEqual(result["batch_id"], "test_batch_id")
     @patch('tap_lms.api.frappe.get_all')  # Fixed patch path
     def test_get_active_batch_for_school_not_found(self, mock_get_all):
         """Test get_active_batch_for_school when no batch is found"""
