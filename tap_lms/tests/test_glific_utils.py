@@ -42,6 +42,38 @@ class TestGlificUtils(unittest.TestCase):
         self.assertEqual(mock_update.call_count, 3)
         self.assertEqual(mock_commit.call_count, 3)
         self.assertEqual(mock_publish.call_count, 4)  # 3 progress + 1 completion
+        @patch('tap_lms.glific_utils.enqueue')
+        @patch('frappe.db.count')
+        def test_run_glific_id_update_no_students(self, mock_count, mock_enqueue):
+            """Test run_glific_id_update when there are no students"""
+            # Setup mocks
+            mock_count.return_value = 0
+            
+            from tap_lms.glific_utils import run_glific_id_update
+            result = run_glific_id_update()
+            
+            # Assertions
+            self.assertEqual(result, "No students found without Glific ID.")
+            mock_enqueue.assert_not_called()
+
+        @patch('tap_lms.glific_utils.enqueue')
+        @patch('frappe.db.count')
+        def test_run_glific_id_update_with_students(self, mock_count, mock_enqueue):
+            """Test run_glific_id_update when students exist"""
+            # Setup mocks
+            mock_count.return_value = 5
+            mock_job = MagicMock()
+            mock_job.id = "JOB123"
+            mock_enqueue.return_value = mock_job
+            
+            from tap_lms.glific_utils import run_glific_id_update
+            result = run_glific_id_update()
+            
+            # Assertions
+            mock_count.assert_called_once()
+            mock_enqueue.assert_called_once()
+            self.assertIn("Glific ID update process started", result)
+            self.assertIn("JOB123", result)
 
     @patch('tap_lms.glific_utils.update_student_glific_ids')
     @patch('frappe.db.commit')
