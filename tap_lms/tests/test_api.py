@@ -798,72 +798,7 @@ class TestTapLMSAPI(unittest.TestCase):
         result = create_teacher_web()
         self.assertEqual(result['status'], 'success')
 
-    # =========================================================================
-    # REAL API COVERAGE TESTS - The KEY to achieving API coverage
-    # =========================================================================
-    
-    def test_real_api_module_import_and_coverage(self):
-        """Test to ensure real API module gets full coverage"""
-        if REAL_API_IMPORTED and REAL_API_MODULE:
-            # This test ensures that the real API module is imported and covered
-            self.assertIsNotNone(REAL_API_MODULE)
-            
-            # Call every function we found in the real module to ensure coverage
-            for func_name, func in _ORIGINAL_FUNCTIONS.items():
-                try:
-                    if func_name == 'authenticate_api_key':
-                        # Call with mock arguments that won't break
-                        try:
-                            func('test_key')
-                        except:
-                            pass  # Expected to fail, but we get coverage
-                    
-                    elif func_name == 'get_active_batch_for_school':
-                        try:
-                            func('SCHOOL_001')
-                        except:
-                            pass  # Expected to fail, but we get coverage
-                    
-                    elif func_name in ['create_teacher_web', 'verify_batch_keyword']:
-                        try:
-                            func()
-                        except:
-                            pass  # Expected to fail, but we get coverage
-                    
-                    elif func_name in ['create_student', 'send_otp', 'list_districts']:
-                        # These need specific setup, call them to trigger line coverage
-                        try:
-                            func()
-                        except:
-                            pass  # Expected to fail due to missing setup, but we get coverage
-                    
-                    elif callable(func) and not func_name.startswith('_'):
-                        # Try to call any other callable functions
-                        try:
-                            func()
-                        except:
-                            pass  # Expected failures, but we get coverage
-                
-                except Exception:
-                    # Expected exceptions due to missing dependencies, but we still get coverage
-                    pass
-            
-            # Verify we have function references
-            self.assertTrue(len(_ORIGINAL_FUNCTIONS) > 0)
-        
-        # Verify our test-compatible functions work
-        self.assertTrue(callable(authenticate_api_key))
-        self.assertTrue(callable(create_student))
-        self.assertTrue(callable(send_otp))
-        self.assertTrue(callable(list_districts))
-        self.assertTrue(callable(create_teacher_web))
-        self.assertTrue(callable(verify_batch_keyword))
-        self.assertTrue(callable(get_active_batch_for_school))
-
-    # =========================================================================
-    # MOCK UTILITY TESTS (to cover all mock code for test_api.py coverage)
-    # =========================================================================
-
+   
     def test_mock_frappe_utils_cint(self):
         """Test mock frappe utils cint function"""
         # Test all branches of cint
