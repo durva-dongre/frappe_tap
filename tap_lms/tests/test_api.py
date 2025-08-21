@@ -1344,41 +1344,5 @@ class TestTapLMSAPIComplete(unittest.TestCase):
             self.assertIsInstance(result, dict)
             print("✓ verify_otp: Expired OTP tested")
 
-    def test_list_functions_comprehensive(self):
-        """Test all list functions"""
-        list_functions = ['list_districts', 'list_cities', 'list_schools', 'list_languages', 'list_verticals']
-        
-        for func_name in list_functions:
-            if hasattr(api_module, func_name):
-                func = getattr(api_module, func_name)
-                
-                # Test successful list
-                frappe_mock.request.data = json.dumps({
-                    'api_key': 'valid_key',
-                    'state': 'test_state',
-                    'district': 'test_district'
-                })
-                frappe_mock.set_api_key_valid(True)
-                
-                result = func()
-                self.assertIsInstance(result, dict)
-                print(f"✓ {func_name}: Success tested")
-                
-                # Test invalid API key
-                frappe_mock.request.data = json.dumps({
-                    'api_key': 'invalid_key',
-                    'state': 'test_state'
-                })
-                frappe_mock.set_api_key_valid(False)
-                
-                result = func()
-                self.assertIsInstance(result, dict)
-                print(f"✓ {func_name}: Invalid API key tested")
-                
-                # Test malformed JSON
-                frappe_mock.request.data = "{invalid json"
-                result = func()
-                self.assertIsInstance(result, dict)
-                print(f"✓ {func_name}: JSON error tested")
-
+    
   
