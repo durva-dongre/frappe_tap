@@ -123,7 +123,6 @@
 #             self.assertEqual(mock_publish.call_count, expected_publish_calls,
 #                            f"Failed publish count for {total_students} students")
 
-import frappe
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -131,20 +130,24 @@ from unittest.mock import patch, MagicMock
 class TestGlificUtils(unittest.TestCase):
     """Complete test cases for 100% coverage"""
 
-    @patch("frappe.whitelist", lambda *args, **kwargs: (lambda f: f))
+    @patch("frappe.whitelist", lambda *a, **kw: (lambda f: f))  # Patch BEFORE import
     @patch("tap_lms.glific_utils.enqueue")
     @patch("frappe.db.count")
     def test_run_glific_id_update_with_no_students(self, mock_count, mock_enqueue):
         """Test run_glific_id_update when there are no students without Glific ID"""
         mock_count.return_value = 0
 
+        # Import after patching
         from tap_lms.glific_utils import run_glific_id_update
 
         result = run_glific_id_update()
+
+        # Assertions
         self.assertEqual(result, "No students found without Glific ID.")
+        mock_count.assert_called_once_with("Student", {"glific_id": ["in", ["", None]]})
         mock_enqueue.assert_not_called()
 
-    @patch("frappe.whitelist", lambda *args, **kwargs: (lambda f: f))
+    @patch("frappe.whitelist", lambda *a, **kw: (lambda f: f))  # Patch BEFORE import
     @patch("tap_lms.glific_utils.enqueue")
     @patch("frappe.db.count")
     def test_run_glific_id_update_with_students(self, mock_count, mock_enqueue):
@@ -152,12 +155,14 @@ class TestGlificUtils(unittest.TestCase):
         mock_count.return_value = 5
         mock_enqueue.return_value = MagicMock(id="JOB123")
 
+        # Import after patching
         from tap_lms.glific_utils import run_glific_id_update
 
         result = run_glific_id_update()
+
+        # Assertions
         self.assertIn("Glific ID update process started", result)
         self.assertIn("JOB123", result)
-
         mock_count.assert_called_once_with("Student", {"glific_id": ["in", ["", None]]})
         mock_enqueue.assert_called_once()
 
