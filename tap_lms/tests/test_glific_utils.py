@@ -131,6 +131,7 @@ from unittest.mock import patch, MagicMock
 class TestGlificUtils(unittest.TestCase):
     """Complete test cases for 100% coverage"""
 
+    @patch("frappe.whitelist", lambda *args, **kwargs: (lambda f: f))
     @patch("tap_lms.glific_utils.enqueue")
     @patch("frappe.db.count")
     def test_run_glific_id_update_with_no_students(self, mock_count, mock_enqueue):
@@ -143,6 +144,7 @@ class TestGlificUtils(unittest.TestCase):
         self.assertEqual(result, "No students found without Glific ID.")
         mock_enqueue.assert_not_called()
 
+    @patch("frappe.whitelist", lambda *args, **kwargs: (lambda f: f))
     @patch("tap_lms.glific_utils.enqueue")
     @patch("frappe.db.count")
     def test_run_glific_id_update_with_students(self, mock_count, mock_enqueue):
@@ -156,7 +158,9 @@ class TestGlificUtils(unittest.TestCase):
         self.assertIn("Glific ID update process started", result)
         self.assertIn("JOB123", result)
 
-        # Ensure mocks are called correctly
         mock_count.assert_called_once_with("Student", {"glific_id": ["in", ["", None]]})
         mock_enqueue.assert_called_once()
 
+
+if __name__ == "__main__":
+    unittest.main()
