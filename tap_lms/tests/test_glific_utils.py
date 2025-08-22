@@ -6,17 +6,6 @@ from unittest.mock import patch, MagicMock, call
 class TestGlificUtils(unittest.TestCase):
     """Simplified test cases that will definitely work"""
 
-    #     """Test run_glific_id_update when no students are found"""
-    #     # Setup mock
-    #     mock_count.return_value = 0
-        
-    #     # Import and call function
-    #     from tap_lms.glific_utils import run_glific_id_update
-    #     result = run_glific_id_update()
-        
-    #     # Simple assertions
-    #     mock_count.assert_called_once()
-    #     self.assertEqual(result, "No students found without Glific ID.")
 
     @patch('tap_lms.glific_utils.update_student_glific_ids')
     @patch('frappe.db.commit')
