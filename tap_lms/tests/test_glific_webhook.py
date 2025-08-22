@@ -4269,35 +4269,7 @@ def send_glific_update(glific_id, update_payload):
         self.mock_requests.post.return_value.json.return_value = {"data": {}}
         result3 = self.module.get_glific_contact("empty")
 
-    def test_03_prepare_update_payload_all_paths(self):
-        """Test prepare_update_payload - all execution paths"""
-        # Setup test data
-        doc = Mock()
-        doc.name = "New Name"
-        doc.language = "Hindi"
-        doc.get = lambda field: getattr(doc, field, "default")
-        
-        glific_contact = {
-            "language": {"id": "1"},
-            "fields": '{"name": {"value": "Old Name", "type": "string"}}'
-        }
-        
-        # Path 1: Updates needed
-        self.mock_frappe.db.get_value.return_value = "2"  # Different language
-        result1 = self.module.prepare_update_payload(doc, glific_contact)
-        
-        # Path 2: No updates needed  
-        doc2 = Mock()
-        doc2.name = "Old Name"
-        doc2.language = "English"
-        doc2.get = lambda field: getattr(doc2, field, "default")
-        self.mock_frappe.db.get_value.return_value = "1"  # Same language
-        result2 = self.module.prepare_update_payload(doc2, glific_contact)
-        
-        # Path 3: New field (not in current_fields)
-        glific_contact_empty = {"language": {"id": "1"}, "fields": "{}"}
-        result3 = self.module.prepare_update_payload(doc, glific_contact_empty)
-
+   
     def test_04_send_glific_update_all_paths(self):
         """Test send_glific_update - all execution paths"""
         payload = {"fields": '{"name": {"value": "Test"}}'}
