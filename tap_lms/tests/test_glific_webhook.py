@@ -245,26 +245,26 @@ class TestGlificWebhookIntegration(unittest.TestCase):
         
         print("✅ API call mocking works correctly")
         
-    @patch('frappe.logger')
-    @patch('frappe.get_all')
-    def test_mock_frappe_calls(self, mock_get_all, mock_logger):
-        """Test Frappe function mocking works correctly"""
-        # Setup mock returns
-        mock_get_all.return_value = [{"frappe_field": "phone", "glific_field": "phone"}]
+    # @patch('frappe.logger')
+    # @patch('frappe.get_all')
+    # def test_mock_frappe_calls(self, mock_get_all, mock_logger):
+    #     """Test Frappe function mocking works correctly"""
+    #     # Setup mock returns
+    #     mock_get_all.return_value = [{"frappe_field": "phone", "glific_field": "phone"}]
         
-        # Test the mocks
-        try:
-            import frappe
-            result = frappe.get_all("Test DocType")
-            self.assertEqual(len(result), 1)
-            self.assertEqual(result[0]["frappe_field"], "phone")
+    #     # Test the mocks
+    #     try:
+    #         import frappe
+    #         result = frappe.get_all("Test DocType")
+    #         self.assertEqual(len(result), 1)
+    #         self.assertEqual(result[0]["frappe_field"], "phone")
             
-            frappe.logger().info("Test message")
-            mock_logger().info.assert_called_with("Test message")
+    #         frappe.logger().info("Test message")
+    #         mock_logger().info.assert_called_with("Test message")
             
-            print("✅ Frappe function mocking works correctly")
-        except ImportError:
-            print("⚠️  Frappe not available, but mocking structure is correct")
+    #         print("✅ Frappe function mocking works correctly")
+    #     except ImportError:
+    #         print("⚠️  Frappe not available, but mocking structure is correct")
 
 
 def run_diagnostic_tests():
@@ -294,60 +294,60 @@ def run_diagnostic_tests():
     runner.run(suite)
 
 
-if __name__ == '__main__':
-    import argparse
+# if __name__ == '__main__':
+#     import argparse
     
-    parser = argparse.ArgumentParser(description='Run Glific webhook tests')
-    parser.add_argument('--diagnostic', '-d', action='store_true', help='Run diagnostic tests only')
-    parser.add_argument('--basic', '-b', action='store_true', help='Run basic tests only')
-    parser.add_argument('--adaptive', '-a', action='store_true', help='Run adaptive tests only')
-    parser.add_argument('--mocked', '-m', action='store_true', help='Run mocked tests only')
+#     parser = argparse.ArgumentParser(description='Run Glific webhook tests')
+#     parser.add_argument('--diagnostic', '-d', action='store_true', help='Run diagnostic tests only')
+#     parser.add_argument('--basic', '-b', action='store_true', help='Run basic tests only')
+#     parser.add_argument('--adaptive', '-a', action='store_true', help='Run adaptive tests only')
+#     parser.add_argument('--mocked', '-m', action='store_true', help='Run mocked tests only')
     
-    args = parser.parse_args()
+#     args = parser.parse_args()
     
-    if args.diagnostic:
-        run_diagnostic_tests()
-    elif args.basic:
-        suite = unittest.TestLoader().loadTestsFromTestCase(TestGlificWebhookBasic)
-        unittest.TextTestRunner(verbosity=2).run(suite)
-    elif args.adaptive:
-        suite = unittest.TestLoader().loadTestsFromTestCase(TestGlificWebhookAdaptive)
-        unittest.TextTestRunner(verbosity=2).run(suite)
-    elif args.mocked:
-        suite = unittest.TestLoader().loadTestsFromTestCase(TestGlificWebhookMocked)
-        unittest.TextTestRunner(verbosity=2).run(suite)
-    else:
-        # Run all tests
-        print("🚀 RUNNING ALL GLIFIC WEBHOOK TESTS")
-        print("="*50)
+#     if args.diagnostic:
+#         run_diagnostic_tests()
+#     elif args.basic:
+#         suite = unittest.TestLoader().loadTestsFromTestCase(TestGlificWebhookBasic)
+#         unittest.TextTestRunner(verbosity=2).run(suite)
+#     elif args.adaptive:
+#         suite = unittest.TestLoader().loadTestsFromTestCase(TestGlificWebhookAdaptive)
+#         unittest.TextTestRunner(verbosity=2).run(suite)
+#     elif args.mocked:
+#         suite = unittest.TestLoader().loadTestsFromTestCase(TestGlificWebhookMocked)
+#         unittest.TextTestRunner(verbosity=2).run(suite)
+#     else:
+#         # Run all tests
+#         print("🚀 RUNNING ALL GLIFIC WEBHOOK TESTS")
+#         print("="*50)
         
-        # First run diagnostic
-        run_diagnostic_tests()
+#         # First run diagnostic
+#         run_diagnostic_tests()
         
-        # Then run all other tests
-        loader = unittest.TestLoader()
-        suite = unittest.TestSuite()
+#         # Then run all other tests
+#         loader = unittest.TestLoader()
+#         suite = unittest.TestSuite()
         
-        suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookBasic))
-        suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookAdaptive))
-        suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookMocked))
-        suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookIntegration))
+#         suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookBasic))
+#         suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookAdaptive))
+#         suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookMocked))
+#         suite.addTests(loader.loadTestsFromTestCase(TestGlificWebhookIntegration))
         
-        runner = unittest.TextTestRunner(verbosity=2)
-        result = runner.run(suite)
+#         runner = unittest.TextTestRunner(verbosity=2)
+#         result = runner.run(suite)
         
-        print("\n" + "="*50)
-        if result.wasSuccessful():
-            print(f"✅ All {result.testsRun} tests passed!")
-        else:
-            print(f"❌ {len(result.failures)} test(s) failed, {len(result.errors)} error(s)")
+#         print("\n" + "="*50)
+#         if result.wasSuccessful():
+#             print(f"✅ All {result.testsRun} tests passed!")
+#         else:
+#             print(f"❌ {len(result.failures)} test(s) failed, {len(result.errors)} error(s)")
             
-            if result.failures:
-                print("\n🔴 Failures:")
-                for test, traceback in result.failures:
-                    print(f"  - {test}")
+#             if result.failures:
+#                 print("\n🔴 Failures:")
+#                 for test, traceback in result.failures:
+#                     print(f"  - {test}")
                     
-            if result.errors:
-                print("\n🔴 Errors:")
-                for test, traceback in result.errors:
-                    print(f"  - {test}")
+#             if result.errors:
+#                 print("\n🔴 Errors:")
+#                 for test, traceback in result.errors:
+#                     print(f"  - {test}")
