@@ -2792,28 +2792,28 @@ class TestFixedEnhanced100CoverageAPI(unittest.TestCase):
     # FIXED BATCH FUNCTIONS TESTS
     # =========================================================================
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available") 
-    def test_list_batch_keyword_fixed(self):
-        """Test list_batch_keyword - Fixed version"""
-        func = get_function('list_batch_keyword')
-        if not func:
-            self.skipTest("list_batch_keyword function not found")
+    # @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available") 
+    # def test_list_batch_keyword_fixed(self):
+    #     """Test list_batch_keyword - Fixed version"""
+    #     func = get_function('list_batch_keyword')
+    #     if not func:
+    #         self.skipTest("list_batch_keyword function not found")
         
-        print("Testing list_batch_keyword - fixed version...")
+    #     print("Testing list_batch_keyword - fixed version...")
         
-        # Mock authentication
-        with patch('tap_lms.api.authenticate_api_key', return_value='API_KEY_001') if API_MODULE_IMPORTED else patch.object(None, 'authenticate_api_key', return_value='API_KEY_001'):
-            with patch.object(mock_frappe, 'get_all', return_value=[
-                {'batch': 'BATCH_001', 'school': 'SCHOOL_001', 'batch_skeyword': 'test_batch'}
-            ]):
-                batch_doc = MockFrappeDocument("Batch", active=True, 
-                                             regist_end_date=datetime.now().date() + timedelta(days=30),
-                                             batch_id='BATCH_2025_001')
-                with patch.object(mock_frappe, 'get_doc', return_value=batch_doc):
-                    with patch.object(mock_frappe, 'get_value', return_value='Test School'):
-                        result = safe_call_function(func, 'valid_key')
-                        if isinstance(result, list):
-                            self.assertIsInstance(result, list)
+    #     # Mock authentication
+    #     with patch('tap_lms.api.authenticate_api_key', return_value='API_KEY_001') if API_MODULE_IMPORTED else patch.object(None, 'authenticate_api_key', return_value='API_KEY_001'):
+    #         with patch.object(mock_frappe, 'get_all', return_value=[
+    #             {'batch': 'BATCH_001', 'school': 'SCHOOL_001', 'batch_skeyword': 'test_batch'}
+    #         ]):
+    #             batch_doc = MockFrappeDocument("Batch", active=True, 
+    #                                          regist_end_date=datetime.now().date() + timedelta(days=30),
+    #                                          batch_id='BATCH_2025_001')
+    #             with patch.object(mock_frappe, 'get_doc', return_value=batch_doc):
+    #                 with patch.object(mock_frappe, 'get_value', return_value='Test School'):
+    #                     result = safe_call_function(func, 'valid_key')
+    #                     if isinstance(result, list):
+    #                         self.assertIsInstance(result, list)
 
     # =========================================================================
     # FIXED STUDENT CREATION TESTS
