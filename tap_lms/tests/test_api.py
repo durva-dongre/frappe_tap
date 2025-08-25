@@ -1684,6 +1684,7 @@
 #         for key in valid_keys:
 #             result = safe_call_function(auth_func, key)
         
+
 #         # Invalid scenarios
 #         invalid_keys = [
 #             'invalid_key',
