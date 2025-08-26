@@ -2598,11 +2598,14 @@ def create_requests_mock():
         
         return response
     
-    requests.get.return_value = create_response()
-    requests.post.return_value = create_response()
-    requests.put.return_value = create_response()
-    requests.delete.return_value = create_response()
-    requests.patch.return_value = create_response()
+    # Create default response
+    default_response = create_response()
+    
+    requests.get.return_value = default_response
+    requests.post.return_value = default_response
+    requests.put.return_value = default_response
+    requests.delete.return_value = default_response
+    requests.patch.return_value = default_response
     
     # Exception classes
     class RequestException(Exception):
@@ -2629,9 +2632,15 @@ def create_requests_mock():
     requests.RequestException = RequestException
     requests.HTTPError = HTTPError
     
+    # Store default response for global access
+    requests._default_response = default_response
+    
     return requests
 
 requests_mock = create_requests_mock()
+
+# Create global response_mock for backward compatibility
+response_mock = requests_mock._default_response
 
 # Other module mocks
 random_mock = MagicMock()
@@ -3069,10 +3078,20 @@ class TestAPI100PercentCoverage(unittest.TestCase):
     def test_send_whatsapp_message_all_scenarios(self):
         """Test WhatsApp message sending with all paths"""
         
+        # Create local response mock for this test
+        local_response_mock = MagicMock()
+        local_response_mock.status_code = 200
+        local_response_mock.json.return_value = {"status": "sent"}
+        local_response_mock.raise_for_status = MagicMock()
+        local_response_mock.ok = True
+        
         # Reset all mocks to ensure clean state
-        frappe_mock.get_single.reset_mock()
-        requests_mock.post.reset_mock()
-        response_mock.raise_for_status.reset_mock()
+        try:
+            frappe_mock.get_single.reset_mock()
+            requests_mock.post.reset_mock()
+            local_response_mock.reset_mock()
+        except Exception:
+            pass
         
         # Test 1: Successful send
         try:
@@ -3083,10 +3102,10 @@ class TestAPI100PercentCoverage(unittest.TestCase):
             settings.api_endpoint = "https://api.whatsapp.com"
             frappe_mock.get_single.return_value = settings
             
-            response_mock.status_code = 200
-            response_mock.json.return_value = {"status": "sent"}
-            response_mock.raise_for_status.side_effect = None
-            requests_mock.post.return_value = response_mock
+            local_response_mock.status_code = 200
+            local_response_mock.json.return_value = {"status": "sent"}
+            local_response_mock.raise_for_status.side_effect = None
+            requests_mock.post.return_value = local_response_mock
             requests_mock.post.side_effect = None
             
             if hasattr(api, 'send_whatsapp_message'):
@@ -3145,7 +3164,8 @@ class TestAPI100PercentCoverage(unittest.TestCase):
         # Test 8: HTTP error response
         try:
             requests_mock.post.side_effect = None
-            response_mock.raise_for_status.side_effect = Exception("HTTP 500")
+            local_response_mock.raise_for_status.side_effect = Exception("HTTP 500")
+            requests_mock.post.return_value = local_response_mock
             
             if hasattr(api, 'send_whatsapp_message'):
                 api.send_whatsapp_message("9876543210", "Test message")
@@ -3155,7 +3175,7 @@ class TestAPI100PercentCoverage(unittest.TestCase):
         
         # Test 9: Invalid phone number format
         try:
-            response_mock.raise_for_status.side_effect = None
+            local_response_mock.raise_for_status.side_effect = None
             if hasattr(api, 'send_whatsapp_message'):
                 api.send_whatsapp_message("", "Test message")
             self.assertTrue(True)
@@ -3177,10 +3197,10 @@ class TestAPI100PercentCoverage(unittest.TestCase):
         # Complete reset of all mocks
         try:
             requests_mock.post.side_effect = None
-            response_mock.raise_for_status.side_effect = None
+            local_response_mock.raise_for_status.side_effect = None
             frappe_mock.get_single.reset_mock()
             requests_mock.post.reset_mock()
-            response_mock.reset_mock()
+            local_response_mock.reset_mock()
         except Exception:
             pass
     
@@ -4347,6 +4367,13 @@ class TestAPI100PercentCoverage(unittest.TestCase):
     def test_external_service_integrations(self):
         """Test external service integrations"""
         
+        # Create local response mock for this test
+        local_response_mock = MagicMock()
+        local_response_mock.status_code = 200
+        local_response_mock.json.return_value = {"status": "sent"}
+        local_response_mock.raise_for_status = MagicMock()
+        local_response_mock.ok = True
+        
         # Test WhatsApp integration scenarios
         whatsapp_scenarios = [
             (200, {"status": "sent", "message_id": "msg_123"}),
@@ -4368,18 +4395,22 @@ class TestAPI100PercentCoverage(unittest.TestCase):
                     frappe_mock.get_single.return_value = settings
                     
                     # Mock response with complete reset
-                    response_mock.status_code = status_code
-                    response_mock.json.return_value = response_data
-                    response_mock.ok = status_code < 400
-                    response_mock.raise_for_status.reset_mock()
-                    requests_mock.post.reset_mock()
+                    local_response_mock.status_code = status_code
+                    local_response_mock.json.return_value = response_data
+                    local_response_mock.ok = status_code < 400
+                    
+                    try:
+                        local_response_mock.raise_for_status.reset_mock()
+                        requests_mock.post.reset_mock()
+                    except Exception:
+                        pass
                     
                     if status_code >= 400:
-                        response_mock.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
+                        local_response_mock.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
                     else:
-                        response_mock.raise_for_status.side_effect = None
+                        local_response_mock.raise_for_status.side_effect = None
                     
-                    requests_mock.post.return_value = response_mock
+                    requests_mock.post.return_value = local_response_mock
                     requests_mock.post.side_effect = None
                     
                     if hasattr(api, 'send_whatsapp_message'):
@@ -4401,8 +4432,11 @@ class TestAPI100PercentCoverage(unittest.TestCase):
             with self.subTest(glific_action=f"{scenario['action']}_{i}"):
                 try:
                     # Reset glific mocks
-                    glific_mock.create_contact.reset_mock()
-                    glific_mock.start_contact_flow.reset_mock()
+                    try:
+                        glific_mock.create_contact.reset_mock()
+                        glific_mock.start_contact_flow.reset_mock()
+                    except Exception:
+                        pass
                     
                     if scenario["action"] == "create_contact":
                         glific_mock.create_contact.return_value = scenario["response"]
@@ -4472,7 +4506,7 @@ class TestAPI100PercentCoverage(unittest.TestCase):
         # Final cleanup
         try:
             background_mock.enqueue_glific_actions.side_effect = None
-            response_mock.raise_for_status.side_effect = None
+            local_response_mock.raise_for_status.side_effect = None
             requests_mock.post.side_effect = None
             glific_mock.create_contact.reset_mock()
             glific_mock.start_contact_flow.reset_mock()
