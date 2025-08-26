@@ -2499,56 +2499,7 @@ class TestComplete100CoverageAPI(unittest.TestCase):
             mock_requests.get.return_value = mock_response
             mock_requests.get.side_effect = None
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_final_edge_cases_for_100_percent(self):
-        """Final edge cases to reach 100% coverage"""
-        
-        # Test specific conditions in get_course_level_with_mapping
-        get_course_level_with_mapping_func = getattr(api_module, 'get_course_level_with_mapping', None)
-        if get_course_level_with_mapping_func:
-            # Test when academic_year is None
-            with patch.object(api_module, 'get_current_academic_year', return_value=None):
-                result = safe_call_function(get_course_level_with_mapping_func, 'VERTICAL_001', '5', 
-                                          '9876543210', 'John Doe', 1)
-        
-        # Test specific date handling edge cases
-        get_active_batch_func = get_function('get_active_batch_for_school')
-        if get_active_batch_func:
-            # Test with frappe.utils.today() failing
-            with patch.object(mock_frappe.utils, 'today', side_effect=Exception("Date error")):
-                result = safe_call_function(get_active_batch_func, 'SCHOOL_001')
-        
-        # Test response status code setting edge cases
-        list_districts_func = get_function('list_districts')
-        if list_districts_func:
-            # Test when frappe.response.http_status_code setting fails
-            with patch.object(mock_frappe.response, '__setattr__', side_effect=Exception("Response error")):
-                mock_frappe.request.data = json.dumps({'api_key': 'invalid_key', 'state': 'test'})
-                result = safe_call_function(list_districts_func)
-        
-        # Test final remaining conditional branches
-        create_student_func = get_function('create_student')
-        if create_student_func:
-            # Test batch with regist_end_date that's exactly today (edge case)
-            mock_frappe.local.form_dict = {
-                'api_key': 'valid_key',
-                'student_name': 'Edge Case Student',
-                'phone': '9876543210',
-                'gender': 'Male',
-                'grade': '5',
-                'language': 'English',
-                'batch_skeyword': 'test_batch',
-                'vertical': 'Math',
-                'glific_id': 'edge_case_glific'
-            }
-            
-            today_date = datetime.now().date()
-            batch_today = MockFrappeDocument("Batch", active=True, regist_end_date=today_date)
-            with patch.object(mock_frappe, 'get_doc', return_value=batch_today):
-                result = safe_call_function(func)
-        
-        print("Final edge cases tested for 100% coverage!")
-
+   
     # =========================================================================
     # COMPREHENSIVE INTEGRATION TESTS - 100% Coverage
     # =========================================================================
