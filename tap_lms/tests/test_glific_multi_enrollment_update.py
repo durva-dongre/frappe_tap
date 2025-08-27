@@ -538,7 +538,7 @@ from tap_lms.tap_lms.glific_multi_enrollment_update import (
     process_my_sets
 )
 
-from tap_lms.tap_lms.glific_integration import get_glific_settings, get_glific_auth_headers
+from tap_lms.glific_integration import get_glific_settings, get_glific_auth_headers
 
 
 class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
