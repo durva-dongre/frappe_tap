@@ -6,7 +6,8 @@ from unittest.mock import patch, MagicMock, call
 import json
 import frappe
 from datetime import datetime, timezone
-from your_app.glific_multi_enrollment_update import (
+from frappe.tests.utils import FrappeTestCase
+from tap_lms.tap_lms.glific_multi_enrollment_update import (
     check_student_multi_enrollment,
     update_specific_set_contacts_with_multi_enrollment,
     run_multi_enrollment_update_for_specific_set,
@@ -16,7 +17,7 @@ from your_app.glific_multi_enrollment_update import (
 )
 
 
-class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
+class TestGlificMultiEnrollmentUpdate(FrappeTestCase):
     
     def setUp(self):
         """Set up test fixtures before each test method."""
@@ -157,9 +158,9 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         self.assertIn("No successfully processed students found", result["message"])
 
     @patch('requests.post')
-    @patch('your_app.glific_multi_enrollment_update.get_glific_settings')
-    @patch('your_app.glific_multi_enrollment_update.get_glific_auth_headers')
-    @patch('your_app.glific_multi_enrollment_update.check_student_multi_enrollment')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.get_glific_settings')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.get_glific_auth_headers')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.check_student_multi_enrollment')
     @patch('frappe.get_all')
     @patch('frappe.get_doc')
     @patch('frappe.db.exists')
@@ -253,8 +254,8 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         self.assertEqual(result["total_processed"], 1)
 
     @patch('requests.post')
-    @patch('your_app.glific_multi_enrollment_update.get_glific_settings')
-    @patch('your_app.glific_multi_enrollment_update.get_glific_auth_headers')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.get_glific_settings')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.get_glific_auth_headers')
     @patch('frappe.get_all')
     @patch('frappe.get_doc')
     @patch('frappe.db.exists')
@@ -299,7 +300,7 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         mock_logger.return_value.warning.assert_called()
 
     # Test run_multi_enrollment_update_for_specific_set function
-    @patch('your_app.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
     @patch('frappe.db.begin')
     @patch('frappe.db.commit')
     @patch('frappe.db.rollback')
@@ -320,7 +321,7 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         self.assertIn("Updated: 5", result)
         mock_commit.assert_called_once()
 
-    @patch('your_app.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
     @patch('frappe.db.begin')
     @patch('frappe.db.commit')
     @patch('frappe.db.rollback')
@@ -339,7 +340,7 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         
         self.assertIn("Error: Backend Student Onboarding set name is required", result)
 
-    @patch('your_app.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
     @patch('frappe.db.begin')
     @patch('frappe.db.commit')
     @patch('frappe.db.rollback')
@@ -385,7 +386,7 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         )
 
     # Test process_multiple_sets_simple function
-    @patch('your_app.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
     @patch('time.sleep')
     @patch('frappe.logger')
     def test_process_multiple_sets_simple_success(self, mock_logger, mock_sleep, mock_update):
@@ -406,7 +407,7 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         self.assertEqual(result[0]["updated"], 5)
         self.assertEqual(result[0]["status"], "completed")
 
-    @patch('your_app.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
     @patch('frappe.logger')
     def test_process_multiple_sets_simple_with_error(self, mock_logger, mock_update):
         """Test processing multiple sets with errors"""
@@ -421,7 +422,7 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         self.assertEqual(result[0]["set_name"], "SET001")
         self.assertEqual(result[0]["updated"], 0)
 
-    @patch('your_app.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
     @patch('frappe.logger')
     def test_process_multiple_sets_simple_exception(self, mock_logger, mock_update):
         """Test processing multiple sets with exception"""
@@ -466,12 +467,12 @@ class TestGlificMultiEnrollmentUpdate(unittest.TestCase):
         self.assertIn("job456", result)
 
 
-class TestIntegrationScenarios(unittest.TestCase):
+class TestIntegrationScenarios(FrappeTestCase):
     """Integration test scenarios"""
     
     @patch('requests.post')
-    @patch('your_app.glific_multi_enrollment_update.get_glific_settings')
-    @patch('your_app.glific_multi_enrollment_update.get_glific_auth_headers')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.get_glific_settings')
+    @patch('tap_lms.tap_lms.glific_multi_enrollment_update.get_glific_auth_headers')
     def test_glific_api_error_handling(self, mock_get_headers, mock_get_settings, mock_post):
         """Test handling of various Glific API error responses"""
         # Test 500 error
@@ -494,6 +495,11 @@ class TestIntegrationScenarios(unittest.TestCase):
 
 
 if __name__ == '__main__':
+    # For Frappe testing, use frappe.test_runner
+    import frappe
+    frappe.init(site='test_site')
+    frappe.connect()
+    
     # Test runner configuration
     unittest.main(verbosity=2)
 
@@ -542,7 +548,7 @@ class TestDataFactory:
 
 
 # Performance test cases
-class TestPerformance(unittest.TestCase):
+class TestPerformance(FrappeTestCase):
     """Performance-related test cases"""
     
     def test_batch_size_optimization(self):
@@ -559,7 +565,7 @@ class TestPerformance(unittest.TestCase):
 
 
 # Edge case test scenarios
-class TestEdgeCases(unittest.TestCase):
+class TestEdgeCases(FrappeTestCase):
     """Edge case scenarios"""
     
     def test_malformed_json_in_fields(self):
