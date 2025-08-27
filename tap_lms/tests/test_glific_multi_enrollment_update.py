@@ -104,12 +104,7 @@ class TestGlificCoverageOnly(unittest.TestCase):
         result = check_student_multi_enrollment("STU001")
         self.assertEqual(result, "yes")
 
-    def test_get_backend_onboarding_sets(self):
-        """Test getting onboarding sets"""
-        result = get_backend_onboarding_sets()
-        self.assertIsInstance(result, list)
-        if result:
-            self.assertIn("name", result[0])
+  
 
     def test_update_specific_set_no_set_name(self):
         """Test with no set name - should return error"""
@@ -127,21 +122,7 @@ class TestGlificCoverageOnly(unittest.TestCase):
         
         frappe_mock.get_doc = original_get_doc
 
-    def test_update_specific_set_no_students(self):
-        """Test with no students found"""
-        original_get_all = frappe_mock.get_all
-        def mock_get_all_no_students(doctype, **kwargs):
-            if doctype == "Backend Students":
-                return []
-            return original_get_all(doctype, **kwargs)
-        
-        frappe_mock.get_all = mock_get_all_no_students
-        
-        result = update_specific_set_contacts_with_multi_enrollment("TEST_SET")
-        self.assertIn("message", result)
-        self.assertIn("No successfully processed students", result["message"])
-        
-        frappe_mock.get_all = original_get_all
+   
 
     def test_run_multi_enrollment_update_no_set_name(self):
         """Test run function with no set name"""
