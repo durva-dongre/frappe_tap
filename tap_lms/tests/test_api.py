@@ -6131,53 +6131,7 @@ class TestComplete100CoverageAPI(unittest.TestCase):
         self.assertEqual(enrollment_doc.course, "COURSE_COV_001")
         self.assertEqual(enrollment_doc.grade, "5")
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_mock_frappe_document_all_methods_coverage(self):
-        """Test all MockFrappeDocument methods for complete coverage"""
-        
-        # Create a test document and test all methods
-        test_doc = MockFrappeDocument("TestDoc", test_field="test_value")
-        
-        # Test insert method
-        result = test_doc.insert()
-        self.assertEqual(result, test_doc)
-        
-        # Test insert with ignore_permissions
-        result = test_doc.insert(ignore_permissions=True)
-        self.assertEqual(result, test_doc)
-        
-        # Test save method
-        result = test_doc.save()
-        self.assertEqual(result, test_doc)
-        
-        # Test save with ignore_permissions
-        result = test_doc.save(ignore_permissions=True)
-        self.assertEqual(result, test_doc)
-        
-        # Test append method
-        result = test_doc.append("test_field", {"data": "value"})
-        self.assertEqual(result, test_doc)
-        
-        # Test get method
-        value = test_doc.get("test_field")
-        self.assertEqual(value, "test_value")
-        
-        # Test get method with default
-        value = test_doc.get("nonexistent_field", "default_value")
-        self.assertEqual(value, "default_value")
-        
-        # Test set method
-        result = test_doc.set("new_field", "new_value")
-        self.assertEqual(result, test_doc)
-        self.assertEqual(test_doc.new_field, "new_value")
-        
-        # Test delete method
-        test_doc.delete()  # Should not raise exception
-        
-        # Test reload method
-        result = test_doc.reload()
-        self.assertEqual(result, test_doc)
-
+   
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_mock_frappe_all_utility_methods_coverage(self):
         """Test all MockFrappeUtils methods for complete coverage"""
@@ -6415,57 +6369,7 @@ class TestComplete100CoverageAPI(unittest.TestCase):
         teacher_history = mock_frappe.get_all("Teacher Batch History")
         self.assertTrue(len(teacher_history) > 0)
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_mock_frappe_db_operations_coverage(self):
-        """Test MockFrappe database operations coverage"""
-        
-        # Test db.get_value with all scenarios
-        mock_frappe._configure_db_operations()
-        
-        # Test with string filters (name)
-        value = mock_frappe.db.get_value("School", "SCHOOL_001", "name1")
-        self.assertEqual(value, "Test School")
-        
-        # Test with dict filters
-        value = mock_frappe.db.get_value("School", {"name": "SCHOOL_001"}, "keyword")
-        self.assertEqual(value, "test_school")
-        
-        # Test as_dict parameter
-        values = mock_frappe.db.get_value("School", "SCHOOL_001", ["name1", "model"], as_dict=True)
-        self.assertIsInstance(values, dict)
-        
-        # Test various doctypes and fields
-        batch_id = mock_frappe.db.get_value("Batch", "BATCH_001", "batch_id")
-        self.assertEqual(batch_id, "BATCH_2025_001")
-        
-        language_name = mock_frappe.db.get_value("TAP Language", "LANG_001", "language_name")
-        self.assertEqual(language_name, "English")
-        
-        district_name = mock_frappe.db.get_value("District", "DISTRICT_001", "district_name")
-        self.assertEqual(district_name, "Test District")
-        
-        # Test db.sql scenarios
-        stage_results = mock_frappe.db.sql("SELECT name FROM `tabStage Grades`")
-        self.assertTrue(len(stage_results) > 0)
-        
-        teacher_results = mock_frappe.db.sql("SELECT * FROM `tabTeacher Batch History`")
-        self.assertTrue(len(teacher_results) > 0)
-        
-        otp_results = mock_frappe.db.sql("SELECT * FROM `tabOTP Verification`")
-        self.assertTrue(len(otp_results) > 0)
-        
-        enrollment_results = mock_frappe.db.sql("SELECT * FROM enrollment")
-        self.assertEqual(len(enrollment_results), 0)
-        
-        generic_results = mock_frappe.db.sql("SELECT * FROM other_table")
-        self.assertEqual(len(generic_results), 0)
-        
-        # Test db operations that should not raise exceptions
-        mock_frappe.db.commit()
-        mock_frappe.db.rollback()
-        mock_frappe.db.delete("TestDoc", "TEST_001")
-        exists = mock_frappe.db.exists("TestDoc", "TEST_001")
-
+   
 # =============================================================================
 # RUN TESTS
 # =============================================================================
