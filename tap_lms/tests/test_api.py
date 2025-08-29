@@ -6122,6 +6122,7 @@ class TestComplete100CoverageAPI(unittest.TestCase):
         self.assertEqual(glific_teacher_group_doc.glific_group_id, "GROUP_COV_001")
         
         # Test Enrollment doctype branch
+        
         enrollment_doc = MockFrappeDocument("Enrollment",
             batch="BATCH_COV_001",
             course="COURSE_COV_001",
