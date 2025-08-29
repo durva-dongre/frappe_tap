@@ -2946,3 +2946,27 @@ class TestComplete100CoverageAPI(unittest.TestCase):
                 
                 result = safe_call_function(create_teacher_web_func)
 
+# INTEGRATION INSTRUCTIONS:
+# 1. Copy the methods above (starting from the first @unittest.skipUnless line)
+# 2. Paste them INSIDE your TestComplete100CoverageAPI class
+# 3. Make sure they are indented at the same level as your other test methods
+# 4. The indentation should match your existing test methods (typically 4 spaces)
+
+# Example placement:
+"""
+class TestComplete100CoverageAPI(unittest.TestCase):
+    def setUp(self):
+        # your existing setUp code
+        pass
+    
+    def test_authenticate_api_key_100_coverage(self):
+        # your existing test
+        pass
+    
+    # ADD THE NEW METHODS HERE WITH PROPER INDENTATION
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_frappe_response_status_code_branches(self):
+        # new test code
+        pass
+"""
+
