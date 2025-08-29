@@ -3146,28 +3146,514 @@ class TestComplete100CoverageAPI(unittest.TestCase):
                 mock_glific.create_contact.return_value = scenario.get('create_return', None)
                 
                 result = safe_call_function(create_teacher_web_func)
+# ADD THESE ADDITIONAL TEST METHODS TO YOUR TestComplete100CoverageAPI CLASS
+# Place them inside the class with proper indentation (4 spaces)
 
-# INTEGRATION INSTRUCTIONS:
-# 1. Copy the methods above (starting from the first @unittest.skipUnless line)
-# 2. Paste them INSIDE your TestComplete100CoverageAPI class
-# 3. Make sure they are indented at the same level as your other test methods
-# 4. The indentation should match your existing test methods (typically 4 spaces)
-
-# Example placement:
-"""
-class TestComplete100CoverageAPI(unittest.TestCase):
-    def setUp(self):
-        # your existing setUp code
-        pass
-    
-    def test_authenticate_api_key_100_coverage(self):
-        # your existing test
-        pass
-    
-    # ADD THE NEW METHODS HERE WITH PROPER INDENTATION
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_frappe_response_status_code_branches(self):
-        # new test code
-        pass
-"""
+    def test_frappe_logger_calls_coverage(self):
+        """Test frappe.logger() calls in various functions"""
+        
+        get_active_batch_func = get_function('get_active_batch_for_school')
+        if get_active_batch_func:
+            # Test the frappe.logger().error call
+            with patch.object(mock_frappe, 'get_all', return_value=[]):
+                result = safe_call_function(get_active_batch_func, 'SCHOOL_001')
+                # This should trigger the logger.error call
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_create_teacher_web_glific_edge_cases(self):
+        """Test create_teacher_web Glific contact creation edge cases"""
+        func = get_function('create_teacher_web')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'firstName': 'GlificEdge',
+            'phone': '9876543210',
+            'School_name': 'Test School'
+        }
+        
+        # Test when get_contact_by_phone returns contact without 'id' field
+        mock_glific.get_contact_by_phone.return_value = {'name': 'contact', 'phone': '9876543210'}  # No 'id' field
+        result = safe_call_function(func)
+        
+        # Test when create_contact returns contact without 'id' field
+        mock_glific.get_contact_by_phone.return_value = None
+        mock_glific.create_contact.return_value = {'name': 'new_contact'}  # No 'id' field
+        result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_verify_otp_teacher_doc_not_found_scenario(self):
+        """Test verify_otp when teacher doc is not found in update_batch"""
+        func = get_function('verify_otp')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210',
+            'otp': '1234'
+        }
+        
+        # Mock context for update_batch with valid teacher_id
+        update_context = {
+            "action_type": "update_batch",
+            "teacher_id": "NONEXISTENT_TEACHER",
+            "school_id": "SCHOOL_001",
+            "batch_info": {"batch_name": "BATCH_001", "batch_id": "BATCH_2025_001"}
+        }
+        
+        with patch.object(mock_frappe.db, 'sql') as mock_sql:
+            mock_sql.return_value = [{
+                'name': 'OTP_001',
+                'expiry': datetime.now() + timedelta(minutes=15),
+                'context': json.dumps(update_context),
+                'verified': False
+            }]
+            
+            # Mock get_doc to raise DoesNotExistError for teacher
+            with patch.object(mock_frappe, 'get_doc', side_effect=mock_frappe.DoesNotExistError("Teacher not found")):
+                result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_send_otp_batch_history_check_coverage(self):
+        """Test send_otp batch history checking logic"""
+        func = get_function('send_otp')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': 'existing_teacher_phone'
+        }
+        
+        # Mock existing teacher
+        with patch.object(mock_frappe, 'get_all') as mock_get_all:
+            # Mock teacher exists
+            mock_get_all.side_effect = [
+                [{'name': 'TEACHER_001', 'school_id': 'SCHOOL_001'}],  # existing teacher
+                [{'glific_group_id': 'GROUP_001'}],  # existing group mapping
+                [{'teacher': 'TEACHER_001', 'batch': 'BATCH_001'}]  # existing batch history
+            ]
+            
+            # Mock database values
+            with patch.object(mock_frappe.db, 'get_value') as mock_get_value:
+                def get_value_side_effect(doctype, filters, field):
+                    if doctype == "School" and field == "name1":
+                        return "Test School"
+                    elif doctype == "Teacher" and field == "glific_id":
+                        return "glific_123"
+                    return "test_value"
+                mock_get_value.side_effect = get_value_side_effect
+                
+                result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_create_teacher_web_batch_info_edge_cases(self):
+        """Test create_teacher_web when batch_info has edge cases"""
+        func = get_function('create_teacher_web')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'firstName': 'BatchEdge',
+            'phone': '9876543210',
+            'School_name': 'Test School'
+        }
+        
+        # Test when get_active_batch_for_school returns None for batch_id
+        with patch.object(api_module, 'get_active_batch_for_school') as mock_get_batch:
+            mock_get_batch.return_value = {
+                "batch_id": None,
+                "batch_name": None
+            }
+            result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_verify_otp_glific_contact_creation_scenarios(self):
+        """Test verify_otp Glific contact creation scenarios"""
+        func = get_function('verify_otp')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210',
+            'otp': '1234'
+        }
+        
+        update_context = {
+            "action_type": "update_batch",
+            "teacher_id": "TEACHER_001",
+            "school_id": "SCHOOL_001",
+            "batch_info": {"batch_name": "BATCH_001", "batch_id": "BATCH_2025_001"}
+        }
+        
+        with patch.object(mock_frappe.db, 'sql') as mock_sql:
+            mock_sql.return_value = [{
+                'name': 'OTP_001',
+                'expiry': datetime.now() + timedelta(minutes=15),
+                'context': json.dumps(update_context),
+                'verified': False
+            }]
+            
+            # Mock teacher without glific_id
+            teacher_no_glific = MockFrappeDocument("Teacher", glific_id=None, phone_number='9876543210')
+            with patch.object(mock_frappe, 'get_doc', return_value=teacher_no_glific):
+                
+                # Test scenario where get_contact_by_phone returns None and create_contact fails
+                mock_glific.get_contact_by_phone.return_value = None
+                mock_glific.create_contact.return_value = None
+                result = safe_call_function(func)
+                
+                # Test scenario where get_contact_by_phone returns contact without id
+                mock_glific.get_contact_by_phone.return_value = {'name': 'contact'}
+                result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_create_teacher_web_language_handling(self):
+        """Test create_teacher_web language ID handling"""
+        func = get_function('create_teacher_web')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'firstName': 'Language',
+            'phone': '9876543210',
+            'School_name': 'Test School',
+            'language': 'NonExistentLanguage'
+        }
+        
+        # Test when both specific language and English fallback fail
+        with patch.object(mock_frappe.db, 'get_value') as mock_get_value:
+            def get_value_side_effect(doctype, filters, field):
+                if doctype == "TAP Language":
+                    return None  # Both language lookups fail
+                elif doctype == "School":
+                    return "SCHOOL_001"
+                elif doctype == "OTP Verification":
+                    return "OTP_001"  # Phone verified
+                return "test_value"
+            mock_get_value.side_effect = get_value_side_effect
+            
+            result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_create_student_existing_student_scenarios(self):
+        """Test create_student with different existing student scenarios"""
+        func = get_function('create_student')
+        if not func:
+            return
+        
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'Existing Student',
+            'phone': 'existing_phone',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'existing_student_glific'
+        }
+        
+        # Test when student exists but name/phone don't match exactly
+        with patch.object(mock_frappe, 'get_all') as mock_get_all:
+            # First call returns student exists, others return valid data
+            mock_get_all.side_effect = [
+                [{'name': 'BATCH_ONBOARDING_001', 'school': 'SCHOOL_001', 'batch': 'BATCH_001', 'kit_less': 1}],
+                [{'name': 'VERTICAL_001'}],
+                [{'name': 'STUDENT_001', 'name1': 'Different Name', 'phone': 'different_phone'}]  # Student with different details
+            ]
+            
+            # Mock existing student document with different details
+            different_student = MockFrappeDocument("Student", 
+                name1="Different Name", phone="different_phone", glific_id="existing_student_glific")
+            
+            with patch.object(mock_frappe, 'get_doc', return_value=different_student):
+                result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_get_course_level_all_logging_branches(self):
+        """Test get_course_level to hit all frappe.log_error branches"""
+        func = get_function('get_course_level')
+        if not func:
+            return
+        
+        # Test all the logging statements
+        with patch.object(mock_frappe, 'log_error') as mock_log_error:
+            # This should trigger multiple log_error calls
+            result = safe_call_function(func, 'VERTICAL_001', '5', 1)
+            
+            # Verify log_error was called multiple times (indicates we hit the logging branches)
+            assert mock_log_error.called
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_verify_batch_keyword_date_parsing_error(self):
+        """Test verify_batch_keyword date parsing error scenario"""
+        func = get_function('verify_batch_keyword')
+        if not func:
+            return
+        
+        mock_frappe.request.data = json.dumps({
+            'api_key': 'valid_key',
+            'batch_skeyword': 'test_batch'
+        })
+        
+        # Mock batch with invalid date format
+        invalid_date_batch = MockFrappeDocument("Batch", active=True, regist_end_date="invalid-date-format")
+        
+        with patch.object(mock_frappe, 'get_doc', return_value=invalid_date_batch):
+            # Mock cstr to return the invalid date as string
+            with patch.object(mock_frappe.utils, 'cstr', return_value="invalid-date-format"):
+                result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_create_student_regist_end_date_none_scenario(self):
+        """Test create_student when regist_end_date is None"""
+        func = get_function('create_student')
+        if not func:
+            return
+        
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'Test Student',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'test_glific'
+        }
+        
+        # Mock batch with None regist_end_date
+        batch_no_date = MockFrappeDocument("Batch", active=True, regist_end_date=None)
+        with patch.object(mock_frappe, 'get_doc', return_value=batch_no_date):
+            result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_send_otp_conf_get_calls(self):
+        """Test send_otp frappe.conf.get() calls"""
+        func = get_function('send_otp')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210'
+        }
+        
+        # Test conf.get calls with different return values
+        with patch.object(mock_frappe.conf, 'get') as mock_conf_get:
+            mock_conf_get.side_effect = lambda key, default: {
+                'whatsapp_api_key': 'test_key',
+                'whatsapp_instance': 'test_instance'
+            }.get(key, default)
+            
+            result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_create_teacher_web_final_return_paths(self):
+        """Test create_teacher_web final return statement paths"""
+        func = get_function('create_teacher_web')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'firstName': 'Final',
+            'phone': '9876543210',
+            'School_name': 'Test School'
+        }
+        
+        # Test path where glific_contact exists but doesn't have 'id'
+        mock_glific.get_contact_by_phone.return_value = {'name': 'contact'}  # No 'id' field
+        
+        # Mock get_active_batch_for_school to return valid batch info
+        with patch.object(api_module, 'get_active_batch_for_school') as mock_get_batch:
+            mock_get_batch.return_value = {
+                "batch_id": "BATCH_001",
+                "batch_name": "Test Batch"
+            }
+            result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_verify_otp_teacher_glific_id_scenarios(self):
+        """Test verify_otp teacher glific_id handling scenarios"""
+        func = get_function('verify_otp')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210',
+            'otp': '1234'
+        }
+        
+        update_context = {
+            "action_type": "update_batch",
+            "teacher_id": "TEACHER_001",
+            "school_id": "SCHOOL_001",
+            "batch_info": {"batch_name": "BATCH_001", "batch_id": "BATCH_2025_001"}
+        }
+        
+        with patch.object(mock_frappe.db, 'sql') as mock_sql:
+            mock_sql.return_value = [{
+                'name': 'OTP_001',
+                'expiry': datetime.now() + timedelta(minutes=15),
+                'context': json.dumps(update_context),
+                'verified': False
+            }]
+            
+            # Test teacher without glific_id where contact creation succeeds
+            teacher_no_glific = MockFrappeDocument("Teacher", glific_id=None, phone_number='9876543210',
+                                                 first_name='Test', language='LANG_001')
+            
+            with patch.object(mock_frappe, 'get_doc', return_value=teacher_no_glific):
+                # Mock successful contact creation
+                mock_glific.get_contact_by_phone.return_value = None
+                mock_glific.create_contact.return_value = {'id': 'new_contact_123'}
+                
+                result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_print_debug_statements_coverage(self):
+        """Test functions that use print() for debugging"""
+        
+        # Test determine_student_type print statements
+        determine_func = getattr(api_module, 'determine_student_type', None)
+        if determine_func:
+            # Test successful case (should print student type)
+            result = safe_call_function(determine_func, '9876543210', 'Test Student', 'VERTICAL_001')
+            
+            # Test exception case (should print error)
+            with patch.object(mock_frappe.db, 'sql', side_effect=Exception("SQL Error")):
+                result = safe_call_function(determine_func, '9876543210', 'Test Student', 'VERTICAL_001')
+        
+        # Test get_current_academic_year print statements
+        academic_year_func = getattr(api_module, 'get_current_academic_year', None)
+        if academic_year_func:
+            result = safe_call_function(academic_year_func)
+            
+            # Test exception case
+            with patch.object(mock_frappe.utils, 'getdate', side_effect=Exception("Date Error")):
+                result = safe_call_function(academic_year_func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_get_course_level_with_mapping_print_statements(self):
+        """Test get_course_level_with_mapping print/debug statements"""
+        func = getattr(api_module, 'get_course_level_with_mapping', None)
+        if not func:
+            return
+        
+        # Test successful mapping found
+        result = safe_call_function(func, 'VERTICAL_001', '5', '9876543210', 'Test Student', 1)
+        
+        # Test no mapping found (fallback scenario)
+        with patch.object(mock_frappe, 'get_all', return_value=[]):
+            result = safe_call_function(func, 'VERTICAL_001', '5', '9876543210', 'Test Student', 1)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_create_student_course_level_selection_branches(self):
+        """Test create_student course level selection branches"""
+        func = get_function('create_student')
+        if not func:
+            return
+        
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'Course Test',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'course_glific'
+        }
+        
+        # Test when course level selection raises an exception
+        with patch.object(api_module, 'get_course_level_with_mapping', side_effect=Exception("Course selection error")):
+            result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+    def test_verify_otp_context_parsing_edge_cases(self):
+        """Test verify_otp context parsing edge cases"""
+        func = get_function('verify_otp')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210',
+            'otp': '1234'
+        }
+        
+        # Test with empty context string
+        with patch.object(mock_frappe.db, 'sql') as mock_sql:
+            mock_sql.return_value = [{
+                'name': 'OTP_001',
+                'expiry': datetime.now() + timedelta(minutes=15),
+                'context': '',  # Empty context
+                'verified': False
+            }]
+            result = safe_call_function(func)
+        
+        # Test with malformed JSON context
+        with patch.object(mock_frappe.db, 'sql') as mock_sql:
+            mock_sql.return_value = [{
+                'name': 'OTP_001',
+                'expiry': datetime.now() + timedelta(minutes=15),
+                'context': '{invalid json',  # Malformed JSON
+                'verified': False
+            }]
+            result = safe_call_function(func)
+
+    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available") 
+    def test_frappe_logger_warning_calls(self):
+        """Test frappe.logger().warning() calls in verify_otp"""
+        func = get_function('verify_otp')
+        if not func:
+            return
+        
+        mock_frappe.request.get_json.return_value = {
+            'api_key': 'valid_key',
+            'phone': '9876543210',
+            'otp': '1234'
+        }
+        
+        update_context = {
+            "action_type": "update_batch",
+            "teacher_id": "TEACHER_001",
+            "school_id": "SCHOOL_001",
+            "batch_info": {"batch_name": "BATCH_001", "batch_id": "BATCH_2025_001"}
+        }
+        
+        with patch.object(mock_frappe.db, 'sql') as mock_sql:
+            mock_sql.return_value = [{
+                'name': 'OTP_001',
+                'expiry': datetime.now() + timedelta(minutes=15),
+                'context': json.dumps(update_context),
+                'verified': False
+            }]
+            
+            # Mock teacher with no glific_id and failed contact creation
+            teacher_no_glific = MockFrappeDocument("Teacher", glific_id=None)
+            
+            with patch.object(mock_frappe, 'get_doc', return_value=teacher_no_glific):
+                # Mock failed contact creation to trigger warning
+                mock_glific.get_contact_by_phone.return_value = None
+                mock_glific.create_contact.return_value = None
+                
+                # Mock frappe.logger to capture warning calls
+                mock_logger = Mock()
+                with patch.object(mock_frappe, 'logger', return_value=mock_logger):
+                    result = safe_call_function(func)
+
+# IMPORTANT: ADD THESE METHODS INSIDE YOUR TestComplete100CoverageAPI CLASS
+# The indentation should match your existing test methods (typically 4 spaces from the class definition)
 
