@@ -4076,21 +4076,21 @@ class TestComplete100CoverageAPI(unittest.TestCase):
                 
             # Test every type of exception that could occur
             exception_scenarios = [
-                (Exception, "Generic exception"),
-                (json.JSONDecodeError, "JSON decode error"),
-                (KeyError, "Key error"),
-                (AttributeError, "Attribute error"),
-                (TypeError, "Type error"),
-                (ValueError, "Value error")
+                Exception("Generic exception"),
+                json.JSONDecodeError("JSON decode error", "invalid json", 0),
+                KeyError("Key error"),
+                AttributeError("Attribute error"),
+                TypeError("Type error"),
+                ValueError("Value error")
             ]
             
-            for exc_type, desc in exception_scenarios:
+            for exception in exception_scenarios:
                 # Mock different components to raise exceptions
                 patches = [
-                    patch.object(mock_frappe, 'get_doc', side_effect=exc_type(desc)),
-                    patch.object(mock_frappe, 'get_all', side_effect=exc_type(desc)),
-                    patch.object(mock_frappe.db, 'get_value', side_effect=exc_type(desc)),
-                    patch.object(mock_frappe.request, 'get_json', side_effect=exc_type(desc)),
+                    patch.object(mock_frappe, 'get_doc', side_effect=exception),
+                    patch.object(mock_frappe, 'get_all', side_effect=exception),
+                    patch.object(mock_frappe.db, 'get_value', side_effect=exception),
+                    patch.object(mock_frappe.request, 'get_json', side_effect=exception),
                 ]
                 
                 for patch_context in patches:
