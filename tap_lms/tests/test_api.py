@@ -1,6 +1,4 @@
 
-
-
 """
 COMPLETE 100% Coverage Test Suite for tap_lms/api.py
 This test suite is designed to achieve 100% code coverage for both the test file and the API module.
