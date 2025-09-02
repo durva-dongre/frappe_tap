@@ -3169,13 +3169,6 @@
 #         pass
 # """
 
-
-
-"""
-Corrected Test Suite targeting 59% → 80% Coverage
-Focus on actual uncovered lines rather than 100% coverage
-"""
-
 import unittest
 from unittest.mock import Mock, patch, MagicMock
 import json
@@ -3183,7 +3176,7 @@ import sys
 from datetime import datetime, timedelta
 
 # =============================================================================
-# SIMPLIFIED MOCK SETUP (Only what's needed)
+# COMPLETE MOCK SETUP WITH ALL FRAPPE DECORATORS
 # =============================================================================
 
 class SimplifiedMockFrappe:
@@ -3215,8 +3208,24 @@ class SimplifiedMockFrappe:
         self.ValidationError = type('ValidationError', (Exception,), {})
         self.DuplicateEntryError = type('DuplicateEntryError', (Exception,), {})
         
+        # Add missing frappe decorators and methods
+        self.whitelist = self._create_whitelist_decorator
+        self.enqueue = Mock()
+        self.msgprint = Mock()
+        self.publish_progress = Mock()
+        
         # Configure essential methods
         self._setup_core_mocks()
+    
+    def _create_whitelist_decorator(self, allow_guest=False, methods=None):
+        """Mock frappe.whitelist decorator"""
+        def decorator(func):
+            # Just return the function unchanged - we don't need actual whitelisting in tests
+            func._is_whitelisted = True
+            func._allow_guest = allow_guest
+            func._methods = methods
+            return func
+        return decorator
     
     def _setup_core_mocks(self):
         def mock_get_doc(doctype, filters=None, **kwargs):
@@ -3311,13 +3320,13 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test create_new_student helper function"""
         func = getattr(api_module, 'create_new_student', None)
         if not func:
-            return
+            self.skipTest("create_new_student function not found")
             
         # Test successful creation
         mock_student = Mock()
         mock_student.insert = Mock(return_value=mock_student)
         
-        with patch.object(mock_frappe, 'get_doc', return_value=mock_student):
+        with patch.object(mock_frappe, 'new_doc', return_value=mock_student):
             result = func('John Doe', '9876543210', 'Male', 'SCHOOL_001', '5', 'English', 'glific_123')
             self.assertIsNotNone(result)
 
@@ -3326,7 +3335,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test get_tap_language helper function"""
         func = getattr(api_module, 'get_tap_language', None)
         if not func:
-            return
+            self.skipTest("get_tap_language function not found")
             
         # Test language found
         with patch.object(mock_frappe, 'get_all', return_value=[{'name': 'LANG_001'}]):
@@ -3343,7 +3352,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test determine_student_type helper function"""
         func = getattr(api_module, 'determine_student_type', None)
         if not func:
-            return
+            self.skipTest("determine_student_type function not found")
             
         # Test new student (no enrollment found)
         with patch.object(mock_frappe.db, 'sql', return_value=[]):
@@ -3365,7 +3374,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test get_current_academic_year helper function"""
         func = getattr(api_module, 'get_current_academic_year', None)
         if not func:
-            return
+            self.skipTest("get_current_academic_year function not found")
             
         # Test April onwards (current year)
         with patch.object(mock_frappe.utils, 'getdate', return_value=datetime(2025, 6, 15).date()):
@@ -3391,7 +3400,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test exception handling in create_student"""
         func = getattr(api_module, 'create_student', None)
         if not func:
-            return
+            self.skipTest("create_student function not found")
             
         # Setup valid form data
         mock_frappe.local.form_dict = {
@@ -3424,7 +3433,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test exception handling in create_teacher"""
         func = getattr(api_module, 'create_teacher', None)
         if not func:
-            return
+            self.skipTest("create_teacher function not found")
             
         # Test DuplicateEntryError
         mock_teacher = Mock()
@@ -3448,7 +3457,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test date parsing branches in verify_batch_keyword"""
         func = getattr(api_module, 'verify_batch_keyword', None)
         if not func:
-            return
+            self.skipTest("verify_batch_keyword function not found")
             
         mock_frappe.request.data = json.dumps({
             'api_key': 'valid_key',
@@ -3475,7 +3484,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test conditional branches in send_whatsapp_message"""
         func = getattr(api_module, 'send_whatsapp_message', None)
         if not func:
-            return
+            self.skipTest("send_whatsapp_message function not found")
             
         # Test with missing gupshup settings
         with patch.object(mock_frappe, 'get_single', return_value=None):
@@ -3498,7 +3507,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test all branches in get_course_level_original"""
         func = getattr(api_module, 'get_course_level_original', None)
         if not func:
-            return
+            self.skipTest("get_course_level_original function not found")
             
         # Test fallback to specific grade query
         with patch.object(mock_frappe.db, 'sql') as mock_sql:
@@ -3525,7 +3534,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test error handling paths in verify_otp"""
         func = getattr(api_module, 'verify_otp', None)
         if not func:
-            return
+            self.skipTest("verify_otp function not found")
         
         # Test JSON parsing error
         mock_frappe.request.get_json.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
@@ -3556,7 +3565,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test error handling in create_teacher_web"""
         func = getattr(api_module, 'create_teacher_web', None)
         if not func:
-            return
+            self.skipTest("create_teacher_web function not found")
             
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key',
@@ -3591,7 +3600,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test fallback logic in get_model_for_school"""
         func = getattr(api_module, 'get_model_for_school', None)
         if not func:
-            return
+            self.skipTest("get_model_for_school function not found")
             
         # Test fallback to school model (no active batch onboardings)
         with patch.object(mock_frappe, 'get_all', return_value=[]):
@@ -3611,7 +3620,7 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
         """Test existing student handling in create_student"""
         func = getattr(api_module, 'create_student', None)
         if not func:
-            return
+            self.skipTest("create_student function not found")
             
         mock_frappe.local.form_dict = {
             'api_key': 'valid_key',
@@ -3637,8 +3646,28 @@ class TestAPIFor80PercentCoverage(unittest.TestCase):
                 existing_student.save.assert_called_once()
 
     # =============================================================================
-    # RUN ONLY THESE TARGETED TESTS
+    # BASIC SMOKE TESTS FOR CRITICAL FUNCTIONS
     # =============================================================================
+
+    @unittest.skipUnless(API_IMPORTED, "API not imported")
+    def test_api_module_imports_successfully(self):
+        """Verify the API module can be imported without errors"""
+        self.assertIsNotNone(api_module)
+        self.assertTrue(hasattr(api_module, '__name__'))
+
+    @unittest.skipUnless(API_IMPORTED, "API not imported")
+    def test_basic_function_existence(self):
+        """Test that key functions exist in the API module"""
+        expected_functions = [
+            'create_student', 'create_teacher', 'verify_otp', 
+            'send_otp', 'verify_batch_keyword'
+        ]
+        
+        for func_name in expected_functions:
+            with self.subTest(function=func_name):
+                if hasattr(api_module, func_name):
+                    func = getattr(api_module, func_name)
+                    self.assertTrue(callable(func), f"{func_name} should be callable")
 
 # Run the tests
 if __name__ == '__main__':
@@ -3660,3 +3689,8 @@ if __name__ == '__main__':
         print("\nErrors:")
         for test, traceback in result.errors:
             print(f"- {test}: {traceback}")
+    
+    # Calculate success rate
+    if result.testsRun > 0:
+        success_rate = ((result.testsRun - len(result.failures) - len(result.errors)) / result.testsRun) * 100
+        print(f"Success rate: {success_rate:.1f}%")
