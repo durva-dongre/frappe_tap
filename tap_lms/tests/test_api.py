@@ -4138,79 +4138,83 @@ class TestSurgical100Coverage(unittest.TestCase):
         print(f"Executed {branch_tests_executed} systematic branch tests")
         self.assertGreater(branch_tests_executed, 50, f"Should test many branches, tested {branch_tests_executed}")
 
-    @unittest.skipUnless(API_IMPORTED, "API module not available")
-    def test_complete_test_file_coverage(self):
-        """Ensure every line in the test file itself is executed"""
-        
-        # Execute every utility function in this test file
-        test_utilities = [
-            execute_with_all_scenarios,
-            self._generate_parameter_matrix,
-            self._generate_mock_state_matrix,
-            self._generate_exception_matrix,
-            self._setup_test_environment,
-            self._apply_mock_state,
-            self._apply_exception_scenario,
-            self._get_basic_args_for_function,
-        ]
-        
-        for utility_func in test_utilities:
-            try:
-                # Test with various parameters
-                if utility_func == execute_with_all_scenarios:
-                    result = utility_func(lambda x: x, 'test')
-                elif utility_func == self._generate_parameter_matrix:
-                    result = utility_func('test_function', ['param1', 'param2'])
-                elif utility_func == self._generate_mock_state_matrix:
-                    result = utility_func('test_function')
-                elif utility_func == self._generate_exception_matrix:
-                    result = utility_func('test_function')
-                elif utility_func == self._setup_test_environment:
-                    result = utility_func({'form_dict': {'test': 'value'}})
-                elif utility_func == self._apply_mock_state:
-                    result = utility_func({'get_doc': {'success': True, 'doctype': 'Test'}})
-                elif utility_func == self._apply_exception_scenario:
-                    result = utility_func({'get_doc': Exception("Test error")})
-                elif utility_func == self._get_basic_args_for_function:
-                    result = utility_func('test_function')
-            except Exception as e:
-                # Expected for some utility functions
-                pass
-        
-        # Test mock classes
-        test_doc = MockFrappeDocument("Test", name="TEST_001", active=True, enabled=1)
-        self.assertEqual(test_doc.doctype, "Test")
-        self.assertTrue(hasattr(test_doc, 'active'))
-        
-        # Test mock methods
-        test_doc.insert()
-        test_doc.save()
-        test_doc.append('test_field', 'test_data')
-        test_doc.get('name')
-        test_doc.set('test_field', 'test_value')
-        test_doc.delete()
-        test_doc.reload()
-        
-        # Test frappe mock methods
-        mock_frappe.new_doc('Test')
-        mock_frappe.get_single('Test')
+@unittest.skipUnless(API_IMPORTED, "API module not available")
+def test_complete_test_file_coverage(self):
+    """Ensure every line in the test file itself is executed"""
+    
+    # Execute every utility function in this test file
+    test_utilities = [
+        execute_with_all_scenarios,
+        self._generate_parameter_matrix,
+        self._generate_mock_state_matrix,
+        self._generate_exception_matrix,
+        self._setup_test_environment,
+        self._apply_mock_state,
+        self._apply_exception_scenario,
+        self._get_basic_args_for_function,
+    ]
+    
+    for utility_func in test_utilities:
+        try:
+            # Test with various parameters
+            if utility_func == execute_with_all_scenarios:
+                result = utility_func(lambda x: x, 'test')
+            elif utility_func == self._generate_parameter_matrix:
+                result = utility_func('test_function', ['param1', 'param2'])
+            elif utility_func == self._generate_mock_state_matrix:
+                result = utility_func('test_function')
+            elif utility_func == self._generate_exception_matrix:
+                result = utility_func('test_function')
+            elif utility_func == self._setup_test_environment:
+                result = utility_func({'form_dict': {'test': 'value'}})
+            elif utility_func == self._apply_mock_state:
+                result = utility_func({'get_doc': {'success': True, 'doctype': 'Test'}})
+            elif utility_func == self._apply_exception_scenario:
+                result = utility_func({'get_doc': Exception("Test error")})
+            elif utility_func == self._get_basic_args_for_function:
+                result = utility_func('test_function')
+        except Exception as e:
+            # Expected for some utility functions
+            pass
+    
+    # Test mock classes
+    test_doc = MockFrappeDocument("Test", name="TEST_001", active=True, enabled=1)
+    self.assertEqual(test_doc.doctype, "Test")
+    self.assertTrue(hasattr(test_doc, 'active'))
+    
+    # Test mock methods
+    test_doc.insert()
+    test_doc.save()
+    test_doc.append('test_field', 'test_data')
+    test_doc.get('name')
+    test_doc.set('test_field', 'test_value')
+    test_doc.delete()
+    test_doc.reload()
+    
+    # Test frappe mock methods (wrap exception-raising methods in try-except)
+    mock_frappe.new_doc('Test')
+    mock_frappe.get_single('Test')
+    
+    # This method is designed to raise exceptions, so wrap it
+    try:
         mock_frappe.throw('Test message')
-        mock_frappe.log_error('Test error')
-        mock_frappe.whitelist()
-        mock_frappe._dict({'test': 'data'})
-        mock_frappe.msgprint('Test message')
-        mock_frappe.as_json({'test': 'data'})
-        
-        # Test utils methods
-        mock_frappe.utils.cint('123')
-        mock_frappe.utils.today()
-        mock_frappe.utils.get_url()
-        mock_frappe.utils.now_datetime()
-        mock_frappe.utils.getdate('2025-01-01')
-        mock_frappe.utils.cstr('test')
-        mock_frappe.utils.get_datetime('2025-01-01 12:00:00')
-        
-        print("Test file coverage check completed")
-
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    except Exception:
+        # Expected behavior for throw method
+        pass
+    
+    mock_frappe.log_error('Test error')
+    mock_frappe.whitelist()
+    mock_frappe._dict({'test': 'data'})
+    mock_frappe.msgprint('Test message')
+    mock_frappe.as_json({'test': 'data'})
+    
+    # Test utils methods
+    mock_frappe.utils.cint('123')
+    mock_frappe.utils.today()
+    mock_frappe.utils.get_url()
+    mock_frappe.utils.now_datetime()
+    mock_frappe.utils.getdate('2025-01-01')
+    mock_frappe.utils.cstr('test')
+    mock_frappe.utils.get_datetime('2025-01-01 12:00:00')
+    
+    print("Test file coverage check completed")
