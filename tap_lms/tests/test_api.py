@@ -3676,10 +3676,13 @@ mock_glific.add_contact_to_group = Mock(return_value={'status': 'success'})
 mock_glific.remove_contact_from_group = Mock(return_value={'status': 'success'})
 mock_glific.get_groups = Mock(return_value=[{'id': 'group_123', 'name': 'Test Group'}])
 mock_glific.send_message = Mock(return_value={'status': 'sent', 'id': 'msg_123'})
+mock_glific.create_or_get_teacher_group_for_batch = Mock(return_value={'group_id': 'group_123', 'status': 'created'})
+mock_glific.get_teacher_groups = Mock(return_value=[{'id': 'group_123'}])
 
 mock_background = Mock()
 mock_background.enqueue_glific_actions = Mock(return_value={'status': 'enqueued'})
 mock_background.enqueue = Mock(return_value={'job_id': 'job_123'})
+mock_background.create_or_get_teacher_group_for_batch = Mock(return_value={'group_id': 'group_456'})
 mock_random = Mock()
 mock_random.randint = Mock(return_value=1234)
 mock_random.choices = Mock(return_value=['1', '2', '3', '4'])
@@ -4153,6 +4156,7 @@ class TestAggressiveAPICoverage(unittest.TestCase):
 
     # ... rest of the original test methods remain the same ...
     # (Keeping original methods for external service integration, database transactions, etc.)
+    
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
