@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:{note_name}-{difficulty_tier}",
  "creation": "2025-08-09 11:49:41.438143",
  "default_view": "List",
  "doctype": "DocType",
@@ -77,10 +78,11 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-09 13:35:45.701607",
+ "modified": "2025-09-06 19:28:48.557893",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "NoteContent",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
