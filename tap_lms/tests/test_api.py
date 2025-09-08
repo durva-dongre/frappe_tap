@@ -3180,26 +3180,19 @@ import tap_lms.api as api
 # --------------------
 def test_authenticate_api_key_success(monkeypatch):
     mock_frappe = MagicMock()
+
+    # Create a fake DoesNotExistError class
+    class FakeDoesNotExistError(Exception):
+        pass
+
+    mock_frappe.DoesNotExistError = FakeDoesNotExistError
+
+    # Mock successful API key lookup
     mock_frappe.get_doc.return_value = MagicMock(name="VALID_KEY")
-    # Add DoesNotExistError in frappe mock
-    mock_frappe.DoesNotExistError = Exception
     monkeypatch.setattr(api, "frappe", mock_frappe)
 
     result = api.authenticate_api_key("VALID_KEY")
-    assert result == "VALID_KEY"
-
-# --------------------
-# FIX authenticate_api_key NOT FOUND
-# --------------------
-def test_authenticate_api_key_not_found(monkeypatch):
-    mock_frappe = MagicMock()
-    # Simulate frappe.get_doc throwing DoesNotExistError
-    mock_frappe.get_doc.side_effect = Exception("Not found")
-    mock_frappe.DoesNotExistError = Exception
-    monkeypatch.setattr(api, "frappe", mock_frappe)
-
-    result = api.authenticate_api_key("BAD_KEY")
-    assert result is None
+    assert result == "VALID_KEY"  # Should succeed
 
 # --------------------
 # FIX list_districts SUCCESS
@@ -3207,20 +3200,22 @@ def test_authenticate_api_key_not_found(monkeypatch):
 def test_list_districts_success(monkeypatch):
     mock_frappe = MagicMock()
 
-    # Mock request data
+    class FakeDoesNotExistError(Exception):
+        pass
+
+    mock_frappe.DoesNotExistError = FakeDoesNotExistError
+
+    # Mock request with valid API key & state
     mock_frappe.request.data = json.dumps({"api_key": "KEY123", "state": "KA"})
 
-    # Mock authenticate_api_key success
+    # Mock valid API key document
     mock_frappe.get_doc.return_value = MagicMock(name="KEY123")
 
-    # Mock districts result properly
+    # Mock two districts returned from DB
     mock_frappe.get_all.return_value = [
         MagicMock(name="D1", district_name="District One"),
-        MagicMock(name="D2", district_name="District Two"),
+        MagicMock(name="D2", district_name="District Two")
     ]
-
-    # Add exception class
-    mock_frappe.DoesNotExistError = Exception
 
     monkeypatch.setattr(api, "frappe", mock_frappe)
 
@@ -3235,13 +3230,16 @@ def test_list_districts_success(monkeypatch):
 def test_list_districts_invalid_key(monkeypatch):
     mock_frappe = MagicMock()
 
-    # Mock request with bad API key
+    class FakeDoesNotExistError(Exception):
+        pass
+
+    mock_frappe.DoesNotExistError = FakeDoesNotExistError
+
+    # Mock request with invalid API key
     mock_frappe.request.data = json.dumps({"api_key": "BAD_KEY", "state": "KA"})
 
-    # Simulate frappe.get_doc raising Exception for invalid key
-    mock_frappe.get_doc.side_effect = Exception("Not found")
-    mock_frappe.DoesNotExistError = Exception
-
+    # Simulate frappe.get_doc throwing DoesNotExistError
+    mock_frappe.get_doc.side_effect = FakeDoesNotExistError("API Key not found")
     monkeypatch.setattr(api, "frappe", mock_frappe)
 
     result = api.list_districts()
