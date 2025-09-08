@@ -3170,1068 +3170,1201 @@
 # """
 
 
-"""
-AGGRESSIVE 100% Coverage Test Suite for tap_lms/api.py
-This test suite systematically targets every single line of code for 100% coverage.
-"""
 
-import sys
-import unittest
-from unittest.mock import Mock, patch, MagicMock
+
+
+
+# """
+# AGGRESSIVE 100% Coverage Test Suite for tap_lms/api.py
+# This test suite systematically targets every single line of code for 100% coverage.
+# """
+
+# import sys
+# import unittest
+# from unittest.mock import Mock, patch, MagicMock
+# import json
+# from datetime import datetime, timedelta
+# import os
+
+# # =============================================================================
+# # COMPLETE MOCKING SETUP - TARGETS ALL API FUNCTIONS
+# # =============================================================================
+
+# class MockFrappeUtils:
+#     @staticmethod
+#     def cint(value):
+#         try:
+#             if value is None or value == '':
+#                 return 0
+#             return int(value)
+#         except (ValueError, TypeError):
+#             return 0
+    
+#     @staticmethod
+#     def today():
+#         return "2025-01-15"
+    
+#     @staticmethod
+#     def get_url():
+#         return "http://localhost:8000"
+    
+#     @staticmethod
+#     def now_datetime():
+#         return datetime.now()
+    
+#     @staticmethod
+#     def getdate(date_str=None):
+#         if date_str is None:
+#             return datetime.now().date()
+#         if isinstance(date_str, str):
+#             try:
+#                 return datetime.strptime(date_str, '%Y-%m-%d').date()
+#             except ValueError:
+#                 return datetime.now().date()
+#         return date_str
+    
+#     @staticmethod
+#     def cstr(value):
+#         return "" if value is None else str(value)
+    
+#     @staticmethod
+#     def get_datetime(dt):
+#         if isinstance(dt, str):
+#             try:
+#                 return datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+#             except ValueError:
+#                 return datetime.now()
+#         return dt if dt else datetime.now()
+
+# class MockFrappeDocument:
+#     def __init__(self, doctype, name=None, **remaining_params):
+#         self.doctype = doctype
+#         self.name = name or f"{doctype.upper().replace(' ', '_')}_001"
+#         self.creation = remaining_params.get('creation', datetime.now())
+#         self.modified = remaining_params.get('modified', datetime.now())
+#         self.owner = remaining_params.get('owner', 'Administrator')
+#         self.modified_by = remaining_params.get('modified_by', 'Administrator')
+#         self.docstatus = remaining_params.get('docstatus', 0)
+#         self.idx = remaining_params.get('idx', 1)
+        
+#         # Set all possible attributes for all doctypes
+#         self._set_all_attributes(remaining_params)
+    
+#     def _set_all_attributes(self, params):
+#         # API Key
+#         self.key = params.get('key', 'valid_key')
+#         self.enabled = params.get('enabled', 1)
+#         self.api_key_name = params.get('api_key_name', 'Test API Key')
+        
+#         # Student
+#         self.name1 = params.get('name1', 'Test Student')
+#         self.student_name = params.get('student_name', 'Test Student')
+#         self.phone = params.get('phone', '9876543210')
+#         self.grade = params.get('grade', '5')
+#         self.language = params.get('language', 'ENGLISH')
+#         self.school_id = params.get('school_id', 'SCHOOL_001')
+#         self.school = params.get('school', 'SCHOOL_001')
+#         self.glific_id = params.get('glific_id', 'glific_123')
+#         self.crm_student_id = params.get('crm_student_id', 'CRM_STU_001')
+#         self.gender = params.get('gender', 'Male')
+#         self.batch = params.get('batch', 'BATCH_001')
+#         self.vertical = params.get('vertical', 'Math')
+#         self.student_type = params.get('student_type', 'New')
+#         self.district = params.get('district', 'Test District')
+#         self.city = params.get('city', 'Test City')
+#         self.state = params.get('state', 'Test State')
+#         self.pincode = params.get('pincode', '123456')
+#         self.date_of_birth = params.get('date_of_birth', '2010-01-01')
+#         self.parent_name = params.get('parent_name', 'Test Parent')
+#         self.parent_phone = params.get('parent_phone', '9876543210')
+#         self.email = params.get('email', 'test@example.com')
+#         self.address = params.get('address', 'Test Address')
+#         self.joined_on = params.get('joined_on', datetime.now().date())
+#         self.status = params.get('status', 'active')
+#         self.enrollment = params.get('enrollment', [])
+        
+#         # Teacher
+#         self.first_name = params.get('first_name', 'Test Teacher')
+#         self.last_name = params.get('last_name', 'Teacher')
+#         self.phone_number = params.get('phone_number', '9876543210')
+#         self.email_id = params.get('email_id', 'teacher@example.com')
+#         self.subject = params.get('subject', 'Mathematics')
+#         self.experience = params.get('experience', '5 years')
+#         self.qualification = params.get('qualification', 'B.Ed')
+#         self.teacher_role = params.get('teacher_role', 'Teacher')
+#         self.department = params.get('department', 'Academic')
+#         self.course_level = params.get('course_level', 'COURSE_001')
+        
+#         # Batch
+#         self.batch_id = params.get('batch_id', 'BATCH_2025_001')
+#         self.active = params.get('active', True)
+#         self.regist_end_date = params.get('regist_end_date', (datetime.now() + timedelta(days=30)).date())
+#         self.start_date = params.get('start_date', datetime.now().date())
+#         self.end_date = params.get('end_date', (datetime.now() + timedelta(days=90)).date())
+#         self.capacity = params.get('capacity', 30)
+#         self.enrolled = params.get('enrolled', 0)
+        
+#         # School
+#         self.keyword = params.get('keyword', 'test_school')
+#         self.pin = params.get('pin', '123456')
+#         self.principal_name = params.get('principal_name', 'Test Principal')
+#         self.headmaster_name = params.get('headmaster_name', 'Test Headmaster')
+#         self.headmaster_phone = params.get('headmaster_phone', '9876543210')
+#         self.model = params.get('model', 'MODEL_001')
+#         self.type = params.get('type', 'Government')
+#         self.board = params.get('board', 'CBSE')
+#         self.country = params.get('country', 'India')
+        
+#         # OTP Verification
+#         self.otp = params.get('otp', '1234')
+#         self.expiry = params.get('expiry', datetime.now() + timedelta(minutes=15))
+#         self.verified = params.get('verified', False)
+#         self.context = params.get('context', '{}')
+#         self.attempts = params.get('attempts', 0)
+#         self.created_at = params.get('created_at', datetime.now())
+        
+#         # Generic fields
+#         self.language_name = params.get('language_name', 'English')
+#         self.glific_language_id = params.get('glific_language_id', '1')
+#         self.district_name = params.get('district_name', 'Test District')
+#         self.city_name = params.get('city_name', 'Test City')
+#         self.state_name = params.get('state_name', 'Test State')
+#         self.country_name = params.get('country_name', 'India')
+#         self.vertical_name = params.get('vertical_name', 'Mathematics')
+#         self.kit_less = params.get('kit_less', 1)
+#         self.is_active = params.get('is_active', 1)
+#         self.batch_skeyword = params.get('batch_skeyword', 'test_batch')
+#         self.course_vertical = params.get('course_vertical', 'VERTICAL_001')
+#         self.api_key = params.get('api_key', 'test_gupshup_key')
+#         self.source_number = params.get('source_number', '918454812392')
+#         self.app_name = params.get('app_name', 'test_app')
+#         self.api_endpoint = params.get('api_endpoint', 'https://api.gupshup.io/sm/api/v1/msg')
+#         self.mname = params.get('mname', 'Test Model')
+#         self.model_id = params.get('model_id', 'MODEL_001')
+#         self.description = params.get('description', 'Test description')
+#         self.assigned_course_level = params.get('assigned_course_level', 'COURSE_001')
+#         self.academic_year = params.get('academic_year', '2025-26')
+#         self.teacher = params.get('teacher', 'TEACHER_001')
+#         self.joined_date = params.get('joined_date', datetime.now().date())
+#         self.glific_group_id = params.get('glific_group_id', 'GROUP_001')
+#         self.course = params.get('course', 'COURSE_001')
+#         self.date_joining = params.get('date_joining', datetime.now().date())
+#         self.parent = params.get('parent', 'STUDENT_001')
+    
+#     def insert(self, ignore_permissions=False):
+#         return self
+    
+#     def save(self, ignore_permissions=False):
+#         return self
+    
+#     def append(self, field, data):
+#         if not hasattr(self, field):
+#             setattr(self, field, [])
+#         getattr(self, field).append(data)
+#         return self
+    
+#     def get(self, field, default=None):
+#         return getattr(self, field, default)
+    
+#     def set(self, field, value):
+#         setattr(self, field, value)
+#         return self
+
+# class MockFrappe:
+#     def __init__(self):
+#         self.utils = MockFrappeUtils()
+#         self.response = Mock()
+#         self.response.http_status_code = 200
+#         self.local = Mock()
+#         self.local.form_dict = {}
+#         self.db = Mock()
+#         self.db.commit = Mock()
+#         self.db.rollback = Mock()
+#         self.db.sql = Mock(return_value=[])
+#         self.db.get_value = Mock(return_value="test_value")
+#         self.db.get_all = Mock(return_value=[])
+#         self.db.exists = Mock(return_value=None)
+#         self.db.delete = Mock()
+#         self.request = Mock()
+#         self.request.get_json = Mock(return_value={})
+#         self.request.data = '{}'
+#         self.request.method = 'POST'
+#         self.request.headers = {}
+#         self.flags = Mock()
+#         self.flags.ignore_permissions = False
+#         self.session = Mock()
+#         self.session.user = 'Administrator'
+#         self.conf = Mock()
+#         self.conf.get = Mock(side_effect=lambda key, default: default)
+#         self.logger = Mock(return_value=Mock())
+        
+#         # Exception classes
+#         self.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
+#         self.ValidationError = type('ValidationError', (Exception,), {})
+#         self.DuplicateEntryError = type('DuplicateEntryError', (Exception,), {})
+#         self.PermissionError = type('PermissionError', (Exception,), {})
+        
+#         self._setup_dynamic_mocks()
+    
+#     def _setup_dynamic_mocks(self):
+#         def get_doc_side_effect(doctype, filters=None, **doc_params):
+#             if doctype == "API Key":
+#                 if isinstance(filters, dict):
+#                     key = filters.get('key')
+#                 elif isinstance(filters, str):
+#                     key = filters
+#                 else:
+#                     key = doc_params.get('key', 'unknown_key')
+                
+#                 if key in ['valid_key', 'test_key']:
+#                     return MockFrappeDocument(doctype, key=key, enabled=1)
+#                 elif key == 'disabled_key':
+#                     return MockFrappeDocument(doctype, key=key, enabled=0)
+#                 else:
+#                     raise self.DoesNotExistError("API Key not found")
+            
+#             elif doctype == "OTP Verification":
+#                 if isinstance(filters, dict):
+#                     phone = filters.get('phone_number')
+#                     if phone == '9876543210':
+#                         return MockFrappeDocument(doctype, phone_number='9876543210', otp='1234',
+#                                                 expiry=datetime.now() + timedelta(minutes=15), verified=False)
+#                     elif phone == 'expired_phone':
+#                         return MockFrappeDocument(doctype, phone_number='expired_phone', otp='1234',
+#                                                 expiry=datetime.now() - timedelta(minutes=1), verified=False)
+#                     elif phone == 'verified_phone':
+#                         return MockFrappeDocument(doctype, phone_number='verified_phone', otp='1234',
+#                                                 expiry=datetime.now() + timedelta(minutes=15), verified=True)
+#                     else:
+#                         raise self.DoesNotExistError("OTP not found")
+#                 else:
+#                     raise self.DoesNotExistError("OTP not found")
+            
+#             elif doctype == "Student":
+#                 if isinstance(filters, dict):
+#                     if filters.get("phone") == "existing_phone":
+#                         return MockFrappeDocument(doctype, phone="existing_phone", name1="Existing Student")
+#                     elif filters.get("glific_id") == "existing_student":
+#                         return MockFrappeDocument(doctype, glific_id="existing_student", name1="Existing Student")
+#                 elif isinstance(filters, str):
+#                     return MockFrappeDocument(doctype, name=filters)
+#                 else:
+#                     raise self.DoesNotExistError("Student not found")
+            
+#             elif doctype == "Teacher":
+#                 if isinstance(filters, dict):
+#                     if filters.get("phone_number") == "existing_teacher":
+#                         return MockFrappeDocument(doctype, phone_number="existing_teacher", first_name="Existing Teacher")
+#                     elif filters.get("glific_id") == "existing_glific":
+#                         return MockFrappeDocument(doctype, glific_id="existing_glific", first_name="Existing Teacher")
+#                 elif isinstance(filters, str):
+#                     return MockFrappeDocument(doctype, name=filters)
+#                 else:
+#                     raise self.DoesNotExistError("Teacher not found")
+            
+#             elif doctype == "School":
+#                 if isinstance(filters, dict):
+#                     keyword = filters.get('keyword')
+#                     name1 = filters.get('name1')
+#                     if keyword == 'test_school' or name1 == 'Test School':
+#                         return MockFrappeDocument(doctype, keyword='test_school', name1='Test School')
+#                 elif isinstance(filters, str):
+#                     return MockFrappeDocument(doctype, name=filters)
+#                 else:
+#                     raise self.DoesNotExistError("School not found")
+            
+#             return MockFrappeDocument(doctype, **doc_params)
+        
+#         def get_all_side_effect(doctype, filters=None, fields=None, pluck=None, **all_params):
+#             # Return different data based on doctype and filters to trigger all branches
+#             if doctype == "Teacher":
+#                 if filters:
+#                     if filters.get("phone_number") == "existing_teacher":
+#                         return [{'name': 'TEACHER_001', 'first_name': 'Existing Teacher', 'school_id': 'SCHOOL_001'}]
+#                     elif filters.get("glific_id") == "existing_glific":
+#                         return [{'name': 'TEACHER_001', 'first_name': 'Existing Teacher', 
+#                                'last_name': 'User', 'teacher_role': 'Teacher', 
+#                                'school_id': 'SCHOOL_001', 'phone_number': '9876543210',
+#                                'email_id': 'teacher@example.com', 'department': 'Academic',
+#                                'language': 'LANG_001', 'gender': 'Male', 'course_level': 'COURSE_001'}]
+#                 return []
+            
+#             elif doctype == "Student":
+#                 if filters:
+#                     if filters.get("glific_id") == "existing_student":
+#                         return [{'name': 'STUDENT_001', 'name1': 'Existing Student'}]
+#                     elif filters.get("phone") == "existing_phone":
+#                         return [{'name': 'STUDENT_001', 'name1': 'Existing Student'}]
+#                 return []
+            
+#             elif doctype == "Batch onboarding":
+#                 if filters and filters.get("batch_skeyword") == "invalid_batch":
+#                     return []
+#                 return [{'name': 'BATCH_ONBOARDING_001', 'school': 'SCHOOL_001',
+#                        'batch': 'BATCH_001', 'kit_less': 1, 'model': 'MODEL_001',
+#                        'from_grade': '1', 'to_grade': '10'}]
+            
+#             elif doctype == "Batch School Verticals":
+#                 return [{'course_vertical': 'VERTICAL_001'}]
+            
+#             elif doctype == "Course Verticals":
+#                 return [{'name': 'VERTICAL_001', 'name2': 'Math', 'vertical_id': 'VERT_001'}]
+            
+#             elif doctype == "District":
+#                 return [{'name': 'DISTRICT_001', 'district_name': 'Test District'}]
+            
+#             elif doctype == "City":
+#                 if filters and filters.get('city_name') == 'Test City':
+#                     return [{'name': 'CITY_001', 'city_name': 'Test City', 'district': 'DISTRICT_001'}]
+#                 return [{'name': 'CITY_001', 'city_name': 'Test City'}]
+            
+#             elif doctype == "Batch":
+#                 if filters and filters.get("school") == "SCHOOL_001":
+#                     return [{'name': 'BATCH_001', 'batch_id': 'BATCH_2025_001', 'active': True,
+#                            'regist_end_date': (datetime.now() + timedelta(days=30)).date(),
+#                            'start_date': datetime.now().date(),
+#                            'end_date': (datetime.now() + timedelta(days=90)).date()}]
+#                 elif pluck == "name":
+#                     return ['BATCH_001', 'BATCH_002']
+#                 return []
+            
+#             elif doctype == "TAP Language":
+#                 if filters and filters.get('language_name') == 'English':
+#                     return [{'name': 'LANG_001', 'language_name': 'English', 'glific_language_id': '1'}]
+#                 return [{'name': 'LANG_001', 'language_name': 'English', 'glific_language_id': '1'}]
+            
+#             elif doctype == "School":
+#                 if filters:
+#                     if filters.get('name1') == 'Test School':
+#                         return [{'name': 'SCHOOL_001', 'name1': 'Test School', 'keyword': 'test_school',
+#                                'city': 'CITY_001', 'state': 'STATE_001', 'country': 'COUNTRY_001',
+#                                'address': 'Test Address', 'pin': '123456', 'type': 'Government',
+#                                'board': 'CBSE', 'status': 'Active', 'headmaster_name': 'Test HM',
+#                                'headmaster_phone': '9876543210'}]
+#                 return [{'name': 'SCHOOL_001', 'name1': 'Test School', 'keyword': 'test_school'}]
+            
+#             elif doctype == "Grade Course Level Mapping":
+#                 if filters:
+#                     return [{'assigned_course_level': 'COURSE_001', 'mapping_name': 'Test Mapping'}]
+#                 return []
+            
+#             elif doctype == "Glific Teacher Group":
+#                 return [{'glific_group_id': 'GROUP_001'}]
+                
+#             elif doctype == "Teacher Batch History":
+#                 return [{'batch': 'BATCH_001', 'batch_name': 'Test Batch', 'batch_id': 'BATCH_2025_001',
+#                         'joined_date': datetime.now().date(), 'status': 'Active'}]
+            
+#             elif doctype == "Course Level":
+#                 return [{'name': 'COURSE_001'}]
+                
+#             elif doctype == "Stage Grades":
+#                 return [{'name': 'STAGE_001'}]
+            
+#             return [{'name': 'DEFAULT_001'}]
+        
+#         def db_get_value_side_effect(doctype, filters, field, as_dict=False, **db_params):
+#             if isinstance(filters, str):
+#                 name = filters
+#                 filters = {"name": name}
+            
+#             value_map = {
+#                 ("School", "name1"): "Test School",
+#                 ("School", "keyword"): "test_school", 
+#                 ("School", "model"): "MODEL_001",
+#                 ("School", "district"): "DISTRICT_001",
+#                 ("Batch", "batch_id"): "BATCH_2025_001",
+#                 ("Batch", "name1"): "Test Batch",
+#                 ("TAP Language", "language_name"): "English",
+#                 ("TAP Language", "glific_language_id"): "1",
+#                 ("District", "district_name"): "Test District",
+#                 ("City", "city_name"): "Test City",
+#                 ("State", "state_name"): "Test State",
+#                 ("Country", "country_name"): "India",
+#                 ("Student", "crm_student_id"): "CRM_STU_001",
+#                 ("Teacher", "name"): "TEACHER_001",
+#                 ("Teacher", "glific_id"): "glific_123",
+#                 ("Tap Models", "mname"): "Test Model",
+#                 ("Course Level", "name1"): "Test Course Level",
+#                 ("OTP Verification", "name"): "OTP_001",
+#             }
+            
+#             key = (doctype, field)
+#             if key in value_map:
+#                 return value_map[key]
+            
+#             if as_dict:
+#                 return {"name1": "Test School", "model": "MODEL_001"}
+            
+#             return "test_value"
+        
+#         def db_sql_side_effect(query, params=None, **sql_params):
+#             if "Stage Grades" in query:
+#                 return [{'name': 'STAGE_001'}]
+#             elif "Teacher Batch History" in query:
+#                 return [{'batch': 'BATCH_001', 'batch_name': 'Test Batch', 
+#                         'batch_id': 'BATCH_2025_001', 'joined_date': datetime.now().date(),
+#                         'status': 'Active'}]
+#             elif "OTP Verification" in query:
+#                 return [{'name': 'OTP_001', 'expiry': datetime.now() + timedelta(minutes=15),
+#                         'context': '{"action_type": "new_teacher"}', 'verified': False}]
+#             elif "enrollment" in query.lower():
+#                 return []
+#             return []
+        
+#         self.get_doc = Mock(side_effect=get_doc_side_effect)
+#         self.get_all = Mock(side_effect=get_all_side_effect)
+#         self.db.get_value = Mock(side_effect=db_get_value_side_effect)
+#         self.db.sql = Mock(side_effect=db_sql_side_effect)
+    
+#     def new_doc(self, doctype):
+#         return MockFrappeDocument(doctype)
+    
+#     def get_single(self, doctype):
+#         if doctype == "Gupshup OTP Settings":
+#             return MockFrappeDocument(doctype, api_key="test_key", source_number="918454812392",
+#                                     app_name="test_app", api_endpoint="https://api.gupshup.io/sm/api/v1/msg")
+#         return MockFrappeDocument(doctype)
+    
+#     def throw(self, message):
+#         raise Exception(message)
+    
+#     def log_error(self, message, title=None):
+#         pass
+    
+#     def whitelist(self, allow_guest=False):
+#         def decorator(func):
+#             return func
+#         return decorator
+    
+#     def _dict(self, data=None):
+#         return data or {}
+    
+#     def msgprint(self, message):
+#         pass
+    
+#     def as_json(self, data):
+#         return json.dumps(data)
+
+# # Create comprehensive mocks
+# mock_frappe = MockFrappe()
+# mock_requests = Mock()
+# mock_response = Mock()
+# mock_response.json.return_value = {"status": "success", "id": "msg_12345"}
+# mock_response.status_code = 200
+# mock_response.text = '{"status": "success"}'
+# mock_response.raise_for_status = Mock()
+# mock_requests.get.return_value = mock_response
+# mock_requests.post.return_value = mock_response
+# mock_requests.RequestException = Exception
+
+# mock_glific = Mock()
+# mock_glific.get_contact_by_phone = Mock(return_value={'id': 'contact_123'})
+# mock_glific.create_contact = Mock(return_value={'id': 'new_contact_123'})
+# mock_glific.update_contact_fields = Mock(return_value=True)
+# mock_background = Mock()
+# mock_background.enqueue_glific_actions = Mock()
+# mock_random = Mock()
+# mock_random.randint = Mock(return_value=1234)
+# mock_random.choices = Mock(return_value=['1', '2', '3', '4'])
+
+# # Inject all mocks
+# sys.modules['frappe'] = mock_frappe
+# sys.modules['frappe.utils'] = mock_frappe.utils
+# sys.modules['tap_lms.glific_integration'] = mock_glific
+# sys.modules['.glific_integration'] = mock_glific
+# sys.modules['tap_lms.background_jobs'] = mock_background
+# sys.modules['.background_jobs'] = mock_background
+# sys.modules['requests'] = mock_requests
+# sys.modules['random'] = mock_random
+# sys.modules['string'] = Mock(digits='0123456789')
+# sys.modules['urllib.parse'] = Mock(quote=Mock(side_effect=lambda x: x))
+
+# # Import API module - this must succeed for 100% coverage
+# try:
+#     import tap_lms.api as api_module
+#     API_MODULE_IMPORTED = True
+#     ALL_FUNCTIONS = [name for name in dir(api_module) if callable(getattr(api_module, name)) and not name.startswith('_')]
+#     print(f"SUCCESS: Imported {len(ALL_FUNCTIONS)} API functions: {ALL_FUNCTIONS}")
+# except ImportError as e:
+#     print(f"CRITICAL ERROR: Could not import API module: {e}")
+#     API_MODULE_IMPORTED = False
+#     api_module = None
+#     ALL_FUNCTIONS = []
+
+# def execute_function(func, *args, **remaining_kwargs):
+#     """Execute function and capture result/exception"""
+#     try:
+#         return func(*args, **remaining_kwargs)
+#     except Exception as e:
+#         return {'error': str(e), 'type': type(e).__name__}
+
+# def get_api_function(func_name):
+#     """Get API function by name"""
+#     if API_MODULE_IMPORTED and hasattr(api_module, func_name):
+#         return getattr(api_module, func_name)
+#     return None
+
+# # =============================================================================
+# # AGGRESSIVE 100% COVERAGE TEST SUITE
+# # =============================================================================
+
+# class TestAggressiveAPICoverage(unittest.TestCase):
+#     """Aggressive test suite targeting 100% coverage of every single line"""
+    
+#     def setUp(self):
+#         """Reset all mocks for each test"""
+#         mock_frappe.response.http_status_code = 200
+#         mock_frappe.local.form_dict = {}
+#         mock_frappe.request.data = '{}'
+#         mock_frappe.request.get_json.return_value = {}
+#         mock_frappe.request.get_json.side_effect = None
+#         mock_frappe.session.user = 'Administrator'
+#         mock_frappe.flags.ignore_permissions = False
+#         mock_requests.reset_mock()
+#         mock_response.status_code = 200
+
+#     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+#     def test_every_function_exhaustive_coverage(self):
+#         """Execute every API function with exhaustive parameter combinations"""
+#         total_functions_tested = 0
+#         total_calls_made = 0
+        
+#         # Comprehensive test data for all possible scenarios
+#         comprehensive_test_data = [
+#             # Basic API key scenarios
+#             {'api_key': 'valid_key'},
+#             {'api_key': 'invalid_key'},
+#             {'api_key': 'disabled_key'},
+#             {'api_key': ''},
+#             {'api_key': None},
+            
+#             # Student creation scenarios
+#             {
+#                 'api_key': 'valid_key',
+#                 'student_name': 'John Doe',
+#                 'phone': '9876543210',
+#                 'gender': 'Male',
+#                 'grade': '5',
+#                 'language': 'English',
+#                 'batch_skeyword': 'test_batch',
+#                 'vertical': 'Math',
+#                 'glific_id': 'new_glific_123'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'student_name': 'Existing Student',
+#                 'phone': 'existing_phone',
+#                 'gender': 'Male',
+#                 'grade': '5',
+#                 'language': 'English',
+#                 'batch_skeyword': 'test_batch',
+#                 'vertical': 'Math',
+#                 'glific_id': 'existing_student'
+#             },
+            
+#             # Teacher creation scenarios
+#             {
+#                 'api_key': 'valid_key',
+#                 'firstName': 'Jane',
+#                 'lastName': 'Smith',
+#                 'phone': '9876543210',
+#                 'School_name': 'Test School',
+#                 'language': 'English'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'firstName': 'Jane',
+#                 'phone': 'existing_teacher',
+#                 'School_name': 'Test School'
+#             },
+            
+#             # OTP scenarios
+#             {
+#                 'api_key': 'valid_key',
+#                 'phone': '9876543210',
+#                 'otp': '1234'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'phone': 'expired_phone',
+#                 'otp': '1234'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'phone': 'verified_phone',
+#                 'otp': '1234'
+#             },
+            
+#             # School and location scenarios
+#             {
+#                 'api_key': 'valid_key',
+#                 'keyword': 'test_school'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'keyword': 'nonexistent_school'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'state': 'test_state'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'district': 'test_district'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'city_name': 'Test City'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'school_name': 'Test School'
+#             },
+            
+#             # Batch scenarios
+#             {
+#                 'api_key': 'valid_key',
+#                 'batch_skeyword': 'test_batch'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'batch_skeyword': 'invalid_batch'
+#             },
+            
+#             # Course scenarios
+#             {
+#                 'api_key': 'valid_key',
+#                 'grade': '5',
+#                 'vertical': 'Math',
+#                 'batch_skeyword': 'test_batch'
+#             },
+            
+#             # Teacher update scenarios
+#             {
+#                 'api_key': 'valid_key',
+#                 'glific_id': 'existing_glific',
+#                 'teacher_role': 'HM'
+#             },
+#             {
+#                 'api_key': 'valid_key',
+#                 'glific_id': 'nonexistent_glific',
+#                 'teacher_role': 'Teacher'
+#             },
+            
+#             # Empty/minimal data
+#             {},
+#             {'invalid_field': 'invalid_value'},
+#         ]
+        
+#         print(f"\nStarting exhaustive testing of {len(ALL_FUNCTIONS)} API functions...")
+        
+#         for func_name in ALL_FUNCTIONS:
+#             func = get_api_function(func_name)
+#             if not func:
+#                 continue
+            
+#             total_functions_tested += 1
+#             print(f"Testing function: {func_name}")
+            
+#             # Test each function with ALL comprehensive test data
+#             for test_data in comprehensive_test_data:
+#                 total_calls_made += 1
+                
+#                 # Test as form_dict
+#                 mock_frappe.local.form_dict = test_data.copy()
+#                 result = execute_function(func)
+                
+#                 # Test as JSON request
+#                 mock_frappe.request.data = json.dumps(test_data)
+#                 mock_frappe.request.get_json.return_value = test_data.copy()
+#                 result = execute_function(func)
+                
+#                 # Test as positional arguments
+#                 args = list(test_data.values())
+#                 if args:
+#                     result = execute_function(func, *args[:5])  # Pass first 5 values as args
+                
+#                 # Test with specific parameter combinations for this function
+#                 if func_name == 'authenticate_api_key':
+#                     result = execute_function(func, test_data.get('api_key'))
+#                 elif func_name in ['create_teacher', 'get_school_name_keyword_list']:
+#                     result = execute_function(func, test_data.get('api_key'), 'param2', 'param3', 'param4', 'param5')
+#                 elif func_name in ['grade_list', 'list_batch_keyword']:
+#                     result = execute_function(func, test_data.get('api_key'), 'test_batch')
+#                 elif func_name == 'get_active_batch_for_school':
+#                     result = execute_function(func, 'SCHOOL_001')
+#                 elif func_name == 'send_whatsapp_message':
+#                     result = execute_function(func, '9876543210', 'Test message')
+            
+#             # Test function with different database states
+#             database_states = [
+#                 # Success states
+#                 {'get_all': [{'name': 'FOUND_001'}], 'get_value': 'found_value'},
+#                 {'get_all': [{'name': 'TEST_001', 'active': True}], 'get_value': 'test_school'},
+#                 # Empty/null states
+#                 {'get_all': [], 'get_value': None},
+#                 {'get_all': None, 'get_value': ''},
+#                 # Different data combinations
+#                 {'get_all': [{'name': 'BATCH_001', 'active': True, 'regist_end_date': (datetime.now() + timedelta(days=1)).date()}]},
+#                 {'get_all': [{'name': 'BATCH_001', 'active': False, 'regist_end_date': (datetime.now() - timedelta(days=1)).date()}]},
+#                 {'get_all': [{'name': 'SCHOOL_001', 'name1': 'Test School', 'keyword': 'test_school'}]},
+#                 {'get_all': [{'name': 'TEACHER_001', 'phone_number': 'existing_teacher'}]},
+#                 {'get_all': [{'name': 'STUDENT_001', 'glific_id': 'existing_student'}]},
+#             ]
+            
+#             for state in database_states:
+#                 total_calls_made += 1
+                
+#                 with patch.object(mock_frappe, 'get_all', return_value=state.get('get_all', [])):
+#                     with patch.object(mock_frappe.db, 'get_value', return_value=state.get('get_value')):
+#                         mock_frappe.local.form_dict = {'api_key': 'valid_key', 'test_param': 'test_value'}
+#                         result = execute_function(func)
+            
+#             # Test function with all possible exceptions
+#             exception_scenarios = [
+#                 mock_frappe.DoesNotExistError("Not found"),
+#                 mock_frappe.ValidationError("Validation failed"),
+#                 mock_frappe.DuplicateEntryError("Duplicate entry"),
+#                 mock_frappe.PermissionError("Permission denied"),
+#                 Exception("General exception"),
+#                 json.JSONDecodeError("Invalid JSON", "", 0),
+#                 ValueError("Value error"),
+#                 KeyError("Key error"),
+#                 AttributeError("Attribute error"),
+#             ]
+            
+#             for exception in exception_scenarios:
+#                 total_calls_made += 3
+                
+#                 # Test get_doc exception
+#                 with patch.object(mock_frappe, 'get_doc', side_effect=exception):
+#                     result = execute_function(func, 'valid_key', 'test_param')
+                
+#                 # Test get_all exception
+#                 with patch.object(mock_frappe, 'get_all', side_effect=exception):
+#                     result = execute_function(func, 'valid_key', 'test_param')
+                
+#                 # Test db.get_value exception
+#                 with patch.object(mock_frappe.db, 'get_value', side_effect=exception):
+#                     result = execute_function(func, 'valid_key', 'test_param')
+        
+#         print(f"\nCompleted exhaustive testing:")
+#         print(f"- Functions tested: {total_functions_tested}")
+#         print(f"- Total function calls: {total_calls_made}")
+        
+#         self.assertGreater(total_functions_tested, 0, "Should have tested at least one function")
+#         self.assertGreater(total_calls_made, 100, f"Should have made many calls for coverage, made {total_calls_made}")
+
+#     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+#     def test_all_conditional_branches_coverage(self):
+#         """Test every conditional branch in the code"""
+        
+#         # Test all boolean conditions
+#         boolean_conditions = [
+#             {'active': True}, {'active': False},
+#             {'enabled': 1}, {'enabled': 0},
+#             {'verified': True}, {'verified': False},
+#             {'is_active': 1}, {'is_active': 0},
+#             {'kit_less': 1}, {'kit_less': 0},
+#         ]
+        
+#         # Test all date conditions
+#         date_conditions = [
+#             {'regist_end_date': datetime.now().date() + timedelta(days=1)},  # Future
+#             {'regist_end_date': datetime.now().date()},  # Today
+#             {'regist_end_date': datetime.now().date() - timedelta(days=1)},  # Past
+#             {'regist_end_date': None},  # None
+#             {'regist_end_date': 'invalid_date'},  # Invalid
+#             {'expiry': datetime.now() + timedelta(minutes=15)},  # Valid
+#             {'expiry': datetime.now() - timedelta(minutes=1)},   # Expired
+#             {'expiry': None},  # None
+#         ]
+        
+#         # Test all string conditions
+#         string_conditions = [
+#             {'status': 'active'}, {'status': 'inactive'}, {'status': ''},
+#             {'teacher_role': 'Teacher'}, {'teacher_role': 'HM'}, {'teacher_role': 'Principal'},
+#             {'docstatus': 0}, {'docstatus': 1}, {'docstatus': 2},
+#             {'grade': '1'}, {'grade': '5'}, {'grade': '10'}, {'grade': '15'},
+#         ]
+        
+#         all_conditions = boolean_conditions + date_conditions + string_conditions
+        
+#         for condition in all_conditions:
+#             mock_doc = MockFrappeDocument("Test", **condition)
+            
+#             with patch.object(mock_frappe, 'get_doc', return_value=mock_doc):
+#                 for func_name in ALL_FUNCTIONS[:10]:  # Test first 10 functions
+#                     func = get_api_function(func_name)
+#                     if func:
+#                         mock_frappe.local.form_dict = {'api_key': 'valid_key', 'test_param': 'test_value'}
+#                         result = execute_function(func)
+
+#     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+#     def test_external_service_integration_coverage(self):
+#         """Test all external service integration paths"""
+        
+#         # Test HTTP request scenarios
+#         http_scenarios = [
+#             # Success scenarios
+#             {'status_code': 200, 'json_response': {"status": "success", "id": "msg_123"}},
+#             {'status_code': 201, 'json_response': {"status": "created", "id": "new_123"}},
+#             # Error scenarios
+#             {'status_code': 400, 'json_response': {"status": "error", "message": "Bad request"}},
+#             {'status_code': 401, 'json_response': {"status": "error", "message": "Unauthorized"}},
+#             {'status_code': 404, 'json_response': {"status": "error", "message": "Not found"}},
+#             {'status_code': 500, 'json_response': {"status": "error", "message": "Server error"}},
+#         ]
+        
+#         for scenario in http_scenarios:
+#             mock_response.status_code = scenario['status_code']
+#             mock_response.json.return_value = scenario['json_response']
+            
+#             # Test functions that make HTTP requests
+#             http_functions = ['send_otp', 'send_otp_v0', 'send_whatsapp_message']
+#             for func_name in http_functions:
+#                 func = get_api_function(func_name)
+#                 if func:
+#                     mock_frappe.request.get_json.return_value = {'api_key': 'valid_key', 'phone': '9876543210'}
+#                     result = execute_function(func)
+        
+#         # Test request exceptions
+#         request_exceptions = [
+#             mock_requests.RequestException("Network error"),
+#             ConnectionError("Connection failed"),
+#             TimeoutError("Request timeout"),
+#             mock_requests.RequestException("DNS resolution failed"),
+#         ]
+        
+#         for exception in request_exceptions:
+#             mock_requests.get.side_effect = exception
+#             mock_requests.post.side_effect = exception
+            
+#             for func_name in ['send_otp', 'send_whatsapp_message']:
+#                 func = get_api_function(func_name)
+#                 if func:
+#                     result = execute_function(func, '9876543210', 'Test message')
+        
+#         # Reset
+#         mock_requests.get.side_effect = None
+#         mock_requests.post.side_effect = None
+
+#     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+#     def test_glific_integration_coverage(self):
+#         """Test all Glific integration scenarios"""
+        
+#         glific_scenarios = [
+#             # Contact exists, update succeeds
+#             {'get_contact': {'id': 'contact_123'}, 'update_success': True, 'create_contact': None},
+#             # Contact exists, update fails
+#             {'get_contact': {'id': 'contact_456'}, 'update_success': False, 'create_contact': None},
+#             # No contact, create succeeds
+#             {'get_contact': None, 'update_success': None, 'create_contact': {'id': 'new_789'}},
+#             # No contact, create fails
+#             {'get_contact': None, 'update_success': None, 'create_contact': None},
+#             # Glific service error
+#             {'get_contact': Exception("Glific error"), 'update_success': None, 'create_contact': None},
+#         ]
+        
+#         for scenario in glific_scenarios:
+#             if isinstance(scenario['get_contact'], Exception):
+#                 mock_glific.get_contact_by_phone.side_effect = scenario['get_contact']
+#             else:
+#                 mock_glific.get_contact_by_phone.return_value = scenario['get_contact']
+#                 mock_glific.get_contact_by_phone.side_effect = None
+            
+#             mock_glific.update_contact_fields.return_value = scenario['update_success']
+#             mock_glific.create_contact.return_value = scenario['create_contact']
+            
+#             # Test functions that use Glific
+#             glific_functions = ['create_teacher_web']
+#             for func_name in glific_functions:
+#                 func = get_api_function(func_name)
+#                 if func:
+#                     mock_frappe.request.get_json.return_value = {
+#                         'api_key': 'valid_key',
+#                         'firstName': 'Glific',
+#                         'lastName': 'Test',
+#                         'phone': '9876543210',
+#                         'School_name': 'Test School'
+#                     }
+#                     result = execute_function(func)
+
+#     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available") 
+#     def test_database_transaction_coverage(self):
+#         """Test database transaction scenarios"""
+        
+#         # Test commit/rollback scenarios
+#         transaction_functions = ['create_teacher_web', 'create_student']
+        
+#         for func_name in transaction_functions:
+#             func = get_api_function(func_name)
+#             if not func:
+#                 continue
+            
+#             # Success path - commit should be called
+#             with patch.object(mock_frappe.db, 'commit') as mock_commit:
+#                 if func_name == 'create_teacher_web':
+#                     mock_frappe.request.get_json.return_value = {
+#                         'api_key': 'valid_key',
+#                         'firstName': 'Test',
+#                         'phone': '9876543210',
+#                         'School_name': 'Test School'
+#                     }
+#                 elif func_name == 'create_student':
+#                     mock_frappe.local.form_dict = {
+#                         'api_key': 'valid_key',
+#                         'student_name': 'Test Student',
+#                         'phone': '9876543210',
+#                         'gender': 'Male',
+#                         'grade': '5',
+#                         'language': 'English',
+#                         'batch_skeyword': 'test_batch',
+#                         'vertical': 'Math',
+#                         'glific_id': 'test_glific'
+#                     }
+#                 result = execute_function(func)
+            
+#             # Error path - rollback should be called
+#             with patch.object(MockFrappeDocument, 'insert', side_effect=Exception("Insert failed")):
+#                 with patch.object(mock_frappe.db, 'rollback') as mock_rollback:
+#                     result = execute_function(func)
+
+#     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+#     def test_utility_and_helper_functions_coverage(self):
+#         """Test all utility and helper functions"""
+        
+#         # List of potential helper functions
+#         helper_functions = [
+#             'get_tap_language', 'determine_student_type', 'get_current_academic_year',
+#             'get_course_level_with_mapping', 'get_course_level_original', 'create_new_student',
+#             'get_model_for_school', 'get_course_level'
+#         ]
+        
+#         for func_name in helper_functions:
+#             func = get_api_function(func_name)
+#             if not func:
+#                 continue
+            
+#             # Test with various parameter combinations
+#             parameter_sets = [
+#                 ('English',),
+#                 ('9876543210', 'John Doe', 'VERTICAL_001'),
+#                 ('VERTICAL_001', '5', 1),
+#                 ('SCHOOL_001',),
+#                 (None,),
+#                 ('', ''),
+#                 ('test', 'param', 'value'),
+#             ]
+            
+#             for params in parameter_sets:
+#                 result = execute_function(func, *params)
+            
+#             # Test with exceptions
+#             with patch.object(mock_frappe, 'get_all', side_effect=Exception("Helper error")):
+#                 result = execute_function(func, 'test_param')
+            
+#             with patch.object(mock_frappe.db, 'sql', side_effect=Exception("SQL error")):
+#                 result = execute_function(func, 'test_param')
+
+#     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+#     def test_final_coverage_sweep(self):
+#         """Final sweep to catch any remaining uncovered lines"""
+        
+#         print("\nPerforming final coverage sweep...")
+        
+#         # Test every single function one more time with comprehensive scenarios
+#         final_test_count = 0
+#         for func_name in ALL_FUNCTIONS:
+#             func = get_api_function(func_name)
+#             if not func:
+#                 continue
+                
+#             final_test_count += 1
+            
+#             # Ultra-comprehensive parameter matrix
+#             ultra_comprehensive_data = [
+#                 # Standard valid cases
+#                 {'api_key': 'valid_key', 'param1': 'value1', 'param2': 'value2'},
+#                 {'api_key': 'test_key', 'param1': 'test1', 'param2': 'test2'},
+                
+#                 # Edge cases
+#                 {'api_key': '', 'param1': None, 'param2': ''},
+#                 {'api_key': None, 'param1': 0, 'param2': False},
+                
+#                 # Invalid cases
+#                 {'api_key': 'invalid_key', 'param1': 'invalid', 'param2': 'invalid'},
+#                 {'api_key': 'disabled_key', 'param1': 'disabled', 'param2': 'disabled'},
+                
+#                 # Function-specific cases
+#                 {'api_key': 'valid_key', 'phone': '9876543210', 'otp': '1234'},
+#                 {'api_key': 'valid_key', 'phone': 'existing_phone', 'otp': '9999'},
+#                 {'api_key': 'valid_key', 'student_name': 'Test', 'grade': '5'},
+#                 {'api_key': 'valid_key', 'firstName': 'Test', 'School_name': 'School'},
+#                 {'api_key': 'valid_key', 'state': 'test_state', 'district': 'test_district'},
+#                 {'api_key': 'valid_key', 'keyword': 'test_school', 'batch_skeyword': 'test_batch'},
+#                 {'api_key': 'valid_key', 'glific_id': 'test_glific', 'teacher_role': 'HM'},
+#             ]
+            
+#             for data in ultra_comprehensive_data:
+#                 # Test all data input methods
+#                 mock_frappe.local.form_dict = data
+#                 mock_frappe.request.data = json.dumps(data)
+#                 mock_frappe.request.get_json.return_value = data
+                
+#                 # Execute function
+#                 result = execute_function(func)
+                
+#                 # Execute with positional args
+#                 args = [v for v in data.values() if v is not None]
+#                 if args:
+#                     result = execute_function(func, *args[:6])
+            
+#             # Test with all possible return value combinations
+#             return_combinations = [
+#                 {'get_doc': MockFrappeDocument("Test"), 'get_all': [{'name': 'TEST'}], 'get_value': 'test'},
+#                 {'get_doc': MockFrappeDocument("Test", active=True), 'get_all': [], 'get_value': None},
+#                 {'get_doc': MockFrappeDocument("Test", enabled=0), 'get_all': [{}], 'get_value': ''},
+#             ]
+            
+#             for combo in return_combinations:
+#                 with patch.object(mock_frappe, 'get_doc', return_value=combo['get_doc']):
+#                     with patch.object(mock_frappe, 'get_all', return_value=combo['get_all']):
+#                         with patch.object(mock_frappe.db, 'get_value', return_value=combo['get_value']):
+#                             result = execute_function(func, 'valid_key')
+        
+#         print(f"Final sweep tested {final_test_count} functions")
+#         self.assertGreater(final_test_count, 0, "Final sweep should test functions")
+
+# if __name__ == '__main__':
+#     unittest.main(verbosity=2)
+
+
+
+
+import pytest
 import json
-from datetime import datetime, timedelta
-import os
+from unittest.mock import patch, MagicMock
+import frappe
+from tap_lms import api  # Adjust path if needed
 
-# =============================================================================
-# COMPLETE MOCKING SETUP - TARGETS ALL API FUNCTIONS
-# =============================================================================
 
-class MockFrappeUtils:
-    @staticmethod
-    def cint(value):
-        try:
-            if value is None or value == '':
-                return 0
-            return int(value)
-        except (ValueError, TypeError):
-            return 0
-    
-    @staticmethod
-    def today():
-        return "2025-01-15"
-    
-    @staticmethod
-    def get_url():
-        return "http://localhost:8000"
-    
-    @staticmethod
-    def now_datetime():
-        return datetime.now()
-    
-    @staticmethod
-    def getdate(date_str=None):
-        if date_str is None:
-            return datetime.now().date()
-        if isinstance(date_str, str):
-            try:
-                return datetime.strptime(date_str, '%Y-%m-%d').date()
-            except ValueError:
-                return datetime.now().date()
-        return date_str
-    
-    @staticmethod
-    def cstr(value):
-        return "" if value is None else str(value)
-    
-    @staticmethod
-    def get_datetime(dt):
-        if isinstance(dt, str):
-            try:
-                return datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
-            except ValueError:
-                return datetime.now()
-        return dt if dt else datetime.now()
+# ---------------------------
+# 1. Test authenticate_api_key
+# ---------------------------
+@patch("frappe.get_doc")
+def test_authenticate_api_key_success(mock_get_doc):
+    mock_get_doc.return_value = MagicMock(name="API Key Doc", name="valid_key")
+    result = api.authenticate_api_key("valid_key")
+    assert result == "valid_key"
 
-class MockFrappeDocument:
-    def __init__(self, doctype, name=None, **remaining_params):
-        self.doctype = doctype
-        self.name = name or f"{doctype.upper().replace(' ', '_')}_001"
-        self.creation = remaining_params.get('creation', datetime.now())
-        self.modified = remaining_params.get('modified', datetime.now())
-        self.owner = remaining_params.get('owner', 'Administrator')
-        self.modified_by = remaining_params.get('modified_by', 'Administrator')
-        self.docstatus = remaining_params.get('docstatus', 0)
-        self.idx = remaining_params.get('idx', 1)
-        
-        # Set all possible attributes for all doctypes
-        self._set_all_attributes(remaining_params)
-    
-    def _set_all_attributes(self, params):
-        # API Key
-        self.key = params.get('key', 'valid_key')
-        self.enabled = params.get('enabled', 1)
-        self.api_key_name = params.get('api_key_name', 'Test API Key')
-        
-        # Student
-        self.name1 = params.get('name1', 'Test Student')
-        self.student_name = params.get('student_name', 'Test Student')
-        self.phone = params.get('phone', '9876543210')
-        self.grade = params.get('grade', '5')
-        self.language = params.get('language', 'ENGLISH')
-        self.school_id = params.get('school_id', 'SCHOOL_001')
-        self.school = params.get('school', 'SCHOOL_001')
-        self.glific_id = params.get('glific_id', 'glific_123')
-        self.crm_student_id = params.get('crm_student_id', 'CRM_STU_001')
-        self.gender = params.get('gender', 'Male')
-        self.batch = params.get('batch', 'BATCH_001')
-        self.vertical = params.get('vertical', 'Math')
-        self.student_type = params.get('student_type', 'New')
-        self.district = params.get('district', 'Test District')
-        self.city = params.get('city', 'Test City')
-        self.state = params.get('state', 'Test State')
-        self.pincode = params.get('pincode', '123456')
-        self.date_of_birth = params.get('date_of_birth', '2010-01-01')
-        self.parent_name = params.get('parent_name', 'Test Parent')
-        self.parent_phone = params.get('parent_phone', '9876543210')
-        self.email = params.get('email', 'test@example.com')
-        self.address = params.get('address', 'Test Address')
-        self.joined_on = params.get('joined_on', datetime.now().date())
-        self.status = params.get('status', 'active')
-        self.enrollment = params.get('enrollment', [])
-        
-        # Teacher
-        self.first_name = params.get('first_name', 'Test Teacher')
-        self.last_name = params.get('last_name', 'Teacher')
-        self.phone_number = params.get('phone_number', '9876543210')
-        self.email_id = params.get('email_id', 'teacher@example.com')
-        self.subject = params.get('subject', 'Mathematics')
-        self.experience = params.get('experience', '5 years')
-        self.qualification = params.get('qualification', 'B.Ed')
-        self.teacher_role = params.get('teacher_role', 'Teacher')
-        self.department = params.get('department', 'Academic')
-        self.course_level = params.get('course_level', 'COURSE_001')
-        
-        # Batch
-        self.batch_id = params.get('batch_id', 'BATCH_2025_001')
-        self.active = params.get('active', True)
-        self.regist_end_date = params.get('regist_end_date', (datetime.now() + timedelta(days=30)).date())
-        self.start_date = params.get('start_date', datetime.now().date())
-        self.end_date = params.get('end_date', (datetime.now() + timedelta(days=90)).date())
-        self.capacity = params.get('capacity', 30)
-        self.enrolled = params.get('enrolled', 0)
-        
-        # School
-        self.keyword = params.get('keyword', 'test_school')
-        self.pin = params.get('pin', '123456')
-        self.principal_name = params.get('principal_name', 'Test Principal')
-        self.headmaster_name = params.get('headmaster_name', 'Test Headmaster')
-        self.headmaster_phone = params.get('headmaster_phone', '9876543210')
-        self.model = params.get('model', 'MODEL_001')
-        self.type = params.get('type', 'Government')
-        self.board = params.get('board', 'CBSE')
-        self.country = params.get('country', 'India')
-        
-        # OTP Verification
-        self.otp = params.get('otp', '1234')
-        self.expiry = params.get('expiry', datetime.now() + timedelta(minutes=15))
-        self.verified = params.get('verified', False)
-        self.context = params.get('context', '{}')
-        self.attempts = params.get('attempts', 0)
-        self.created_at = params.get('created_at', datetime.now())
-        
-        # Generic fields
-        self.language_name = params.get('language_name', 'English')
-        self.glific_language_id = params.get('glific_language_id', '1')
-        self.district_name = params.get('district_name', 'Test District')
-        self.city_name = params.get('city_name', 'Test City')
-        self.state_name = params.get('state_name', 'Test State')
-        self.country_name = params.get('country_name', 'India')
-        self.vertical_name = params.get('vertical_name', 'Mathematics')
-        self.kit_less = params.get('kit_less', 1)
-        self.is_active = params.get('is_active', 1)
-        self.batch_skeyword = params.get('batch_skeyword', 'test_batch')
-        self.course_vertical = params.get('course_vertical', 'VERTICAL_001')
-        self.api_key = params.get('api_key', 'test_gupshup_key')
-        self.source_number = params.get('source_number', '918454812392')
-        self.app_name = params.get('app_name', 'test_app')
-        self.api_endpoint = params.get('api_endpoint', 'https://api.gupshup.io/sm/api/v1/msg')
-        self.mname = params.get('mname', 'Test Model')
-        self.model_id = params.get('model_id', 'MODEL_001')
-        self.description = params.get('description', 'Test description')
-        self.assigned_course_level = params.get('assigned_course_level', 'COURSE_001')
-        self.academic_year = params.get('academic_year', '2025-26')
-        self.teacher = params.get('teacher', 'TEACHER_001')
-        self.joined_date = params.get('joined_date', datetime.now().date())
-        self.glific_group_id = params.get('glific_group_id', 'GROUP_001')
-        self.course = params.get('course', 'COURSE_001')
-        self.date_joining = params.get('date_joining', datetime.now().date())
-        self.parent = params.get('parent', 'STUDENT_001')
-    
-    def insert(self, ignore_permissions=False):
-        return self
-    
-    def save(self, ignore_permissions=False):
-        return self
-    
-    def append(self, field, data):
-        if not hasattr(self, field):
-            setattr(self, field, [])
-        getattr(self, field).append(data)
-        return self
-    
-    def get(self, field, default=None):
-        return getattr(self, field, default)
-    
-    def set(self, field, value):
-        setattr(self, field, value)
-        return self
 
-class MockFrappe:
-    def __init__(self):
-        self.utils = MockFrappeUtils()
-        self.response = Mock()
-        self.response.http_status_code = 200
-        self.local = Mock()
-        self.local.form_dict = {}
-        self.db = Mock()
-        self.db.commit = Mock()
-        self.db.rollback = Mock()
-        self.db.sql = Mock(return_value=[])
-        self.db.get_value = Mock(return_value="test_value")
-        self.db.get_all = Mock(return_value=[])
-        self.db.exists = Mock(return_value=None)
-        self.db.delete = Mock()
-        self.request = Mock()
-        self.request.get_json = Mock(return_value={})
-        self.request.data = '{}'
-        self.request.method = 'POST'
-        self.request.headers = {}
-        self.flags = Mock()
-        self.flags.ignore_permissions = False
-        self.session = Mock()
-        self.session.user = 'Administrator'
-        self.conf = Mock()
-        self.conf.get = Mock(side_effect=lambda key, default: default)
-        self.logger = Mock(return_value=Mock())
-        
-        # Exception classes
-        self.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
-        self.ValidationError = type('ValidationError', (Exception,), {})
-        self.DuplicateEntryError = type('DuplicateEntryError', (Exception,), {})
-        self.PermissionError = type('PermissionError', (Exception,), {})
-        
-        self._setup_dynamic_mocks()
-    
-    def _setup_dynamic_mocks(self):
-        def get_doc_side_effect(doctype, filters=None, **doc_params):
-            if doctype == "API Key":
-                if isinstance(filters, dict):
-                    key = filters.get('key')
-                elif isinstance(filters, str):
-                    key = filters
-                else:
-                    key = doc_params.get('key', 'unknown_key')
-                
-                if key in ['valid_key', 'test_key']:
-                    return MockFrappeDocument(doctype, key=key, enabled=1)
-                elif key == 'disabled_key':
-                    return MockFrappeDocument(doctype, key=key, enabled=0)
-                else:
-                    raise self.DoesNotExistError("API Key not found")
-            
-            elif doctype == "OTP Verification":
-                if isinstance(filters, dict):
-                    phone = filters.get('phone_number')
-                    if phone == '9876543210':
-                        return MockFrappeDocument(doctype, phone_number='9876543210', otp='1234',
-                                                expiry=datetime.now() + timedelta(minutes=15), verified=False)
-                    elif phone == 'expired_phone':
-                        return MockFrappeDocument(doctype, phone_number='expired_phone', otp='1234',
-                                                expiry=datetime.now() - timedelta(minutes=1), verified=False)
-                    elif phone == 'verified_phone':
-                        return MockFrappeDocument(doctype, phone_number='verified_phone', otp='1234',
-                                                expiry=datetime.now() + timedelta(minutes=15), verified=True)
-                    else:
-                        raise self.DoesNotExistError("OTP not found")
-                else:
-                    raise self.DoesNotExistError("OTP not found")
-            
-            elif doctype == "Student":
-                if isinstance(filters, dict):
-                    if filters.get("phone") == "existing_phone":
-                        return MockFrappeDocument(doctype, phone="existing_phone", name1="Existing Student")
-                    elif filters.get("glific_id") == "existing_student":
-                        return MockFrappeDocument(doctype, glific_id="existing_student", name1="Existing Student")
-                elif isinstance(filters, str):
-                    return MockFrappeDocument(doctype, name=filters)
-                else:
-                    raise self.DoesNotExistError("Student not found")
-            
-            elif doctype == "Teacher":
-                if isinstance(filters, dict):
-                    if filters.get("phone_number") == "existing_teacher":
-                        return MockFrappeDocument(doctype, phone_number="existing_teacher", first_name="Existing Teacher")
-                    elif filters.get("glific_id") == "existing_glific":
-                        return MockFrappeDocument(doctype, glific_id="existing_glific", first_name="Existing Teacher")
-                elif isinstance(filters, str):
-                    return MockFrappeDocument(doctype, name=filters)
-                else:
-                    raise self.DoesNotExistError("Teacher not found")
-            
-            elif doctype == "School":
-                if isinstance(filters, dict):
-                    keyword = filters.get('keyword')
-                    name1 = filters.get('name1')
-                    if keyword == 'test_school' or name1 == 'Test School':
-                        return MockFrappeDocument(doctype, keyword='test_school', name1='Test School')
-                elif isinstance(filters, str):
-                    return MockFrappeDocument(doctype, name=filters)
-                else:
-                    raise self.DoesNotExistError("School not found")
-            
-            return MockFrappeDocument(doctype, **doc_params)
-        
-        def get_all_side_effect(doctype, filters=None, fields=None, pluck=None, **all_params):
-            # Return different data based on doctype and filters to trigger all branches
-            if doctype == "Teacher":
-                if filters:
-                    if filters.get("phone_number") == "existing_teacher":
-                        return [{'name': 'TEACHER_001', 'first_name': 'Existing Teacher', 'school_id': 'SCHOOL_001'}]
-                    elif filters.get("glific_id") == "existing_glific":
-                        return [{'name': 'TEACHER_001', 'first_name': 'Existing Teacher', 
-                               'last_name': 'User', 'teacher_role': 'Teacher', 
-                               'school_id': 'SCHOOL_001', 'phone_number': '9876543210',
-                               'email_id': 'teacher@example.com', 'department': 'Academic',
-                               'language': 'LANG_001', 'gender': 'Male', 'course_level': 'COURSE_001'}]
-                return []
-            
-            elif doctype == "Student":
-                if filters:
-                    if filters.get("glific_id") == "existing_student":
-                        return [{'name': 'STUDENT_001', 'name1': 'Existing Student'}]
-                    elif filters.get("phone") == "existing_phone":
-                        return [{'name': 'STUDENT_001', 'name1': 'Existing Student'}]
-                return []
-            
-            elif doctype == "Batch onboarding":
-                if filters and filters.get("batch_skeyword") == "invalid_batch":
-                    return []
-                return [{'name': 'BATCH_ONBOARDING_001', 'school': 'SCHOOL_001',
-                       'batch': 'BATCH_001', 'kit_less': 1, 'model': 'MODEL_001',
-                       'from_grade': '1', 'to_grade': '10'}]
-            
-            elif doctype == "Batch School Verticals":
-                return [{'course_vertical': 'VERTICAL_001'}]
-            
-            elif doctype == "Course Verticals":
-                return [{'name': 'VERTICAL_001', 'name2': 'Math', 'vertical_id': 'VERT_001'}]
-            
-            elif doctype == "District":
-                return [{'name': 'DISTRICT_001', 'district_name': 'Test District'}]
-            
-            elif doctype == "City":
-                if filters and filters.get('city_name') == 'Test City':
-                    return [{'name': 'CITY_001', 'city_name': 'Test City', 'district': 'DISTRICT_001'}]
-                return [{'name': 'CITY_001', 'city_name': 'Test City'}]
-            
-            elif doctype == "Batch":
-                if filters and filters.get("school") == "SCHOOL_001":
-                    return [{'name': 'BATCH_001', 'batch_id': 'BATCH_2025_001', 'active': True,
-                           'regist_end_date': (datetime.now() + timedelta(days=30)).date(),
-                           'start_date': datetime.now().date(),
-                           'end_date': (datetime.now() + timedelta(days=90)).date()}]
-                elif pluck == "name":
-                    return ['BATCH_001', 'BATCH_002']
-                return []
-            
-            elif doctype == "TAP Language":
-                if filters and filters.get('language_name') == 'English':
-                    return [{'name': 'LANG_001', 'language_name': 'English', 'glific_language_id': '1'}]
-                return [{'name': 'LANG_001', 'language_name': 'English', 'glific_language_id': '1'}]
-            
-            elif doctype == "School":
-                if filters:
-                    if filters.get('name1') == 'Test School':
-                        return [{'name': 'SCHOOL_001', 'name1': 'Test School', 'keyword': 'test_school',
-                               'city': 'CITY_001', 'state': 'STATE_001', 'country': 'COUNTRY_001',
-                               'address': 'Test Address', 'pin': '123456', 'type': 'Government',
-                               'board': 'CBSE', 'status': 'Active', 'headmaster_name': 'Test HM',
-                               'headmaster_phone': '9876543210'}]
-                return [{'name': 'SCHOOL_001', 'name1': 'Test School', 'keyword': 'test_school'}]
-            
-            elif doctype == "Grade Course Level Mapping":
-                if filters:
-                    return [{'assigned_course_level': 'COURSE_001', 'mapping_name': 'Test Mapping'}]
-                return []
-            
-            elif doctype == "Glific Teacher Group":
-                return [{'glific_group_id': 'GROUP_001'}]
-                
-            elif doctype == "Teacher Batch History":
-                return [{'batch': 'BATCH_001', 'batch_name': 'Test Batch', 'batch_id': 'BATCH_2025_001',
-                        'joined_date': datetime.now().date(), 'status': 'Active'}]
-            
-            elif doctype == "Course Level":
-                return [{'name': 'COURSE_001'}]
-                
-            elif doctype == "Stage Grades":
-                return [{'name': 'STAGE_001'}]
-            
-            return [{'name': 'DEFAULT_001'}]
-        
-        def db_get_value_side_effect(doctype, filters, field, as_dict=False, **db_params):
-            if isinstance(filters, str):
-                name = filters
-                filters = {"name": name}
-            
-            value_map = {
-                ("School", "name1"): "Test School",
-                ("School", "keyword"): "test_school", 
-                ("School", "model"): "MODEL_001",
-                ("School", "district"): "DISTRICT_001",
-                ("Batch", "batch_id"): "BATCH_2025_001",
-                ("Batch", "name1"): "Test Batch",
-                ("TAP Language", "language_name"): "English",
-                ("TAP Language", "glific_language_id"): "1",
-                ("District", "district_name"): "Test District",
-                ("City", "city_name"): "Test City",
-                ("State", "state_name"): "Test State",
-                ("Country", "country_name"): "India",
-                ("Student", "crm_student_id"): "CRM_STU_001",
-                ("Teacher", "name"): "TEACHER_001",
-                ("Teacher", "glific_id"): "glific_123",
-                ("Tap Models", "mname"): "Test Model",
-                ("Course Level", "name1"): "Test Course Level",
-                ("OTP Verification", "name"): "OTP_001",
-            }
-            
-            key = (doctype, field)
-            if key in value_map:
-                return value_map[key]
-            
-            if as_dict:
-                return {"name1": "Test School", "model": "MODEL_001"}
-            
-            return "test_value"
-        
-        def db_sql_side_effect(query, params=None, **sql_params):
-            if "Stage Grades" in query:
-                return [{'name': 'STAGE_001'}]
-            elif "Teacher Batch History" in query:
-                return [{'batch': 'BATCH_001', 'batch_name': 'Test Batch', 
-                        'batch_id': 'BATCH_2025_001', 'joined_date': datetime.now().date(),
-                        'status': 'Active'}]
-            elif "OTP Verification" in query:
-                return [{'name': 'OTP_001', 'expiry': datetime.now() + timedelta(minutes=15),
-                        'context': '{"action_type": "new_teacher"}', 'verified': False}]
-            elif "enrollment" in query.lower():
-                return []
-            return []
-        
-        self.get_doc = Mock(side_effect=get_doc_side_effect)
-        self.get_all = Mock(side_effect=get_all_side_effect)
-        self.db.get_value = Mock(side_effect=db_get_value_side_effect)
-        self.db.sql = Mock(side_effect=db_sql_side_effect)
-    
-    def new_doc(self, doctype):
-        return MockFrappeDocument(doctype)
-    
-    def get_single(self, doctype):
-        if doctype == "Gupshup OTP Settings":
-            return MockFrappeDocument(doctype, api_key="test_key", source_number="918454812392",
-                                    app_name="test_app", api_endpoint="https://api.gupshup.io/sm/api/v1/msg")
-        return MockFrappeDocument(doctype)
-    
-    def throw(self, message):
-        raise Exception(message)
-    
-    def log_error(self, message, title=None):
-        pass
-    
-    def whitelist(self, allow_guest=False):
-        def decorator(func):
-            return func
-        return decorator
-    
-    def _dict(self, data=None):
-        return data or {}
-    
-    def msgprint(self, message):
-        pass
-    
-    def as_json(self, data):
-        return json.dumps(data)
+@patch("frappe.get_doc", side_effect=frappe.DoesNotExistError)
+def test_authenticate_api_key_invalid(mock_get_doc):
+    result = api.authenticate_api_key("wrong_key")
+    assert result is None
 
-# Create comprehensive mocks
-mock_frappe = MockFrappe()
-mock_requests = Mock()
-mock_response = Mock()
-mock_response.json.return_value = {"status": "success", "id": "msg_12345"}
-mock_response.status_code = 200
-mock_response.text = '{"status": "success"}'
-mock_response.raise_for_status = Mock()
-mock_requests.get.return_value = mock_response
-mock_requests.post.return_value = mock_response
-mock_requests.RequestException = Exception
 
-mock_glific = Mock()
-mock_glific.get_contact_by_phone = Mock(return_value={'id': 'contact_123'})
-mock_glific.create_contact = Mock(return_value={'id': 'new_contact_123'})
-mock_glific.update_contact_fields = Mock(return_value=True)
-mock_background = Mock()
-mock_background.enqueue_glific_actions = Mock()
-mock_random = Mock()
-mock_random.randint = Mock(return_value=1234)
-mock_random.choices = Mock(return_value=['1', '2', '3', '4'])
+# ---------------------------
+# 2. Test list_districts
+# ---------------------------
+@patch("frappe.get_all")
+@patch("tap_lms.api.authenticate_api_key")
+def test_list_districts_success(mock_auth, mock_get_all):
+    mock_auth.return_value = True
+    mock_get_all.return_value = [
+        MagicMock(name="D1", district_name="District One"),
+        MagicMock(name="D2", district_name="District Two"),
+    ]
+    frappe.request.data = json.dumps({"api_key": "123", "state": "KA"})
+    result = api.list_districts()
+    assert result["status"] == "success"
+    assert "District One" in result["data"].values()
 
-# Inject all mocks
-sys.modules['frappe'] = mock_frappe
-sys.modules['frappe.utils'] = mock_frappe.utils
-sys.modules['tap_lms.glific_integration'] = mock_glific
-sys.modules['.glific_integration'] = mock_glific
-sys.modules['tap_lms.background_jobs'] = mock_background
-sys.modules['.background_jobs'] = mock_background
-sys.modules['requests'] = mock_requests
-sys.modules['random'] = mock_random
-sys.modules['string'] = Mock(digits='0123456789')
-sys.modules['urllib.parse'] = Mock(quote=Mock(side_effect=lambda x: x))
 
-# Import API module - this must succeed for 100% coverage
-try:
-    import tap_lms.api as api_module
-    API_MODULE_IMPORTED = True
-    ALL_FUNCTIONS = [name for name in dir(api_module) if callable(getattr(api_module, name)) and not name.startswith('_')]
-    print(f"SUCCESS: Imported {len(ALL_FUNCTIONS)} API functions: {ALL_FUNCTIONS}")
-except ImportError as e:
-    print(f"CRITICAL ERROR: Could not import API module: {e}")
-    API_MODULE_IMPORTED = False
-    api_module = None
-    ALL_FUNCTIONS = []
+def test_list_districts_missing_params():
+    frappe.request.data = json.dumps({"api_key": ""})
+    result = api.list_districts()
+    assert result["status"] == "error"
 
-def execute_function(func, *args, **remaining_kwargs):
-    """Execute function and capture result/exception"""
-    try:
-        return func(*args, **remaining_kwargs)
-    except Exception as e:
-        return {'error': str(e), 'type': type(e).__name__}
 
-def get_api_function(func_name):
-    """Get API function by name"""
-    if API_MODULE_IMPORTED and hasattr(api_module, func_name):
-        return getattr(api_module, func_name)
-    return None
+# ---------------------------
+# 3. Test list_cities
+# ---------------------------
+@patch("frappe.get_all")
+@patch("tap_lms.api.authenticate_api_key")
+def test_list_cities_success(mock_auth, mock_get_all):
+    mock_auth.return_value = True
+    mock_get_all.return_value = [MagicMock(name="C1", city_name="City A")]
+    frappe.request.data = json.dumps({"api_key": "123", "district": "D1"})
+    result = api.list_cities()
+    assert result["status"] == "success"
+    assert "City A" in result["data"].values()
 
-# =============================================================================
-# AGGRESSIVE 100% COVERAGE TEST SUITE
-# =============================================================================
 
-class TestAggressiveAPICoverage(unittest.TestCase):
-    """Aggressive test suite targeting 100% coverage of every single line"""
-    
-    def setUp(self):
-        """Reset all mocks for each test"""
-        mock_frappe.response.http_status_code = 200
-        mock_frappe.local.form_dict = {}
-        mock_frappe.request.data = '{}'
-        mock_frappe.request.get_json.return_value = {}
-        mock_frappe.request.get_json.side_effect = None
-        mock_frappe.session.user = 'Administrator'
-        mock_frappe.flags.ignore_permissions = False
-        mock_requests.reset_mock()
-        mock_response.status_code = 200
+# ---------------------------
+# 4. Test send_whatsapp_message
+# ---------------------------
+@patch("requests.post")
+@patch("frappe.get_single")
+def test_send_whatsapp_message_success(mock_get_single, mock_post):
+    mock_get_single.return_value = MagicMock(
+        api_key="key", source_number="src", app_name="app", api_endpoint="http://test"
+    )
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.raise_for_status = MagicMock()
+    assert api.send_whatsapp_message("9876543210", "Hello") is True
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_every_function_exhaustive_coverage(self):
-        """Execute every API function with exhaustive parameter combinations"""
-        total_functions_tested = 0
-        total_calls_made = 0
-        
-        # Comprehensive test data for all possible scenarios
-        comprehensive_test_data = [
-            # Basic API key scenarios
-            {'api_key': 'valid_key'},
-            {'api_key': 'invalid_key'},
-            {'api_key': 'disabled_key'},
-            {'api_key': ''},
-            {'api_key': None},
-            
-            # Student creation scenarios
-            {
-                'api_key': 'valid_key',
-                'student_name': 'John Doe',
-                'phone': '9876543210',
-                'gender': 'Male',
-                'grade': '5',
-                'language': 'English',
-                'batch_skeyword': 'test_batch',
-                'vertical': 'Math',
-                'glific_id': 'new_glific_123'
-            },
-            {
-                'api_key': 'valid_key',
-                'student_name': 'Existing Student',
-                'phone': 'existing_phone',
-                'gender': 'Male',
-                'grade': '5',
-                'language': 'English',
-                'batch_skeyword': 'test_batch',
-                'vertical': 'Math',
-                'glific_id': 'existing_student'
-            },
-            
-            # Teacher creation scenarios
-            {
-                'api_key': 'valid_key',
-                'firstName': 'Jane',
-                'lastName': 'Smith',
-                'phone': '9876543210',
-                'School_name': 'Test School',
-                'language': 'English'
-            },
-            {
-                'api_key': 'valid_key',
-                'firstName': 'Jane',
-                'phone': 'existing_teacher',
-                'School_name': 'Test School'
-            },
-            
-            # OTP scenarios
-            {
-                'api_key': 'valid_key',
-                'phone': '9876543210',
-                'otp': '1234'
-            },
-            {
-                'api_key': 'valid_key',
-                'phone': 'expired_phone',
-                'otp': '1234'
-            },
-            {
-                'api_key': 'valid_key',
-                'phone': 'verified_phone',
-                'otp': '1234'
-            },
-            
-            # School and location scenarios
-            {
-                'api_key': 'valid_key',
-                'keyword': 'test_school'
-            },
-            {
-                'api_key': 'valid_key',
-                'keyword': 'nonexistent_school'
-            },
-            {
-                'api_key': 'valid_key',
-                'state': 'test_state'
-            },
-            {
-                'api_key': 'valid_key',
-                'district': 'test_district'
-            },
-            {
-                'api_key': 'valid_key',
-                'city_name': 'Test City'
-            },
-            {
-                'api_key': 'valid_key',
-                'school_name': 'Test School'
-            },
-            
-            # Batch scenarios
-            {
-                'api_key': 'valid_key',
-                'batch_skeyword': 'test_batch'
-            },
-            {
-                'api_key': 'valid_key',
-                'batch_skeyword': 'invalid_batch'
-            },
-            
-            # Course scenarios
-            {
-                'api_key': 'valid_key',
-                'grade': '5',
-                'vertical': 'Math',
-                'batch_skeyword': 'test_batch'
-            },
-            
-            # Teacher update scenarios
-            {
-                'api_key': 'valid_key',
-                'glific_id': 'existing_glific',
-                'teacher_role': 'HM'
-            },
-            {
-                'api_key': 'valid_key',
-                'glific_id': 'nonexistent_glific',
-                'teacher_role': 'Teacher'
-            },
-            
-            # Empty/minimal data
-            {},
-            {'invalid_field': 'invalid_value'},
-        ]
-        
-        print(f"\nStarting exhaustive testing of {len(ALL_FUNCTIONS)} API functions...")
-        
-        for func_name in ALL_FUNCTIONS:
-            func = get_api_function(func_name)
-            if not func:
-                continue
-            
-            total_functions_tested += 1
-            print(f"Testing function: {func_name}")
-            
-            # Test each function with ALL comprehensive test data
-            for test_data in comprehensive_test_data:
-                total_calls_made += 1
-                
-                # Test as form_dict
-                mock_frappe.local.form_dict = test_data.copy()
-                result = execute_function(func)
-                
-                # Test as JSON request
-                mock_frappe.request.data = json.dumps(test_data)
-                mock_frappe.request.get_json.return_value = test_data.copy()
-                result = execute_function(func)
-                
-                # Test as positional arguments
-                args = list(test_data.values())
-                if args:
-                    result = execute_function(func, *args[:5])  # Pass first 5 values as args
-                
-                # Test with specific parameter combinations for this function
-                if func_name == 'authenticate_api_key':
-                    result = execute_function(func, test_data.get('api_key'))
-                elif func_name in ['create_teacher', 'get_school_name_keyword_list']:
-                    result = execute_function(func, test_data.get('api_key'), 'param2', 'param3', 'param4', 'param5')
-                elif func_name in ['grade_list', 'list_batch_keyword']:
-                    result = execute_function(func, test_data.get('api_key'), 'test_batch')
-                elif func_name == 'get_active_batch_for_school':
-                    result = execute_function(func, 'SCHOOL_001')
-                elif func_name == 'send_whatsapp_message':
-                    result = execute_function(func, '9876543210', 'Test message')
-            
-            # Test function with different database states
-            database_states = [
-                # Success states
-                {'get_all': [{'name': 'FOUND_001'}], 'get_value': 'found_value'},
-                {'get_all': [{'name': 'TEST_001', 'active': True}], 'get_value': 'test_school'},
-                # Empty/null states
-                {'get_all': [], 'get_value': None},
-                {'get_all': None, 'get_value': ''},
-                # Different data combinations
-                {'get_all': [{'name': 'BATCH_001', 'active': True, 'regist_end_date': (datetime.now() + timedelta(days=1)).date()}]},
-                {'get_all': [{'name': 'BATCH_001', 'active': False, 'regist_end_date': (datetime.now() - timedelta(days=1)).date()}]},
-                {'get_all': [{'name': 'SCHOOL_001', 'name1': 'Test School', 'keyword': 'test_school'}]},
-                {'get_all': [{'name': 'TEACHER_001', 'phone_number': 'existing_teacher'}]},
-                {'get_all': [{'name': 'STUDENT_001', 'glific_id': 'existing_student'}]},
-            ]
-            
-            for state in database_states:
-                total_calls_made += 1
-                
-                with patch.object(mock_frappe, 'get_all', return_value=state.get('get_all', [])):
-                    with patch.object(mock_frappe.db, 'get_value', return_value=state.get('get_value')):
-                        mock_frappe.local.form_dict = {'api_key': 'valid_key', 'test_param': 'test_value'}
-                        result = execute_function(func)
-            
-            # Test function with all possible exceptions
-            exception_scenarios = [
-                mock_frappe.DoesNotExistError("Not found"),
-                mock_frappe.ValidationError("Validation failed"),
-                mock_frappe.DuplicateEntryError("Duplicate entry"),
-                mock_frappe.PermissionError("Permission denied"),
-                Exception("General exception"),
-                json.JSONDecodeError("Invalid JSON", "", 0),
-                ValueError("Value error"),
-                KeyError("Key error"),
-                AttributeError("Attribute error"),
-            ]
-            
-            for exception in exception_scenarios:
-                total_calls_made += 3
-                
-                # Test get_doc exception
-                with patch.object(mock_frappe, 'get_doc', side_effect=exception):
-                    result = execute_function(func, 'valid_key', 'test_param')
-                
-                # Test get_all exception
-                with patch.object(mock_frappe, 'get_all', side_effect=exception):
-                    result = execute_function(func, 'valid_key', 'test_param')
-                
-                # Test db.get_value exception
-                with patch.object(mock_frappe.db, 'get_value', side_effect=exception):
-                    result = execute_function(func, 'valid_key', 'test_param')
-        
-        print(f"\nCompleted exhaustive testing:")
-        print(f"- Functions tested: {total_functions_tested}")
-        print(f"- Total function calls: {total_calls_made}")
-        
-        self.assertGreater(total_functions_tested, 0, "Should have tested at least one function")
-        self.assertGreater(total_calls_made, 100, f"Should have made many calls for coverage, made {total_calls_made}")
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_all_conditional_branches_coverage(self):
-        """Test every conditional branch in the code"""
-        
-        # Test all boolean conditions
-        boolean_conditions = [
-            {'active': True}, {'active': False},
-            {'enabled': 1}, {'enabled': 0},
-            {'verified': True}, {'verified': False},
-            {'is_active': 1}, {'is_active': 0},
-            {'kit_less': 1}, {'kit_less': 0},
-        ]
-        
-        # Test all date conditions
-        date_conditions = [
-            {'regist_end_date': datetime.now().date() + timedelta(days=1)},  # Future
-            {'regist_end_date': datetime.now().date()},  # Today
-            {'regist_end_date': datetime.now().date() - timedelta(days=1)},  # Past
-            {'regist_end_date': None},  # None
-            {'regist_end_date': 'invalid_date'},  # Invalid
-            {'expiry': datetime.now() + timedelta(minutes=15)},  # Valid
-            {'expiry': datetime.now() - timedelta(minutes=1)},   # Expired
-            {'expiry': None},  # None
-        ]
-        
-        # Test all string conditions
-        string_conditions = [
-            {'status': 'active'}, {'status': 'inactive'}, {'status': ''},
-            {'teacher_role': 'Teacher'}, {'teacher_role': 'HM'}, {'teacher_role': 'Principal'},
-            {'docstatus': 0}, {'docstatus': 1}, {'docstatus': 2},
-            {'grade': '1'}, {'grade': '5'}, {'grade': '10'}, {'grade': '15'},
-        ]
-        
-        all_conditions = boolean_conditions + date_conditions + string_conditions
-        
-        for condition in all_conditions:
-            mock_doc = MockFrappeDocument("Test", **condition)
-            
-            with patch.object(mock_frappe, 'get_doc', return_value=mock_doc):
-                for func_name in ALL_FUNCTIONS[:10]:  # Test first 10 functions
-                    func = get_api_function(func_name)
-                    if func:
-                        mock_frappe.local.form_dict = {'api_key': 'valid_key', 'test_param': 'test_value'}
-                        result = execute_function(func)
+@patch("frappe.get_single", return_value=None)
+def test_send_whatsapp_message_no_settings(mock_get_single):
+    assert api.send_whatsapp_message("9876543210", "Hello") is False
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_external_service_integration_coverage(self):
-        """Test all external service integration paths"""
-        
-        # Test HTTP request scenarios
-        http_scenarios = [
-            # Success scenarios
-            {'status_code': 200, 'json_response': {"status": "success", "id": "msg_123"}},
-            {'status_code': 201, 'json_response': {"status": "created", "id": "new_123"}},
-            # Error scenarios
-            {'status_code': 400, 'json_response': {"status": "error", "message": "Bad request"}},
-            {'status_code': 401, 'json_response': {"status": "error", "message": "Unauthorized"}},
-            {'status_code': 404, 'json_response': {"status": "error", "message": "Not found"}},
-            {'status_code': 500, 'json_response': {"status": "error", "message": "Server error"}},
-        ]
-        
-        for scenario in http_scenarios:
-            mock_response.status_code = scenario['status_code']
-            mock_response.json.return_value = scenario['json_response']
-            
-            # Test functions that make HTTP requests
-            http_functions = ['send_otp', 'send_otp_v0', 'send_whatsapp_message']
-            for func_name in http_functions:
-                func = get_api_function(func_name)
-                if func:
-                    mock_frappe.request.get_json.return_value = {'api_key': 'valid_key', 'phone': '9876543210'}
-                    result = execute_function(func)
-        
-        # Test request exceptions
-        request_exceptions = [
-            mock_requests.RequestException("Network error"),
-            ConnectionError("Connection failed"),
-            TimeoutError("Request timeout"),
-            mock_requests.RequestException("DNS resolution failed"),
-        ]
-        
-        for exception in request_exceptions:
-            mock_requests.get.side_effect = exception
-            mock_requests.post.side_effect = exception
-            
-            for func_name in ['send_otp', 'send_whatsapp_message']:
-                func = get_api_function(func_name)
-                if func:
-                    result = execute_function(func, '9876543210', 'Test message')
-        
-        # Reset
-        mock_requests.get.side_effect = None
-        mock_requests.post.side_effect = None
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_glific_integration_coverage(self):
-        """Test all Glific integration scenarios"""
-        
-        glific_scenarios = [
-            # Contact exists, update succeeds
-            {'get_contact': {'id': 'contact_123'}, 'update_success': True, 'create_contact': None},
-            # Contact exists, update fails
-            {'get_contact': {'id': 'contact_456'}, 'update_success': False, 'create_contact': None},
-            # No contact, create succeeds
-            {'get_contact': None, 'update_success': None, 'create_contact': {'id': 'new_789'}},
-            # No contact, create fails
-            {'get_contact': None, 'update_success': None, 'create_contact': None},
-            # Glific service error
-            {'get_contact': Exception("Glific error"), 'update_success': None, 'create_contact': None},
-        ]
-        
-        for scenario in glific_scenarios:
-            if isinstance(scenario['get_contact'], Exception):
-                mock_glific.get_contact_by_phone.side_effect = scenario['get_contact']
-            else:
-                mock_glific.get_contact_by_phone.return_value = scenario['get_contact']
-                mock_glific.get_contact_by_phone.side_effect = None
-            
-            mock_glific.update_contact_fields.return_value = scenario['update_success']
-            mock_glific.create_contact.return_value = scenario['create_contact']
-            
-            # Test functions that use Glific
-            glific_functions = ['create_teacher_web']
-            for func_name in glific_functions:
-                func = get_api_function(func_name)
-                if func:
-                    mock_frappe.request.get_json.return_value = {
-                        'api_key': 'valid_key',
-                        'firstName': 'Glific',
-                        'lastName': 'Test',
-                        'phone': '9876543210',
-                        'School_name': 'Test School'
-                    }
-                    result = execute_function(func)
+# ---------------------------
+# 5. Test verify_keyword
+# ---------------------------
+@patch("frappe.db.get_value")
+@patch("tap_lms.api.authenticate_api_key")
+def test_verify_keyword_success(mock_auth, mock_get_value):
+    mock_auth.return_value = True
+    mock_get_value.return_value = {"name1": "ABC School", "model": "Basic"}
+    frappe.request.get_json = lambda: {"api_key": "123", "keyword": "ABC"}
+    api.verify_keyword()
+    assert frappe.response.http_status_code == 200
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available") 
-    def test_database_transaction_coverage(self):
-        """Test database transaction scenarios"""
-        
-        # Test commit/rollback scenarios
-        transaction_functions = ['create_teacher_web', 'create_student']
-        
-        for func_name in transaction_functions:
-            func = get_api_function(func_name)
-            if not func:
-                continue
-            
-            # Success path - commit should be called
-            with patch.object(mock_frappe.db, 'commit') as mock_commit:
-                if func_name == 'create_teacher_web':
-                    mock_frappe.request.get_json.return_value = {
-                        'api_key': 'valid_key',
-                        'firstName': 'Test',
-                        'phone': '9876543210',
-                        'School_name': 'Test School'
-                    }
-                elif func_name == 'create_student':
-                    mock_frappe.local.form_dict = {
-                        'api_key': 'valid_key',
-                        'student_name': 'Test Student',
-                        'phone': '9876543210',
-                        'gender': 'Male',
-                        'grade': '5',
-                        'language': 'English',
-                        'batch_skeyword': 'test_batch',
-                        'vertical': 'Math',
-                        'glific_id': 'test_glific'
-                    }
-                result = execute_function(func)
-            
-            # Error path - rollback should be called
-            with patch.object(MockFrappeDocument, 'insert', side_effect=Exception("Insert failed")):
-                with patch.object(mock_frappe.db, 'rollback') as mock_rollback:
-                    result = execute_function(func)
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_utility_and_helper_functions_coverage(self):
-        """Test all utility and helper functions"""
-        
-        # List of potential helper functions
-        helper_functions = [
-            'get_tap_language', 'determine_student_type', 'get_current_academic_year',
-            'get_course_level_with_mapping', 'get_course_level_original', 'create_new_student',
-            'get_model_for_school', 'get_course_level'
-        ]
-        
-        for func_name in helper_functions:
-            func = get_api_function(func_name)
-            if not func:
-                continue
-            
-            # Test with various parameter combinations
-            parameter_sets = [
-                ('English',),
-                ('9876543210', 'John Doe', 'VERTICAL_001'),
-                ('VERTICAL_001', '5', 1),
-                ('SCHOOL_001',),
-                (None,),
-                ('', ''),
-                ('test', 'param', 'value'),
-            ]
-            
-            for params in parameter_sets:
-                result = execute_function(func, *params)
-            
-            # Test with exceptions
-            with patch.object(mock_frappe, 'get_all', side_effect=Exception("Helper error")):
-                result = execute_function(func, 'test_param')
-            
-            with patch.object(mock_frappe.db, 'sql', side_effect=Exception("SQL error")):
-                result = execute_function(func, 'test_param')
+# ---------------------------
+# 6. Test create_teacher
+# ---------------------------
+@patch("frappe.new_doc")
+@patch("frappe.db.get_value")
+@patch("tap_lms.api.authenticate_api_key")
+def test_create_teacher_success(mock_auth, mock_get_value, mock_new_doc):
+    mock_auth.return_value = True
+    mock_get_value.return_value = "SCHOOL123"
+    teacher_mock = MagicMock()
+    teacher_mock.name = "T1"
+    mock_new_doc.return_value = teacher_mock
+    result = api.create_teacher("key", "keyword", "John", "999", "GL123")
+    assert "Teacher created successfully" in result["message"]
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_final_coverage_sweep(self):
-        """Final sweep to catch any remaining uncovered lines"""
-        
-        print("\nPerforming final coverage sweep...")
-        
-        # Test every single function one more time with comprehensive scenarios
-        final_test_count = 0
-        for func_name in ALL_FUNCTIONS:
-            func = get_api_function(func_name)
-            if not func:
-                continue
-                
-            final_test_count += 1
-            
-            # Ultra-comprehensive parameter matrix
-            ultra_comprehensive_data = [
-                # Standard valid cases
-                {'api_key': 'valid_key', 'param1': 'value1', 'param2': 'value2'},
-                {'api_key': 'test_key', 'param1': 'test1', 'param2': 'test2'},
-                
-                # Edge cases
-                {'api_key': '', 'param1': None, 'param2': ''},
-                {'api_key': None, 'param1': 0, 'param2': False},
-                
-                # Invalid cases
-                {'api_key': 'invalid_key', 'param1': 'invalid', 'param2': 'invalid'},
-                {'api_key': 'disabled_key', 'param1': 'disabled', 'param2': 'disabled'},
-                
-                # Function-specific cases
-                {'api_key': 'valid_key', 'phone': '9876543210', 'otp': '1234'},
-                {'api_key': 'valid_key', 'phone': 'existing_phone', 'otp': '9999'},
-                {'api_key': 'valid_key', 'student_name': 'Test', 'grade': '5'},
-                {'api_key': 'valid_key', 'firstName': 'Test', 'School_name': 'School'},
-                {'api_key': 'valid_key', 'state': 'test_state', 'district': 'test_district'},
-                {'api_key': 'valid_key', 'keyword': 'test_school', 'batch_skeyword': 'test_batch'},
-                {'api_key': 'valid_key', 'glific_id': 'test_glific', 'teacher_role': 'HM'},
-            ]
-            
-            for data in ultra_comprehensive_data:
-                # Test all data input methods
-                mock_frappe.local.form_dict = data
-                mock_frappe.request.data = json.dumps(data)
-                mock_frappe.request.get_json.return_value = data
-                
-                # Execute function
-                result = execute_function(func)
-                
-                # Execute with positional args
-                args = [v for v in data.values() if v is not None]
-                if args:
-                    result = execute_function(func, *args[:6])
-            
-            # Test with all possible return value combinations
-            return_combinations = [
-                {'get_doc': MockFrappeDocument("Test"), 'get_all': [{'name': 'TEST'}], 'get_value': 'test'},
-                {'get_doc': MockFrappeDocument("Test", active=True), 'get_all': [], 'get_value': None},
-                {'get_doc': MockFrappeDocument("Test", enabled=0), 'get_all': [{}], 'get_value': ''},
-            ]
-            
-            for combo in return_combinations:
-                with patch.object(mock_frappe, 'get_doc', return_value=combo['get_doc']):
-                    with patch.object(mock_frappe, 'get_all', return_value=combo['get_all']):
-                        with patch.object(mock_frappe.db, 'get_value', return_value=combo['get_value']):
-                            result = execute_function(func, 'valid_key')
-        
-        print(f"Final sweep tested {final_test_count} functions")
-        self.assertGreater(final_test_count, 0, "Final sweep should test functions")
 
-if __name__ == '__main__':
-    unittest.main(verbosity=2)
+# ---------------------------
+# 7. Test send_otp (partial)
+# ---------------------------
+@patch("tap_lms.api.get_active_batch_for_school")
+@patch("tap_lms.api.authenticate_api_key")
+@patch("frappe.get_all")
+@patch("frappe.get_doc")
+@patch("requests.get")
+def test_send_otp_success(mock_req, mock_doc, mock_get_all, mock_auth, mock_batch):
+    frappe.request.get_json = lambda: {"api_key": "123", "phone": "9876543210"}
+    mock_auth.return_value = True
+    mock_batch.return_value = {"batch_id": "B1"}
+    mock_get_all.return_value = []
+    mock_doc.return_value.insert = MagicMock()
+    mock_req.return_value.json.return_value = {"status": "success"}
+    result = api.send_otp()
+    assert result["status"] == "success"
