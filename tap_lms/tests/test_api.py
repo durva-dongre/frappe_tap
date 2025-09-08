@@ -3170,7 +3170,6 @@
 #         pass
 # """
 
-
 """
 Test suite for tap_lms/api.py targeting 80% code coverage
 """
@@ -3185,107 +3184,43 @@ from datetime import datetime, timedelta
 # MOCK SETUP
 # =============================================================================
 
-class MockFrappeUtils:
-    @staticmethod
-    def cint(value):
-        try:
-            if value is None or value == '':
-                return 0
-            return int(value)
-        except (ValueError, TypeError):
-            return 0
-    
-    @staticmethod
-    def today():
-        return "2025-01-15"
-    
-    @staticmethod
-    def get_url():
-        return "http://localhost:8000"
-    
-    @staticmethod
-    def now_datetime():
-        return datetime.now()
-    
-    @staticmethod
-    def getdate(date_str=None):
-        if date_str is None:
-            return datetime.now().date()
-        if isinstance(date_str, str):
-            try:
-                return datetime.strptime(date_str, '%Y-%m-%d').date()
-            except ValueError:
-                return datetime.now().date()
-        return date_str
-    
-    @staticmethod
-    def cstr(value):
-        return "" if value is None else str(value)
-    
-    @staticmethod
-    def get_datetime(dt):
-        if isinstance(dt, str):
-            try:
-                return datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
-            except ValueError:
-                return datetime.now()
-        return dt if dt else datetime.now()
-
-class MockFrappeDocument:
-    def __init__(self, doctype, name=None, **kwargs):
-        self.doctype = doctype
-        self.name = name or f"{doctype.upper().replace(' ', '_')}_001"
-        
-        # Set attributes based on kwargs
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-    
-    def insert(self, ignore_permissions=False):
-        return self
-    
-    def save(self, ignore_permissions=False):
-        return self
-    
-    def append(self, field, data):
-        if not hasattr(self, field):
-            setattr(self, field, [])
-        getattr(self, field).append(data)
-        return self
-    
-    def get(self, field, default=None):
-        return getattr(self, field, default)
-    
-    def set(self, field, value):
-        setattr(self, field, value)
-        return self
-
+# Simplified mock setup focusing on key Frappe components
 class MockFrappe:
     def __init__(self):
-        self.utils = MockFrappeUtils()
+        # Mock utils
+        self.utils = Mock()
+        self.utils.cint = lambda x: int(x) if x else 0
+        self.utils.today = lambda: "2025-01-15"
+        self.utils.get_url = lambda: "http://localhost:8000"
+        self.utils.now_datetime = datetime.now
+        self.utils.getdate = lambda x=None: datetime.strptime(x, '%Y-%m-%d').date() if x else datetime.now().date()
+        self.utils.cstr = str
+        self.utils.get_datetime = lambda dt: datetime.strptime(dt, '%Y-%m-%d %H:%M:%S') if isinstance(dt, str) else dt
+        
+        # Mock database operations
+        self.db = Mock()
+        self.db.get_value = Mock(return_value="test_value")
+        self.db.get_all = Mock(return_value=[])
+        self.db.exists = Mock(return_value=None)
+        self.db.sql = Mock(return_value=[])
+        self.db.commit = Mock()
+        self.db.rollback = Mock()
+        
+        # Mock request/response
         self.response = Mock()
         self.response.http_status_code = 200
         self.local = Mock()
         self.local.form_dict = {}
-        self.db = Mock()
-        self.db.commit = Mock()
-        self.db.rollback = Mock()
-        self.db.sql = Mock(return_value=[])
-        self.db.get_value = Mock(return_value="test_value")
-        self.db.get_all = Mock(return_value=[])
-        self.db.exists = Mock(return_value=None)
         self.request = Mock()
         self.request.get_json = Mock(return_value={})
         self.request.data = '{}'
         self.request.method = 'POST'
+        
+        # Mock session
         self.session = Mock()
         self.session.user = 'Administrator'
-        self.flags = Mock()
-        self.flags.ignore_permissions = False
-        self.conf = Mock()
-        self.conf.get = Mock(side_effect=lambda key, default: default)
-        self.logger = Mock(return_value=Mock())
         
-        # Exception classes
+        # Mock exceptions
         self.DoesNotExistError = type('DoesNotExistError', (Exception,), {})
         self.ValidationError = type('ValidationError', (Exception,), {})
         self.DuplicateEntryError = type('DuplicateEntryError', (Exception,), {})
@@ -3293,77 +3228,91 @@ class MockFrappe:
         # Configure get_doc behavior
         self._configure_get_doc()
         self._configure_get_all()
-    
+        
+        # Other mocks
+        self.flags = Mock()
+        self.flags.ignore_permissions = False
+        self.conf = Mock()
+        self.conf.get = Mock(side_effect=lambda key, default: default)
+        self.logger = Mock(return_value=Mock())
+        self.msgprint = Mock()
+        self.log_error = Mock()
+        self.throw = Mock(side_effect=Exception("Test exception"))
+        
     def _configure_get_doc(self):
         def get_doc_side_effect(doctype, name=None, **kwargs):
+            doc = Mock()
+            doc.doctype = doctype
+            doc.name = name or f"{doctype}_001"
+            
             if doctype == "API Key":
                 if name == 'valid_key':
-                    return MockFrappeDocument(doctype, key='valid_key', enabled=1)
+                    doc.enabled = 1
+                    doc.key = 'valid_key'
                 elif name == 'disabled_key':
-                    return MockFrappeDocument(doctype, key='disabled_key', enabled=0)
+                    doc.enabled = 0
+                    doc.key = 'disabled_key'
                 else:
                     raise self.DoesNotExistError("API Key not found")
-            
             elif doctype == "Student":
-                return MockFrappeDocument(doctype, name1='Test Student', phone='9876543210')
-            
+                doc.name1 = 'Test Student'
+                doc.phone = '9876543210'
             elif doctype == "Teacher":
-                return MockFrappeDocument(doctype, first_name='Test Teacher', phone_number='9876543210')
-            
+                doc.first_name = 'Test Teacher'
+                doc.phone_number = '9876543210'
             elif doctype == "School":
-                return MockFrappeDocument(doctype, name1='Test School', keyword='test_school')
-            
+                doc.name1 = 'Test School'
+                doc.keyword = 'test_school'
             elif doctype == "Batch":
-                return MockFrappeDocument(doctype, active=True, regist_end_date=(datetime.now() + timedelta(days=30)).date())
+                doc.active = True
+                doc.regist_end_date = (datetime.now() + timedelta(days=30)).date()
             
-            return MockFrappeDocument(doctype, **kwargs)
+            # Mock document methods
+            doc.insert = Mock(return_value=doc)
+            doc.save = Mock(return_value=doc)
+            doc.append = Mock(return_value=doc)
+            doc.get = Mock(side_effect=lambda field, default=None: getattr(doc, field, default))
+            doc.set = Mock(side_effect=lambda field, value: setattr(doc, field, value) or doc)
+            
+            return doc
         
         self.get_doc = Mock(side_effect=get_doc_side_effect)
+        self.new_doc = Mock(side_effect=lambda doctype: get_doc_side_effect(doctype))
     
     def _configure_get_all(self):
         def get_all_side_effect(doctype, filters=None, fields=None, **kwargs):
             if doctype == "Teacher":
                 return [{'name': 'TEACHER_001', 'first_name': 'Test Teacher'}]
-            
             elif doctype == "Student":
                 return [{'name': 'STUDENT_001', 'name1': 'Test Student'}]
-            
             elif doctype == "Batch":
                 return [{'name': 'BATCH_001', 'batch_id': 'BATCH_2025_001'}]
-            
             elif doctype == "School":
                 return [{'name': 'SCHOOL_001', 'name1': 'Test School'}]
-            
+            elif doctype == "District":
+                return [{'name': 'DISTRICT_001', 'district_name': 'Test District'}]
+            elif doctype == "City":
+                return [{'name': 'CITY_001', 'city_name': 'Test City'}]
+            elif doctype == "Grade":
+                return [{'name': 'GRADE_001', 'grade_name': 'Test Grade'}]
             return []
         
         self.get_all = Mock(side_effect=get_all_side_effect)
     
-    def new_doc(self, doctype):
-        return MockFrappeDocument(doctype)
-    
     def get_single(self, doctype):
         if doctype == "Gupshup OTP Settings":
-            settings = MockFrappeDocument(doctype)
-            settings.api_key = "test_gupshup_key"
-            settings.source_number = "918454812392"
-            settings.app_name = "test_app"
-            settings.api_endpoint = "https://api.gupshup.io/sm/api/v1/msg"
-            return settings
-        return MockFrappeDocument(doctype)
-    
-    def throw(self, message):
-        raise Exception(message)
-    
-    def log_error(self, message, title=None):
-        pass
+            doc = Mock()
+            doc.api_key = "test_gupshup_key"
+            doc.source_number = "918454812392"
+            doc.app_name = "test_app"
+            doc.api_endpoint = "https://api.gupshup.io/sm/api/v1/msg"
+            return doc
+        return Mock()
     
     def whitelist(self, allow_guest=False):
         def decorator(func):
             return func
         return decorator
-    
-    def msgprint(self, message):
-        pass
 
 # Create and configure mocks
 mock_frappe = MockFrappe()
@@ -3402,27 +3351,6 @@ except ImportError as e:
     api_module = None
 
 # =============================================================================
-# UTILITY FUNCTIONS
-# =============================================================================
-
-def safe_call_function(func, *args, **kwargs):
-    """Safely call a function and return result or exception info"""
-    try:
-        return func(*args, **kwargs)
-    except Exception as e:
-        return {'error': str(e), 'type': type(e).__name__}
-
-def function_exists(func_name):
-    """Check if function exists in API module"""
-    return API_MODULE_IMPORTED and hasattr(api_module, func_name)
-
-def get_function(func_name):
-    """Get function if it exists"""
-    if function_exists(func_name):
-        return getattr(api_module, func_name)
-    return None
-
-# =============================================================================
 # TEST SUITE FOR 80% COVERAGE
 # =============================================================================
 
@@ -3443,6 +3371,16 @@ class TestAPI80Coverage(unittest.TestCase):
         mock_requests.reset_mock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "success", "id": "msg_12345"}
+        
+        # Reset database mocks
+        mock_frappe.db.get_value.reset_mock(return_value="test_value")
+        mock_frappe.db.get_all.reset_mock(return_value=[])
+        mock_frappe.db.exists.reset_mock(return_value=None)
+        mock_frappe.db.sql.reset_mock(return_value=[])
+        
+        # Reset get_doc mock
+        mock_frappe._configure_get_doc()
+        mock_frappe._configure_get_all()
 
     # =========================================================================
     # AUTHENTICATION TESTS
@@ -3451,23 +3389,25 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_authenticate_api_key(self):
         """Test authenticate_api_key function"""
-        auth_func = get_function('authenticate_api_key')
-        if not auth_func:
+        if not hasattr(api_module, 'authenticate_api_key'):
             self.skipTest("authenticate_api_key function not found")
         
         # Test valid key
-        result = safe_call_function(auth_func, "valid_key")
-        self.assertNotIn('error', result if isinstance(result, dict) else {})
-        
-        # Test invalid key
-        result = safe_call_function(auth_func, "invalid_key")
+        result = api_module.authenticate_api_key("valid_key")
+        self.assertTrue(result)
         
         # Test disabled key
-        result = safe_call_function(auth_func, "disabled_key")
+        result = api_module.authenticate_api_key("disabled_key")
+        self.assertFalse(result)
+        
+        # Test invalid key
+        with self.assertRaises(Exception):
+            api_module.authenticate_api_key("invalid_key")
         
         # Test exception handling
         with patch.object(mock_frappe, 'get_doc', side_effect=Exception("DB Error")):
-            result = safe_call_function(auth_func, "any_key")
+            with self.assertRaises(Exception):
+                api_module.authenticate_api_key("any_key")
 
     # =========================================================================
     # BATCH FUNCTIONS TESTS
@@ -3476,37 +3416,44 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_get_active_batch_for_school(self):
         """Test get_active_batch_for_school function"""
-        func = get_function('get_active_batch_for_school')
-        if not func:
+        if not hasattr(api_module, 'get_active_batch_for_school'):
             self.skipTest("get_active_batch_for_school function not found")
         
         # Success path
-        result = safe_call_function(func, 'SCHOOL_001')
+        result = api_module.get_active_batch_for_school('SCHOOL_001')
+        self.assertIsNotNone(result)
         
         # No active batch found
         with patch.object(mock_frappe, 'get_all', return_value=[]):
-            result = safe_call_function(func, 'SCHOOL_002')
+            result = api_module.get_active_batch_for_school('SCHOOL_002')
+            self.assertIsNone(result)
         
         # Exception handling
         with patch.object(mock_frappe, 'get_all', side_effect=Exception("DB Error")):
-            result = safe_call_function(func, 'SCHOOL_001')
+            with self.assertRaises(Exception):
+                api_module.get_active_batch_for_school('SCHOOL_001')
 
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_list_batch_keyword(self):
         """Test list_batch_keyword function"""
-        func = get_function('list_batch_keyword')
-        if not func:
+        if not hasattr(api_module, 'list_batch_keyword'):
             self.skipTest("list_batch_keyword function not found")
         
-        # Success scenario
-        result = safe_call_function(func, 'valid_key')
+        # Test with valid API key
+        mock_frappe.request.data = json.dumps({'api_key': 'valid_key'})
+        result = api_module.list_batch_keyword()
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
-        # Invalid API key
-        result = safe_call_function(func, 'invalid_key')
+        # Test with invalid API key
+        mock_frappe.request.data = json.dumps({'api_key': 'invalid_key'})
+        with self.assertRaises(Exception):
+            api_module.list_batch_keyword()
         
-        # No active batches
-        with patch.object(mock_frappe, 'get_all', return_value=[]):
-            result = safe_call_function(func, 'valid_key')
+        # Test exception handling
+        with patch.object(mock_frappe, 'get_all', side_effect=Exception("DB Error")):
+            mock_frappe.request.data = json.dumps({'api_key': 'valid_key'})
+            with self.assertRaises(Exception):
+                api_module.list_batch_keyword()
 
     # =========================================================================
     # LOCATION FUNCTIONS TESTS
@@ -3515,8 +3462,7 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_list_districts(self):
         """Test list_districts function"""
-        func = get_function('list_districts')
-        if not func:
+        if not hasattr(api_module, 'list_districts'):
             self.skipTest("list_districts function not found")
         
         # Success scenario
@@ -3524,26 +3470,28 @@ class TestAPI80Coverage(unittest.TestCase):
             'api_key': 'valid_key',
             'state': 'test_state'
         })
-        result = safe_call_function(func)
+        result = api_module.list_districts()
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
         mock_frappe.request.data = json.dumps({
             'api_key': 'invalid_key',
             'state': 'test_state'
         })
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.list_districts()
         
         # Missing required fields
         mock_frappe.request.data = json.dumps({
             'api_key': 'valid_key'
         })
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.list_districts()
 
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_list_cities(self):
         """Test list_cities function"""
-        func = get_function('list_cities')
-        if not func:
+        if not hasattr(api_module, 'list_cities'):
             self.skipTest("list_cities function not found")
         
         # Success scenario
@@ -3551,14 +3499,16 @@ class TestAPI80Coverage(unittest.TestCase):
             'api_key': 'valid_key',
             'district': 'test_district'
         })
-        result = safe_call_function(func)
+        result = api_module.list_cities()
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
         mock_frappe.request.data = json.dumps({
             'api_key': 'invalid_key',
             'district': 'test_district'
         })
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.list_cities()
 
     # =========================================================================
     # SCHOOL FUNCTIONS TESTS
@@ -3567,25 +3517,26 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_get_school_name_keyword_list(self):
         """Test get_school_name_keyword_list function"""
-        func = get_function('get_school_name_keyword_list')
-        if not func:
+        if not hasattr(api_module, 'get_school_name_keyword_list'):
             self.skipTest("get_school_name_keyword_list function not found")
         
         # Success scenario
-        result = safe_call_function(func, 'valid_key', 0, 10)
+        result = api_module.get_school_name_keyword_list('valid_key', 0, 10)
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
-        result = safe_call_function(func, 'invalid_key', 0, 10)
+        with self.assertRaises(Exception):
+            api_module.get_school_name_keyword_list('invalid_key', 0, 10)
         
         # Exception handling
         with patch.object(mock_frappe.db, 'get_all', side_effect=Exception("DB Error")):
-            result = safe_call_function(func, 'valid_key', 0, 10)
+            with self.assertRaises(Exception):
+                api_module.get_school_name_keyword_list('valid_key', 0, 10)
 
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_verify_keyword(self):
         """Test verify_keyword function"""
-        func = get_function('verify_keyword')
-        if not func:
+        if not hasattr(api_module, 'verify_keyword'):
             self.skipTest("verify_keyword function not found")
         
         # Success scenario
@@ -3593,20 +3544,23 @@ class TestAPI80Coverage(unittest.TestCase):
             'api_key': 'valid_key',
             'keyword': 'test_school'
         }
-        result = safe_call_function(func)
+        result = api_module.verify_keyword()
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
         mock_frappe.request.get_json.return_value = {
             'api_key': 'invalid_key',
             'keyword': 'test_school'
         }
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.verify_keyword()
         
         # Missing required fields
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key'
         }
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.verify_keyword()
 
     # =========================================================================
     # TEACHER FUNCTIONS TESTS
@@ -3615,19 +3569,21 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_create_teacher(self):
         """Test create_teacher function"""
-        func = get_function('create_teacher')
-        if not func:
+        if not hasattr(api_module, 'create_teacher'):
             self.skipTest("create_teacher function not found")
         
         # Success scenario
-        result = safe_call_function(func, 'valid_key', 'test_school', 'John', '9876543210', 'glific_123')
+        result = api_module.create_teacher('valid_key', 'test_school', 'John', '9876543210', 'glific_123')
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
-        result = safe_call_function(func, 'invalid_key', 'test_school', 'John', '9876543210', 'glific_123')
+        with self.assertRaises(Exception):
+            api_module.create_teacher('invalid_key', 'test_school', 'John', '9876543210', 'glific_123')
         
         # Exception handling
-        with patch.object(MockFrappeDocument, 'insert', side_effect=Exception("General error")):
-            result = safe_call_function(func, 'valid_key', 'test_school', 'John', '9876543210', 'glific_123')
+        with patch.object(mock_frappe, 'get_doc', side_effect=Exception("General error")):
+            with self.assertRaises(Exception):
+                api_module.create_teacher('valid_key', 'test_school', 'John', '9876543210', 'glific_123')
 
     # =========================================================================
     # STUDENT FUNCTIONS TESTS
@@ -3636,8 +3592,7 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_create_student(self):
         """Test create_student function"""
-        func = get_function('create_student')
-        if not func:
+        if not hasattr(api_module, 'create_student'):
             self.skipTest("create_student function not found")
         
         # Success scenario
@@ -3652,15 +3607,19 @@ class TestAPI80Coverage(unittest.TestCase):
             'vertical': 'Math',
             'glific_id': 'new_glific_123'
         }
-        result = safe_call_function(func)
+        result = api_module.create_student()
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
         mock_frappe.local.form_dict['api_key'] = 'invalid_key'
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.create_student()
         
         # Exception handling
-        with patch.object(MockFrappeDocument, 'insert', side_effect=Exception("General error")):
-            result = safe_call_function(func)
+        with patch.object(mock_frappe, 'get_doc', side_effect=Exception("General error")):
+            mock_frappe.local.form_dict['api_key'] = 'valid_key'
+            with self.assertRaises(Exception):
+                api_module.create_student()
 
     # =========================================================================
     # OTP FUNCTIONS TESTS
@@ -3669,8 +3628,7 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_send_otp(self):
         """Test send_otp function"""
-        func = get_function('send_otp')
-        if not func:
+        if not hasattr(api_module, 'send_otp'):
             self.skipTest("send_otp function not found")
         
         # Success scenario
@@ -3678,26 +3636,28 @@ class TestAPI80Coverage(unittest.TestCase):
             'api_key': 'valid_key',
             'phone': '9876543210'
         }
-        result = safe_call_function(func)
+        result = api_module.send_otp()
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
         mock_frappe.request.get_json.return_value = {
             'api_key': 'invalid_key',
             'phone': '9876543210'
         }
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.send_otp()
         
         # Missing required fields
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key'
         }
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.send_otp()
 
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_verify_otp(self):
         """Test verify_otp function"""
-        func = get_function('verify_otp')
-        if not func:
+        if not hasattr(api_module, 'verify_otp'):
             self.skipTest("verify_otp function not found")
         
         # Success scenario
@@ -3706,7 +3666,8 @@ class TestAPI80Coverage(unittest.TestCase):
             'phone': '9876543210',
             'otp': '1234'
         }
-        result = safe_call_function(func)
+        result = api_module.verify_otp()
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
         mock_frappe.request.get_json.return_value = {
@@ -3714,13 +3675,15 @@ class TestAPI80Coverage(unittest.TestCase):
             'phone': '9876543210',
             'otp': '1234'
         }
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.verify_otp()
         
         # Missing required fields
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key'
         }
-        result = safe_call_function(func)
+        with self.assertRaises(Exception):
+            api_module.verify_otp()
 
     # =========================================================================
     # COURSE FUNCTIONS TESTS
@@ -3729,19 +3692,21 @@ class TestAPI80Coverage(unittest.TestCase):
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_grade_list(self):
         """Test grade_list function"""
-        func = get_function('grade_list')
-        if not func:
+        if not hasattr(api_module, 'grade_list'):
             self.skipTest("grade_list function not found")
         
         # Success scenario
-        result = safe_call_function(func, 'valid_key', 'test_batch')
+        result = api_module.grade_list('valid_key', 'test_batch')
+        self.assertEqual(mock_frappe.response.http_status_code, 200)
         
         # Invalid API key
-        result = safe_call_function(func, 'invalid_key', 'test_batch')
+        with self.assertRaises(Exception):
+            api_module.grade_list('invalid_key', 'test_batch')
         
         # Exception handling
         with patch.object(mock_frappe, 'get_all', side_effect=Exception("DB Error")):
-            result = safe_call_function(func, 'valid_key', 'test_batch')
+            with self.assertRaises(Exception):
+                api_module.grade_list('valid_key', 'test_batch')
 
     # =========================================================================
     # HELPER FUNCTIONS TESTS
@@ -3751,19 +3716,20 @@ class TestAPI80Coverage(unittest.TestCase):
     def test_helper_functions(self):
         """Test helper functions"""
         
-        # Test get_tap_language
-        get_tap_language_func = getattr(api_module, 'get_tap_language', None)
-        if get_tap_language_func:
-            result = safe_call_function(get_tap_language_func, 'English')
+        # Test get_tap_language if it exists
+        if hasattr(api_module, 'get_tap_language'):
+            result = api_module.get_tap_language('English')
+            self.assertIsNotNone(result)
             
             # Language not found
             with patch.object(mock_frappe, 'get_all', return_value=[]):
-                result = safe_call_function(get_tap_language_func, 'Unknown Language')
+                result = api_module.get_tap_language('Unknown Language')
+                self.assertIsNone(result)
         
-        # Test get_current_academic_year
-        get_current_academic_year_func = getattr(api_module, 'get_current_academic_year', None)
-        if get_current_academic_year_func:
-            result = safe_call_function(get_current_academic_year_func)
+        # Test get_current_academic_year if it exists
+        if hasattr(api_module, 'get_current_academic_year'):
+            result = api_module.get_current_academic_year()
+            self.assertIsNotNone(result)
 
     # =========================================================================
     # COMPREHENSIVE COVERAGE TEST
@@ -3785,9 +3751,7 @@ class TestAPI80Coverage(unittest.TestCase):
         
         # Test each function with basic parameters
         for func_name in available_functions:
-            func = get_function(func_name)
-            if not func:
-                continue
+            func = getattr(api_module, func_name)
             
             # Test with minimal parameters
             try:
@@ -3796,22 +3760,23 @@ class TestAPI80Coverage(unittest.TestCase):
                                'grade_list']:
                     # Functions with specific parameter patterns
                     if func_name == 'authenticate_api_key':
-                        result = safe_call_function(func, 'valid_key')
+                        func('valid_key')
                     elif func_name == 'get_active_batch_for_school':
-                        result = safe_call_function(func, 'SCHOOL_001')
+                        func('SCHOOL_001')
                     elif func_name == 'get_school_name_keyword_list':
-                        result = safe_call_function(func, 'valid_key', 0, 10)
+                        func('valid_key', 0, 10)
                     elif func_name == 'list_batch_keyword':
-                        result = safe_call_function(func, 'valid_key')
+                        func('valid_key')
                     elif func_name == 'grade_list':
-                        result = safe_call_function(func, 'valid_key', 'test_batch')
-                else:
+                        func('valid_key', 'test_batch')
+                elif func_name not in ['whitelist']:  # Skip decorators
                     # Functions that use request data
                     mock_frappe.request.data = json.dumps({'api_key': 'valid_key'})
                     mock_frappe.request.get_json.return_value = {'api_key': 'valid_key'}
-                    result = safe_call_function(func)
+                    func()
             except Exception as e:
-                print(f"Error testing {func_name}: {e}")
+                # It's expected that some functions might fail with minimal parameters
+                print(f"Expected error testing {func_name} with minimal params: {e}")
 
 if __name__ == '__main__':
     unittest.main()
