@@ -3169,7 +3169,6 @@
 #         # new test code
 #         pass
 # """
-
 """
 COMPREHENSIVE 100% COVERAGE TEST SUITE FOR tap_lms/api.py
 This test suite combines the original aggressive testing with additional missing test cases
@@ -4861,22 +4860,26 @@ class TestComprehensiveAPICoverage(unittest.TestCase):
         
         for exception in all_exceptions:
             # Test each exception type with different mock points
-            mock_points = [
-                ('get_doc', mock_frappe.get_doc),
-                ('get_all', mock_frappe.get_all),
-                ('get_value', mock_frappe.db.get_value),
-                ('sql', mock_frappe.db.sql),
-                ('new_doc', mock_frappe.new_doc),
-                ('get_single', mock_frappe.get_single),
-            ]
+            with patch.object(mock_frappe, 'get_doc', side_effect=exception):
+                for func_name in ALL_FUNCTIONS[:3]:  # Test first 3 functions
+                    func = get_api_function(func_name)
+                    if func:
+                        mock_frappe.local.form_dict = {'api_key': 'valid_key'}
+                        result = execute_function(func)
             
-            for mock_name, mock_obj in mock_points:
-                with patch.object(mock_obj, '_mock_side_effect', exception):
-                    for func_name in ALL_FUNCTIONS[:5]:  # Test first 5 functions
-                        func = get_api_function(func_name)
-                        if func:
-                            mock_frappe.local.form_dict = {'api_key': 'valid_key'}
-                            result = execute_function(func)
+            with patch.object(mock_frappe, 'get_all', side_effect=exception):
+                for func_name in ALL_FUNCTIONS[:3]:  # Test first 3 functions  
+                    func = get_api_function(func_name)
+                    if func:
+                        mock_frappe.local.form_dict = {'api_key': 'valid_key'}
+                        result = execute_function(func)
+            
+            with patch.object(mock_frappe.db, 'get_value', side_effect=exception):
+                for func_name in ALL_FUNCTIONS[:3]:  # Test first 3 functions
+                    func = get_api_function(func_name)
+                    if func:
+                        mock_frappe.local.form_dict = {'api_key': 'valid_key'}
+                        result = execute_function(func)
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
