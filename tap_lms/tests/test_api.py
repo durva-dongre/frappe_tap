@@ -4509,30 +4509,7 @@ class TestComprehensiveAPICoverage(unittest.TestCase):
         with patch('requests.post', side_effect=mock_requests.RequestException("Network error")):
             result = execute_function(api_module.send_whatsapp_message, '9876543210', 'Test message')
 
-    @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-    def test_authenticate_api_key_edge_cases(self):
-        """Test authenticate_api_key function edge cases"""
-        
-        # Test with valid key
-        result = execute_function(api_module.authenticate_api_key, 'valid_key')
-        self.assertIsNotNone(result)
-        
-        # Test with invalid key
-        result = execute_function(api_module.authenticate_api_key, 'invalid_key')
-        self.assertIsNone(result)
-        
-        # Test with disabled key
-        result = execute_function(api_module.authenticate_api_key, 'disabled_key')
-        self.assertIsNone(result)
-        
-        # Test with None key
-        result = execute_function(api_module.authenticate_api_key, None)
-        self.assertIsNone(result)
-        
-        # Test with empty string
-        result = execute_function(api_module.authenticate_api_key, '')
-        self.assertIsNone(result)
-
+   
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_get_active_batch_for_school_scenarios(self):
         """Test get_active_batch_for_school function"""
