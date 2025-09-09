@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:{assignment_name}-{##}",
+ "autoname": "format:{assignment_name}-{difficulty_tier}",
  "creation": "2024-10-17 16:47:42.975464",
  "default_view": "List",
  "doctype": "DocType",
@@ -24,7 +24,8 @@
   "enable_auto_feedback",
   "feedback_prompt",
   "assignment_translations",
-  "estimated_duration"
+  "estimated_duration",
+  "difficulty_tier"
  ],
  "fields": [
   {
@@ -121,11 +122,17 @@
    "fieldname": "estimated_duration",
    "fieldtype": "Data",
    "label": "Estimated Duration"
+  },
+  {
+   "fieldname": "difficulty_tier",
+   "fieldtype": "Select",
+   "label": "Difficulty Tier",
+   "options": "Remedial\nBasic\nIntermediate\nAdvanced"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-09 14:46:14.596995",
+ "modified": "2025-09-06 20:03:44.849604",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Assignment",

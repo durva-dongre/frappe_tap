@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:{video_name}-{difficulty_tier}",
  "creation": "2024-10-17 16:19:12.281729",
  "default_view": "List",
  "doctype": "DocType",
@@ -25,7 +26,9 @@
   {
    "fieldname": "video_name",
    "fieldtype": "Data",
-   "label": "Video Name"
+   "in_list_view": 1,
+   "label": "Video Name",
+   "reqd": 1
   },
   {
    "fieldname": "duration",
@@ -93,10 +96,11 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-09 13:28:35.575368",
+ "modified": "2025-09-06 19:29:29.049784",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "VideoClass",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {

@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:{unit_name}-{unit_type}-{course_level}-{difficulty_tier}-{order}",
  "creation": "2024-10-17 15:31:17.464836",
  "default_view": "List",
  "doctype": "DocType",
@@ -8,20 +9,20 @@
  "engine": "InnoDB",
  "field_order": [
   "unit_name",
+  "unit_type",
+  "difficulty_tier",
   "course_level",
-  "description",
+  "parent_unit",
   "order",
+  "content_items",
+  "description",
   "competencies_addressed",
   "real_world_connection",
   "learning_objectives",
   "estimated_duration",
   "completion_criteria",
   "status",
-  "difficulty_tier",
-  "certificate_on_completion",
-  "unit_type",
-  "parent_unit",
-  "content_items"
+  "certificate_on_completion"
  ],
  "fields": [
   {
@@ -38,7 +39,9 @@
   {
    "fieldname": "order",
    "fieldtype": "Int",
-   "label": "Order"
+   "in_list_view": 1,
+   "label": "Order",
+   "reqd": 1
   },
   {
    "fieldname": "competencies_addressed",
@@ -77,8 +80,10 @@
   {
    "fieldname": "difficulty_tier",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "Difficulty Tier",
-   "options": "Remedial\nBasic\nIntermediate\nAdvanced"
+   "options": "Remedial\nBasic\nIntermediate\nAdvanced",
+   "reqd": 1
   },
   {
    "default": "0",
@@ -89,12 +94,17 @@
   {
    "fieldname": "unit_name",
    "fieldtype": "Data",
-   "label": "Name"
+   "in_list_view": 1,
+   "label": "Name",
+   "reqd": 1
   },
   {
    "fieldname": "unit_type",
-   "fieldtype": "Data",
-   "label": "Unit Type"
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Unit Type",
+   "options": "Module\nChapter\nLesson",
+   "reqd": 1
   },
   {
    "fieldname": "parent_unit",
@@ -111,10 +121,11 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-08-09 08:25:32.482870",
+ "modified": "2025-09-06 19:15:49.134563",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "LearningUnit",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
