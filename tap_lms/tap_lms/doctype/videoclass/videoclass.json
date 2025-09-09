@@ -8,6 +8,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "course_vertical",
   "video_name",
   "video_youtube_url",
   "duration",
@@ -92,13 +93,19 @@
    "fieldtype": "Select",
    "label": "Difficulty Tier",
    "options": "Remedial\nBasic\nIntermediate\nAdvanced"
+  },
+  {
+   "fieldname": "course_vertical",
+   "fieldtype": "Link",
+   "label": "Course Vertical",
+   "options": "Course Verticals"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-06 19:29:29.049784",
+ "modified": "2025-09-09 23:40:26.413717",
  "modified_by": "Administrator",
- "module": "Tap Lms",
+ "module": "TAP LMS",
  "name": "VideoClass",
  "naming_rule": "Expression",
  "owner": "Administrator",
