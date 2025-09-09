@@ -4063,7 +4063,7 @@ class TestComprehensiveAPICoverage(unittest.TestCase):
         
         # Test when academic year calculation fails
         with patch('frappe.utils.getdate', side_effect=Exception("Date error")):
-        result = execute_function(api_module.get_course_level_with_mapping, 
+         result = execute_function(api_module.get_course_level_with_mapping, 
                                     'VERTICAL_001', '5', '9876543210', 'Test Student', 1)
         
         # Test when Stage Grades fallback also fails
@@ -4071,7 +4071,7 @@ class TestComprehensiveAPICoverage(unittest.TestCase):
             with patch.object(mock_frappe.db, 'sql', return_value=[]):
                 result = execute_function(api_module.get_course_level_with_mapping,
                                         'VERTICAL_001', '5', '9876543210', 'Test Student', 1)
-                                                    
+                            
 
     @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
     def test_send_otp_batch_scenarios(self):
