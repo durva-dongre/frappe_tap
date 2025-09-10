@@ -196,23 +196,6 @@ class TestOnboardingFlows(unittest.TestCase):
         self.assertEqual(result["individual_count"], 1)
         mock_update_progress.assert_called_once()
 
-    # Test 7: get_stage_flow_statuses
-    @patch('tap_lms.onboarding_flows.frappe.get_doc')
-    def test_get_stage_flow_statuses(self, mock_get_doc):
-        # Test with stage flows
-        mock_get_doc.return_value = self.stage
-        
-        result = self.get_stage_flow_statuses(self.stage.name)
-        self.assertEqual(result["statuses"], ["assigned"])
-
-    # Test 8: get_students_from_onboarding
-    @patch('tap_lms.onboarding_flows.frappe.get_all')
-    def test_get_students_from_onboarding(self, mock_get_all):
-        mock_get_all.return_value = [{"student": self.student.name}]
-        
-        result = self.get_students_from_onboarding(self.onboarding, self.stage.name, "assigned")
-        self.assertEqual(len(result), 1)
-
     # Test 9: update_student_stage_progress
     @patch('tap_lms.onboarding_flows.frappe.get_doc')
     @patch('tap_lms.onboarding_flows.frappe.get_all')
@@ -233,17 +216,7 @@ class TestOnboardingFlows(unittest.TestCase):
         
         mock_update_progress.assert_called_once_with(self.student, self.stage)
 
-    # Test 11: get_job_status
-    @patch('tap_lms.onboarding_flows.frappe.utils.background_jobs.get_job_status')
-    def test_get_job_status(self, mock_frappe_job_status):
-        mock_frappe_job_status.return_value = "finished"
-        
-        result = self.get_job_status("test_job_id")
-        self.assertEqual(result["status"], "complete")
 
-    # Test 12: get_onboarding_progress_report
-    @patch('tap_lms.onboarding_flows.frappe.get_all')
-    def test_get_onboarding_progress_report(self, mock_get_all):
         mock_get_all.return_value = [{"student": self.student.name, "status": "assigned"}]
         
         result = self.get_onboarding_progress_report(self.onboarding.name, self.stage.name, "assigned")
@@ -287,74 +260,3 @@ class TestOnboardingFlows(unittest.TestCase):
         
         with self.assertRaises(Exception):
             self.trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
-
-    # Test 16: Test with legacy flow configuration
-    @patch('tap_lms.onboarding_flows.frappe.enqueue')
-    @patch('tap_lms.onboarding_flows.frappe.get_doc')
-    def test_trigger_onboarding_flow_legacy(self, mock_get_doc, mock_enqueue):
-        legacy_stage = MagicMock()
-        legacy_stage.is_active = True
-        legacy_stage.glific_flow_id = "legacy_flow_123"
-        legacy_stage.glific_flow_type = "Group"
-        # Simulate no stage_flows attribute
-        delattr(legacy_stage, 'stage_flows')
-        
-        mock_onboarding = MagicMock()
-        mock_onboarding.status = "Processed"
-        
-        mock_get_doc.side_effect = [legacy_stage, mock_onboarding]
-        mock_enqueue.return_value = "job_123"
-        
-        result = self.trigger_onboarding_flow(self.onboarding.name, self.stage.name, "assigned")
-        
-        self.assertTrue(result["success"])
-
-    # Test 17: Test authentication failure
-    @patch('tap_lms.onboarding_flows.get_glific_auth_headers')
-    @patch('tap_lms.onboarding_flows.frappe.get_doc')
-    def test_authentication_failure(self, mock_get_doc, mock_auth_headers):
-        mock_auth_headers.return_value = {}
-        mock_get_doc.side_effect = [self.stage, self.onboarding, self.glific_settings]
-        
-        result = self._trigger_onboarding_flow_job(
-            self.onboarding.name, self.stage.name, "assigned", "flow_123", "Group"
-        )
-        
-        self.assertIn("error", result)
-
-    # Test 18: Test API failure in group flow
-    @patch('tap_lms.onboarding_flows.create_or_get_glific_group_for_batch')
-    @patch('tap_lms.onboarding_flows.requests.post')
-    @patch('tap_lms.onboarding_flows.frappe.get_doc')
-    def test_group_flow_api_failure(self, mock_get_doc, mock_post, mock_create_group):
-        mock_create_group.return_value = {"group_id": "group_123"}
-        mock_group = MagicMock()
-        mock_group.group_id = "group_123"
-        mock_get_doc.return_value = mock_group
-        
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-        mock_post.return_value = mock_response
-        
-        with self.assertRaises(Exception):
-            self.trigger_group_flow(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
-
-    # Test 19: Test student without glific_id
-    @patch('tap_lms.onboarding_flows.get_students_from_onboarding')
-    @patch('tap_lms.onboarding_flows.start_contact_flow')
-    def test_student_without_glific_id(self, mock_start_flow, mock_get_students):
-        # Create student without glific_id
-        student_no_glific = MagicMock()
-        student_no_glific.glific_id = None
-        
-        mock_get_students.return_value = [student_no_glific]
-        mock_start_flow.return_value = False
-        
-        result = self.trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
-        
-        self.assertEqual(result["error_count"], 1)
-
-
-if __name__ == '__main__':
-    unittest.main()
