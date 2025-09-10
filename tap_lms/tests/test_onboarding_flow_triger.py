@@ -338,7 +338,7 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
             
             for student in students:
                 if not student.glific_id:
-                    continue  # Skip student without Glific ID
+                    continue  
                 
                 success_count += 1
             
