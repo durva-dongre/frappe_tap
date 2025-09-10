@@ -1142,14 +1142,22 @@ class TestOnboardingFlowEdgeCases(unittest.TestCase):
             mock_onboarding = Mock()
             mock_stage = Mock()
             
+            # # Should handle timeout gracefully
+            # with self.assertRaises(Exception) as context:
+            #     trigger_group_flow(
+            #         mock_onboarding, mock_stage, "Bearer token", "not_started", "flow_123"
+            #     )
+            
+            # self.assertIn("timed out", str(context.exception))
             # Should handle timeout gracefully
             with self.assertRaises(Exception) as context:
                 trigger_group_flow(
                     mock_onboarding, mock_stage, "Bearer token", "not_started", "flow_123"
                 )
-            
-            self.assertIn("timed out", str(context.exception))
 
+# Access the exception value, not the exception class
+exception_value = context.exception
+self.assertIn("timed out", str(exception_value))
 
 class TestOnboardingFlowPerformance(unittest.TestCase):
     """Performance and scalability tests"""
