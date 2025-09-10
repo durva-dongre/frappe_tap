@@ -363,87 +363,57 @@ from unittest.mock import patch, MagicMock, Mock
 import sys
 import json
 
+# Mock frappe and other modules before importing the test class
+with patch.dict('sys.modules', {
+    'frappe': MagicMock(),
+    'frappe.utils': MagicMock(),
+    'frappe.utils.background_jobs': MagicMock(),
+    'frappe.model': MagicMock(),
+    'frappe.model.document': MagicMock(),
+    'frappe.model.base_document': MagicMock(),
+    'frappe.exceptions': MagicMock(),
+    'requests': MagicMock(),
+    'tap_lms': MagicMock(),
+    'tap_lms.onboarding_flows': MagicMock()
+}):
+    # Now import the actual test class
+    from tap_lms.onboarding_flows import (
+        trigger_onboarding_flow,
+        _trigger_onboarding_flow_job,
+        trigger_group_flow,
+        trigger_individual_flows,
+        get_stage_flow_statuses,
+        get_students_from_onboarding,
+        update_student_stage_progress,
+        update_student_stage_progress_batch,
+        get_job_status,
+        get_onboarding_progress_report,
+        update_incomplete_stages
+    )
+
 
 class TestOnboardingFlows(unittest.TestCase):
     
     def setUp(self):
-        # Create a comprehensive mock frappe framework
-        self.setup_frappe_mocks()
+        # Set up test data
         self.setup_test_data()
-        self.import_module_under_test()
-        
-    def setup_frappe_mocks(self):
-        # Create mock modules
-        self.mocks = {
-            'frappe': MagicMock(),
-            'frappe.utils': MagicMock(),
-            'frappe.utils.background_jobs': MagicMock(),
-            'frappe.model': MagicMock(),
-            'frappe.model.document': MagicMock(),
-            'frappe.model.base_document': MagicMock(),
-            'frappe.exceptions': MagicMock(),
-            'requests': MagicMock()
-        }
-        
-        # Set up frappe exceptions
-        self.mocks['frappe'].ValidationError = Exception
-        self.mocks['frappe'].throw = MagicMock(side_effect=Exception)
         
         # Set up frappe functions
-        self.mocks['frappe'].get_doc = MagicMock()
-        self.mocks['frappe'].enqueue = MagicMock()
-        self.mocks['frappe'].get_all = MagicMock(return_value=[])
-        self.mocks['frappe'].utils.now_datetime = MagicMock()
-        self.mocks['frappe'].utils.add_to_date = MagicMock()
-        self.mocks['frappe'].utils.background_jobs.get_job_status = MagicMock(return_value="finished")
+        import frappe
+        frappe.ValidationError = Exception
+        frappe.throw = MagicMock(side_effect=Exception)
+        frappe.get_doc = MagicMock()
+        frappe.enqueue = MagicMock()
+        frappe.get_all = MagicMock(return_value=[])
+        frappe.utils.now_datetime = MagicMock()
+        frappe.utils.add_to_date = MagicMock()
+        frappe.utils.background_jobs.get_job_status = MagicMock(return_value="finished")
         
-        # Patch sys.modules
-        self.patchers = []
-        for module_name, mock_obj in self.mocks.items():
-            patcher = patch.dict('sys.modules', {module_name: mock_obj})
-            patcher.start()
-            self.patchers.append(patcher)
-    
-    def import_module_under_test(self):
-        # Mock the specific functions that will be imported
-        with patch.dict('sys.modules', {
-            'tap_lms': MagicMock(),
-            'tap_lms.onboarding_flows': MagicMock()
-        }):
-            # Mock the functions that will be imported
-            onboarding_flows_mock = MagicMock()
-            onboarding_flows_mock.get_glific_auth_headers = MagicMock(return_value={"authorization": "test_token"})
-            onboarding_flows_mock.create_or_get_glific_group_for_batch = MagicMock(return_value={"group_id": "group_123"})
-            onboarding_flows_mock.start_contact_flow = MagicMock(return_value=True)
-            
-            sys.modules['tap_lms.onboarding_flows'] = onboarding_flows_mock
-            
-            # Now import the actual module
-            from tap_lms.onboarding_flows import (
-                trigger_onboarding_flow,
-                _trigger_onboarding_flow_job,
-                trigger_group_flow,
-                trigger_individual_flows,
-                get_stage_flow_statuses,
-                get_students_from_onboarding,
-                update_student_stage_progress,
-                update_student_stage_progress_batch,
-                get_job_status,
-                get_onboarding_progress_report,
-                update_incomplete_stages
-            )
-            
-            self.trigger_onboarding_flow = trigger_onboarding_flow
-            self._trigger_onboarding_flow_job = _trigger_onboarding_flow_job
-            self.trigger_group_flow = trigger_group_flow
-            self.trigger_individual_flows = trigger_individual_flows
-            self.get_stage_flow_statuses = get_stage_flow_statuses
-            self.get_students_from_onboarding = get_students_from_onboarding
-            self.update_student_stage_progress = update_student_stage_progress
-            self.update_student_stage_progress_batch = update_student_stage_progress_batch
-            self.get_job_status = get_job_status
-            self.get_onboarding_progress_report = get_onboarding_progress_report
-            self.update_incomplete_stages = update_incomplete_stages
+        # Mock the specific functions from onboarding_flows
+        from tap_lms.onboarding_flows import get_glific_auth_headers, create_or_get_glific_group_for_batch, start_contact_flow
+        get_glific_auth_headers.return_value = {"authorization": "test_token"}
+        create_or_get_glific_group_for_batch.return_value = {"group_id": "group_123"}
+        start_contact_flow.return_value = True
 
     def setup_test_data(self):
         # Create mock documents
@@ -467,10 +437,6 @@ class TestOnboardingFlows(unittest.TestCase):
         self.glific_settings.api_url = "https://test.glific.com"
         self.glific_settings.auth_token = "test_token"
 
-    def tearDown(self):
-        for patcher in self.patchers:
-            patcher.stop()
-
     # Test 1: trigger_onboarding_flow - Basic functionality
     @patch('tap_lms.onboarding_flows.frappe.enqueue')
     @patch('tap_lms.onboarding_flows.frappe.get_doc')
@@ -480,7 +446,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_enqueue.return_value = "job_123"
         
         # Execute
-        result = self.trigger_onboarding_flow(self.onboarding.name, self.stage.name, "assigned")
+        result = trigger_onboarding_flow(self.onboarding.name, self.stage.name, "assigned")
         
         # Assert
         self.assertTrue(result["success"])
@@ -492,7 +458,7 @@ class TestOnboardingFlows(unittest.TestCase):
     def test_trigger_onboarding_flow_validation_errors(self, mock_get_doc):
         # Test missing parameters
         with self.assertRaises(Exception):
-            self.trigger_onboarding_flow("", "", "")
+            trigger_onboarding_flow("", "", "")
             
         # Test inactive stage
         inactive_stage = MagicMock()
@@ -500,7 +466,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_get_doc.return_value = inactive_stage
         
         with self.assertRaises(Exception):
-            self.trigger_onboarding_flow(self.onboarding.name, self.stage.name, "assigned")
+            trigger_onboarding_flow(self.onboarding.name, self.stage.name, "assigned")
 
     # Test 3: _trigger_onboarding_flow_job - Group flow
     @patch('tap_lms.onboarding_flows.get_glific_auth_headers')
@@ -511,7 +477,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_get_doc.side_effect = [self.stage, self.onboarding, self.glific_settings]
         mock_trigger_group.return_value = {"success": True}
         
-        result = self._trigger_onboarding_flow_job(
+        result = _trigger_onboarding_flow_job(
             self.onboarding.name, self.stage.name, "assigned", "flow_123", "Group"
         )
         
@@ -526,7 +492,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_get_doc.side_effect = [self.stage, self.onboarding, self.glific_settings]
         mock_trigger_individual.return_value = {"success": True}
         
-        result = self._trigger_onboarding_flow_job(
+        result = _trigger_onboarding_flow_job(
             self.onboarding.name, self.stage.name, "assigned", "flow_123", "Personal"
         )
         
@@ -556,7 +522,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_get_students.return_value = [self.student]
         mock_update_progress.return_value = None
         
-        result = self.trigger_group_flow(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
+        result = trigger_group_flow(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
         
         self.assertTrue(result["group_flow_result"]["success"])
         mock_update_progress.assert_called_once()
@@ -570,7 +536,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_start_flow.return_value = True
         mock_update_progress.return_value = None
         
-        result = self.trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
+        result = trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
         
         self.assertEqual(result["individual_count"], 1)
         mock_update_progress.assert_called_once()
@@ -581,7 +547,7 @@ class TestOnboardingFlows(unittest.TestCase):
         # Test with stage flows
         mock_get_doc.return_value = self.stage
         
-        result = self.get_stage_flow_statuses(self.stage.name)
+        result = get_stage_flow_statuses(self.stage.name)
         self.assertEqual(result["statuses"], ["assigned"])
 
     # Test 8: get_students_from_onboarding
@@ -589,7 +555,7 @@ class TestOnboardingFlows(unittest.TestCase):
     def test_get_students_from_onboarding(self, mock_get_all):
         mock_get_all.return_value = [{"student": self.student.name}]
         
-        result = self.get_students_from_onboarding(self.onboarding, self.stage.name, "assigned")
+        result = get_students_from_onboarding(self.onboarding, self.stage.name, "assigned")
         self.assertEqual(len(result), 1)
 
     # Test 9: update_student_stage_progress
@@ -601,7 +567,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_get_doc.return_value = mock_doc
         
         # Test creating new progress
-        self.update_student_stage_progress(self.student, self.stage)
+        update_student_stage_progress(self.student, self.stage)
         
         mock_get_doc.assert_called_once()
 
@@ -611,7 +577,7 @@ class TestOnboardingFlows(unittest.TestCase):
         students = [self.student]
         mock_update_progress.return_value = None
         
-        self.update_student_stage_progress_batch(students, self.stage)
+        update_student_stage_progress_batch(students, self.stage)
         
         mock_update_progress.assert_called_once_with(self.student, self.stage)
 
@@ -620,7 +586,7 @@ class TestOnboardingFlows(unittest.TestCase):
     def test_get_job_status(self, mock_frappe_job_status):
         mock_frappe_job_status.return_value = "finished"
         
-        result = self.get_job_status("test_job_id")
+        result = get_job_status("test_job_id")
         self.assertEqual(result["status"], "complete")
 
     # Test 12: get_onboarding_progress_report
@@ -628,7 +594,7 @@ class TestOnboardingFlows(unittest.TestCase):
     def test_get_onboarding_progress_report(self, mock_get_all):
         mock_get_all.return_value = [{"student": self.student.name, "status": "assigned"}]
         
-        result = self.get_onboarding_progress_report(self.onboarding.name, self.stage.name, "assigned")
+        result = get_onboarding_progress_report(self.onboarding.name, self.stage.name, "assigned")
         
         self.assertEqual(result["summary"]["total"], 1)
         self.assertEqual(result["summary"]["assigned"], 1)
@@ -649,7 +615,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_now_datetime.return_value = "2024-01-01 00:00:00"
         mock_add_to_date.return_value = "2019-12-31 00:00:00"
         
-        self.update_incomplete_stages()
+        update_incomplete_stages()
         
         # Check if status was updated
         progress_mock.save.assert_called_once()
@@ -660,16 +626,16 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_create_group.return_value = None
         
         # This should not raise an exception but return an error result
-        result = self.trigger_group_flow(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
+        result = trigger_group_flow(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
         self.assertIn("error", result)
 
-    # Test 15: Edge case - No students found (FIXED)
+    # Test 15: Edge case - No students found
     @patch('tap_lms.onboarding_flows.get_students_from_onboarding')
     def test_trigger_individual_flows_no_students(self, mock_get_students):
         mock_get_students.return_value = []
         
         # This should not raise an exception but return a result with count 0
-        result = self.trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
+        result = trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
         self.assertEqual(result["individual_count"], 0)
 
     # Test 16: Test with legacy flow configuration
@@ -689,7 +655,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_get_doc.side_effect = [legacy_stage, mock_onboarding]
         mock_enqueue.return_value = "job_123"
         
-        result = self.trigger_onboarding_flow(self.onboarding.name, self.stage.name, "assigned")
+        result = trigger_onboarding_flow(self.onboarding.name, self.stage.name, "assigned")
         
         self.assertTrue(result["success"])
 
@@ -700,7 +666,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_auth_headers.return_value = {}
         mock_get_doc.side_effect = [self.stage, self.onboarding, self.glific_settings]
         
-        result = self._trigger_onboarding_flow_job(
+        result = _trigger_onboarding_flow_job(
             self.onboarding.name, self.stage.name, "assigned", "flow_123", "Group"
         )
         
@@ -722,7 +688,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_post.return_value = mock_response
         
         # This should not raise an exception but return an error result
-        result = self.trigger_group_flow(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
+        result = trigger_group_flow(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
         self.assertIn("error", result)
 
     # Test 19: Test student without glific_id
@@ -738,7 +704,7 @@ class TestOnboardingFlows(unittest.TestCase):
         mock_start_flow.return_value = False
         mock_update_progress.return_value = None
         
-        result = self.trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
+        result = trigger_individual_flows(self.onboarding, self.stage, "test_token", "assigned", "flow_123")
         
         self.assertEqual(result["error_count"], 1)
 
