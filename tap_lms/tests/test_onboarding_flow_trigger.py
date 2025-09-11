@@ -652,7 +652,162 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         
         mock_frappe.log_error.assert_called_once()
 
+    # Additional tests to increase coverage
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_trigger_onboarding_flow_missing_onboarding_set(self, mock_frappe):
+        """Test trigger_onboarding_flow with missing onboarding set"""
+        mock_frappe.throw = Mock(side_effect=Exception("Missing onboarding set"))
+        
+        with self.assertRaises(Exception):
+            self.trigger_onboarding_flow("", "stage", "status")
 
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_stage_flow_statuses_basic(self, mock_frappe):
+        """Test get_stage_flow_statuses basic call"""
+        mock_stage = MagicMock()
+        mock_stage.stage_flows = []
+        mock_stage.glific_flow_id = None
+        mock_frappe.get_doc.return_value = mock_stage
+        
+        result = self.get_stage_flow_statuses("TEST_STAGE")
+        
+        self.assertIn("statuses", result)
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_students_from_onboarding_basic_call(self, mock_frappe):
+        """Test get_students_from_onboarding basic functionality"""
+        mock_onboarding = MagicMock()
+        mock_onboarding.name = "TEST_ONBOARDING"
+        
+        mock_frappe.get_all.return_value = []
+        mock_frappe.logger.return_value = MagicMock()
+        
+        result = self.get_students_from_onboarding(mock_onboarding)
+        
+        self.assertEqual(result, [])
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_job_status_no_job(self, mock_frappe):
+        """Test get_job_status with None job_id"""
+        result = self.get_job_status(None)
+        
+        self.assertIn("status", result)
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_onboarding_progress_report_basic_call(self, mock_frappe):
+        """Test get_onboarding_progress_report basic functionality"""
+        mock_frappe.get_all.return_value = []
+        mock_frappe.logger.return_value = MagicMock()
+        
+        result = self.get_onboarding_progress_report()
+        
+        self.assertIn("summary", result)
+        self.assertIn("details", result)
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
+    def test_trigger_onboarding_flow_job_auth_none(self, mock_auth, mock_frappe):
+        """Test _trigger_onboarding_flow_job with no auth"""
+        mock_auth.return_value = None
+        mock_frappe.logger.return_value = MagicMock()
+        
+        result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "type")
+        
+        self.assertIn("error", result)
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.now_datetime')
+    def test_update_student_stage_progress_existing_record(self, mock_now, mock_frappe):
+        """Test update_student_stage_progress with existing record"""
+        mock_now.return_value = self.current_time
+        mock_student = MagicMock()
+        mock_student.name = "STUD_001"
+        mock_stage = MagicMock()
+        mock_stage.name = "STAGE_001"
+        
+        # Mock existing record
+        existing = [{"name": "PROGRESS_001"}]
+        mock_frappe.get_all.return_value = existing
+        
+        mock_progress = MagicMock()
+        mock_progress.status = "not_started"
+        mock_frappe.get_doc.return_value = mock_progress
+        mock_frappe.logger.return_value = MagicMock()
+        
+        self.update_student_stage_progress(mock_student, mock_stage)
+        
+        # Should attempt to save the updated record
+        mock_frappe.get_doc.assert_called_with("StudentStageProgress", "PROGRESS_001")
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.now_datetime')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.add_to_date')
+    def test_update_incomplete_stages_with_records(self, mock_add_to_date, mock_now, mock_frappe):
+        """Test update_incomplete_stages with records to update"""
+        mock_now.return_value = self.current_time
+        three_days_ago = self.current_time - timedelta(days=3)
+        mock_add_to_date.return_value = three_days_ago
+        
+        # Mock records that need updating
+        assigned_records = [
+            {
+                "name": "PROGRESS_001",
+                "student": "STUD_001",
+                "stage": "STAGE_001",
+                "start_timestamp": three_days_ago - timedelta(days=1)
+            }
+        ]
+        
+        mock_frappe.get_all.return_value = assigned_records
+        mock_frappe.logger.return_value = MagicMock()
+        
+        mock_progress = MagicMock()
+        mock_frappe.get_doc.return_value = mock_progress
+        
+        self.update_incomplete_stages()
+        
+        # Should fetch the progress record
+        mock_frappe.get_doc.assert_called_with("StudentStageProgress", "PROGRESS_001")
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_students_from_onboarding_with_students(self, mock_frappe):
+        """Test get_students_from_onboarding with actual students"""
+        mock_onboarding = MagicMock()
+        mock_onboarding.name = "TEST_ONBOARDING"
+        
+        # Mock backend students
+        backend_students = [{"student_id": "STUD_001"}]
+        mock_frappe.get_all.return_value = backend_students
+        
+        # Mock student document
+        mock_student = MagicMock()
+        mock_student.name = "STUD_001"
+        mock_frappe.get_doc.return_value = mock_student
+        mock_frappe.logger.return_value = MagicMock()
+        
+        result = self.get_students_from_onboarding(mock_onboarding)
+        
+        # Should return list with student
+        self.assertEqual(len(result), 1)
+        mock_frappe.get_doc.assert_called_with("Student", "STUD_001")
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_stage_flow_statuses_with_flows(self, mock_frappe):
+        """Test get_stage_flow_statuses with actual flows"""
+        mock_stage = MagicMock()
+        mock_flow = MagicMock()
+        mock_flow.student_status = "test_status"
+        mock_stage.stage_flows = [mock_flow]
+        mock_frappe.get_doc.return_value = mock_stage
+        
+        result = self.get_stage_flow_statuses("TEST_STAGE")
+        
+        self.assertIn("statuses", result)
+        self.assertIn("test_status", result["statuses"])
+
+
+if __name__ == '__main__':
+    unittest.main()
 
 # import unittest
 # from unittest.mock import Mock, patch, MagicMock, call
