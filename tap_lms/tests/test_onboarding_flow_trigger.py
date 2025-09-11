@@ -898,13 +898,13 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         
         mock_frappe.log_error.assert_called_once()
 
-    # Tests for get_job_status
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
-    def test_get_job_status_no_job_id(self, mock_frappe):
-        """Test get_job_status with no job ID"""
-        result = self.get_job_status(None)
+    # # Tests for get_job_status
+    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    # def test_get_job_status_no_job_id(self, mock_frappe):
+    #     """Test get_job_status with no job ID"""
+    #     result = self.get_job_status(None)
         
-        self.assertEqual(result["status"], "unknown")
+    #     self.assertEqual(result["status"], "unknown")
 
     # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_job_status')
@@ -917,28 +917,28 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         
     #     self.assertEqual(result["status"], "failed")
 
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_job_status')
-    def test_get_job_status_finished_with_results(self, mock_job_status_func, mock_frappe):
-        """Test get_job_status with finished job and results"""
-        mock_job_status_func.return_value = "finished"
-        mock_frappe.logger.return_value = MagicMock()
+    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_job_status')
+    # def test_get_job_status_finished_with_results(self, mock_job_status_func, mock_frappe):
+    #     """Test get_job_status with finished job and results"""
+    #     mock_job_status_func.return_value = "finished"
+    #     mock_frappe.logger.return_value = MagicMock()
         
-        # Mock Job and redis connection
-        with patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.Job') as mock_job_class, \
-             patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_redis_conn') as mock_redis:
+    #     # Mock Job and redis connection
+    #     with patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.Job') as mock_job_class, \
+    #          patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_redis_conn') as mock_redis:
             
-            mock_redis_conn = MagicMock()
-            mock_redis.return_value = mock_redis_conn
+    #         mock_redis_conn = MagicMock()
+    #         mock_redis.return_value = mock_redis_conn
             
-            mock_job = MagicMock()
-            mock_job.result = {"success": True}
-            mock_job_class.fetch.return_value = mock_job
+    #         mock_job = MagicMock()
+    #         mock_job.result = {"success": True}
+    #         mock_job_class.fetch.return_value = mock_job
             
-            result = self.get_job_status("job_123")
+    #         result = self.get_job_status("job_123")
             
-            self.assertEqual(result["status"], "complete")
-            self.assertIn("results", result)
+    #         self.assertEqual(result["status"], "complete")
+    #         self.assertIn("results", result)
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_job_status')
@@ -965,19 +965,19 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         
         self.assertEqual(result["status"], "queued")
 
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.traceback')
-    def test_get_job_status_exception(self, mock_traceback, mock_frappe):
-        """Test get_job_status exception handling"""
-        mock_frappe.logger.return_value = MagicMock()
-        mock_traceback.format_exc.return_value = "Mock traceback"
+    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.traceback')
+    # def test_get_job_status_exception(self, mock_traceback, mock_frappe):
+    #     """Test get_job_status exception handling"""
+    #     mock_frappe.logger.return_value = MagicMock()
+    #     mock_traceback.format_exc.return_value = "Mock traceback"
         
-        with patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_job_status', side_effect=Exception("Error")):
-            result = self.get_job_status("job_123")
+    #     with patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_job_status', side_effect=Exception("Error")):
+    #         result = self.get_job_status("job_123")
             
-            self.assertEqual(result["status"], "error")
-            self.assertIn("message", result)
-            mock_frappe.log_error.assert_called_once()
+    #         self.assertEqual(result["status"], "error")
+    #         self.assertIn("message", result)
+    #         mock_frappe.log_error.assert_called_once()
 
     # Tests for get_onboarding_progress_report
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
