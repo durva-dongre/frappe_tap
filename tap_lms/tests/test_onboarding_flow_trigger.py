@@ -206,7 +206,6 @@ import frappe
 import json
 from datetime import datetime, timedelta
 from tap_lms.tap_lms import (
-    trigger_onboarding_flow,
     _trigger_onboarding_flow_job,
     trigger_group_flow,
     trigger_individual_flows,
