@@ -28,8 +28,8 @@
   {
    "fieldname": "course_level",
    "fieldtype": "Link",
-   "label": "Course Level",
-   "options": "Course Level"
+   "label": "Course Vertical",
+   "options": "Course Verticals"
   },
   {
    "fieldname": "description",
@@ -121,7 +121,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-10 00:19:12.931524",
+ "modified": "2025-09-11 10:00:17.173177",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "LearningUnit",
