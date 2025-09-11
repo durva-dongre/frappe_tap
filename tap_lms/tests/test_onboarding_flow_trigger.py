@@ -628,6 +628,3 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
             mock_requests.post.assert_called_once()
             mock_update_batch.assert_called_once()
 
-if __name__ == '__main__':
-    unittest.main()
-
