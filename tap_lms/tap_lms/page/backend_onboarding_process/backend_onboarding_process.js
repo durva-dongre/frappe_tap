@@ -77,23 +77,7 @@ class BackendOnboardingProcess {
     }
     
     setup() {
-        console.log("Loading template directly...");
-        // Directly set HTML content with simplified UI
-        this.wrapper.html(`
-            <div class="backend-onboarding-container">
-                <div class="batch-selection-panel">
-                    <h3>Select Onboarding Set</h3>
-                    <div class="filters">
-                        <select class="batch-selector form-control"></select>
-                    </div>
-                    
-                    <div class="batch-summary hidden">
-                        <div class="status-indicator"></div>
-                        <div class="metrics"></div>
-                    </div>
-                </div>
-                
-                <div class="student-preview hidden">
+                        /* <div class="student-preview hidden">
                     <h3>Student Records <span class="count"></span></h3>
                     <div class="table-responsive">
                         <table class="table table-bordered">
@@ -114,7 +98,24 @@ class BackendOnboardingProcess {
                             <tbody></tbody>
                         </table>
                     </div>
+                </div> */
+        console.log("Loading template directly...");
+        // Directly set HTML content with simplified UI
+        this.wrapper.html(`
+            <div class="backend-onboarding-container">
+                <div class="batch-selection-panel">
+                    <h3>Select Onboarding Set</h3>
+                    <div class="filters">
+                        <select class="batch-selector form-control"></select>
+                    </div>
+                    
+                    <div class="batch-summary hidden">
+                        <div class="status-indicator"></div>
+                        <div class="metrics"></div>
+                    </div>
                 </div>
+                
+
                 
                 <div class="action-panel hidden">
                     <div class="alert alert-info">
@@ -124,7 +125,9 @@ class BackendOnboardingProcess {
                             <li>Create contacts in Glific (if integrated)</li>
                             <li>Update existing students with matching phone number and name</li>
                         </ul>
+                        
                     </div>
+                    
                     <div class="row">
                         <div class="col-md-6">
                             <div class="checkbox">
@@ -193,14 +196,12 @@ class BackendOnboardingProcess {
                     <p>The batch is being processed in the background. You can check the status here or come back later.</p>
                     
                     <div class="progress-container">
-                        <div class="progress">
-                            <div class="job-progress-bar progress-bar" role="progressbar" style="width: 0%"></div>
-                        </div>
+                        <p><span class="job-id">-</span></p>
                         <p>Status: <span class="job-status">Queued</span></p>
-                        <p>Processed: <span class="job-processed">0/0</span></p>
+                       
                     </div>
                     
-                    <button class="refresh-status btn btn-default">Refresh Status</button>
+                    
                 </div>
             </div>
         `);
@@ -262,7 +263,7 @@ class BackendOnboardingProcess {
                     let select = me.wrapper.find('.batch-selector');
                     select.empty();
                     select.append($('<option value="">').text(__('Select a Set')));
-                    
+                    console.log("Batches received:", r.message);
                     $.each(r.message, function(i, batch) {
                         let option_text = `${batch.set_name} (${batch.student_count} students)`;
                         select.append($('<option>').val(batch.name).text(option_text));
@@ -291,7 +292,7 @@ class BackendOnboardingProcess {
                 if (r.message) {
                     me.batch_data = r.message;
                     me.render_batch_summary(r.message.batch);
-                    me.render_student_list(r.message.students);
+                    //me.render_student_list(r.message.students);
                     me.wrapper.find('.action-panel').removeClass('hidden');
                     
                     // Hide results panel if visible from previous batch
@@ -466,10 +467,11 @@ class BackendOnboardingProcess {
             },
             callback: function(r) {
                 if (r.message && r.message.job_id) {
+                    console.log("Background job started:", r.message);
                     me.job_id = r.message.job_id;
                     me.wrapper.find('.job-status').text("Queued");
                     me.wrapper.find('.job-processed').text(`0/${me.batch_data.students.length}`);
-                    
+                    me.wrapper.find('.job-id').text(`Job ID: ${me.job_id}`);
                     // Set a timer to check job status periodically
                     me.job_check_timer = setInterval(function() {
                         me.check_job_status();

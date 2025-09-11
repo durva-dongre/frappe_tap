@@ -167,11 +167,13 @@ def process_batch(batch_id, use_background_job=False):
         Otherwise, returns processing results
     """
     use_background_job = json.loads(use_background_job) if isinstance(use_background_job, str) else use_background_job
-    
+    #frappe.msgprint(str(use_background_job))
     # Update batch status to Processing
     batch = frappe.get_doc("Backend Student Onboarding", batch_id)
     batch.status = "Processing"
     batch.save()
+
+    #frappe.msgprint(str(batch))
     
     if use_background_job:
         # Enqueue the processing job
@@ -180,7 +182,7 @@ def process_batch(batch_id, use_background_job=False):
             queue='long',
             timeout=1800, # 30 minutes
             job_name=f"student_onboarding_{batch_id}",
-            batch_id=batch_id
+            set_id=batch_id
         )
         return {"job_id": job.id}
     else:
@@ -1427,77 +1429,164 @@ def format_phone_number(phone):
     phone_12, phone_10 = normalize_phone_number(phone)
     return phone_12
 
-@frappe.whitelist()
-def get_job_status(job_id):
-    """Get the status of a background job using compatibility methods for different Frappe versions"""
-    try:
-        # First try to get the job directly from the database instead of using get_doc
-        result = {
-            "status": "Unknown"
-        }
+# @frappe.whitelist()
+# def get_job_status(job_id):
+#     """Get the status of a background job using compatibility methods for different Frappe versions"""
+#     try:
+#         # First try to get the job directly from the database instead of using get_doc
+#         result = {
+#             "status": "Unknown"
+#         }
         
-        # Try different table names that might exist in different Frappe versions
-        tables_to_try = ["tabBackground Job", "tabRQ Job"]
+#         # Try different table names that might exist in different Frappe versions
+#         tables_to_try = ["tabRQ Job"]
         
-        for table in tables_to_try:
-            # Check if table exists
-            if frappe.db.table_exists(table.replace("tab", "")):
-                try:
-                    # Get job data directly from the table
-                    job_data = frappe.db.get_value(
-                        table, 
-                        job_id, 
-                        ["status", "progress_data", "result"], 
-                        as_dict=True
-                    )
+#         for table in tables_to_try:
+#             # Check if table exists
+#             if frappe.db.table_exists(table.replace("tab", "")):
+#                 try:
+#                     # Get job data directly from the table
+#                     job_data = frappe.db.get_value(
+#                         table, 
+#                         job_id, 
+#                         ["status", "progress_data", "result"], 
+#                         as_dict=True
+#                     )
                     
-                    if job_data:
-                        result["status"] = job_data.status
+#                     if job_data:
+#                         result["status"] = job_data.status
                         
-                        # If job is running or queued, check progress
-                        if job_data.status == "started" or job_data.status == "Started":
-                            if job_data.progress_data:
-                                try:
-                                    progress = json.loads(job_data.progress_data)
-                                    result["progress"] = progress
-                                except:
-                                    pass
+#                         # If job is running or queued, check progress
+#                         if job_data.status == "started" or job_data.status == "Started":
+#                             if job_data.progress_data:
+#                                 try:
+#                                     progress = json.loads(job_data.progress_data)
+#                                     result["progress"] = progress
+#                                 except:
+#                                     pass
                         
-                        # If job is completed, check result
-                        if job_data.status == "finished" or job_data.status == "Finished":
-                            result["status"] = "Completed"
-                            if job_data.result:
-                                try:
-                                    result["result"] = json.loads(job_data.result)
-                                except:
-                                    pass
+#                         # If job is completed, check result
+#                         if job_data.status == "finished" or job_data.status == "Finished":
+#                             result["status"] = "Completed"
+#                             if job_data.result:
+#                                 try:
+#                                     result["result"] = json.loads(job_data.result)
+#                                 except:
+#                                     pass
                         
-                        # If job failed, update status
-                        if job_data.status == "failed" or job_data.status == "Failed":
-                            result["status"] = "Failed"
+#                         # If job failed, update status
+#                         if job_data.status == "failed" or job_data.status == "Failed":
+#                             result["status"] = "Failed"
                         
-                        return result
-                except Exception as e:
-                    frappe.logger().warning(f"Error getting job data from {table}: {str(e)}")
-                    continue
+#                         return result
+#                 except Exception as e:
+#                     frappe.logger().warning(f"Error getting job data from {table}: {str(e)}")
+#                     continue
         
-        # If we reach here, try using frappe's queue functions directly
+#         # If we reach here, try using frappe's queue functions directly
+#         try:
+#             from frappe.utils.background_jobs import get_job_status as get_rq_job_status
+#             status = get_rq_job_status(job_id)
+#             if status:
+#                 result["status"] = status
+#         except Exception as e:
+#             frappe.logger().warning(f"Error getting job status via RQ: {str(e)}")
+        
+#         return result
+#     except Exception as e:
+#         frappe.logger().error(f"Error in get_job_status: {str(e)}")
+#         # Return a fallback response that won't break the UI
+#         return {
+#             "status": "Unknown",
+#             "message": "Unable to determine job status. The job may still be running or have completed."
+#         }
+import frappe, json
+
+@frappe.whitelist()
+def get_job_status_old(job_id):
+    """Get the status of a background job across Frappe versions"""
+    result = {"status": "Unknown"}
+
+    try:
+        # Check if RQ Job doctype exists (Frappe v14+)
+        if frappe.db.table_exists("RQ Job"):
+            job_data = frappe.db.get_value(
+                "RQ Job",
+                job_id,
+                ["status", "progress_data", "result"],
+                as_dict=True
+            )
+
+            if job_data:
+                status = (job_data.status or "").lower()
+                result["status"] = status.capitalize()
+
+                # Progress info
+                if status == "started" and job_data.progress_data:
+                    try:
+                        result["progress"] = json.loads(job_data.progress_data)
+                    except Exception:
+                        pass
+
+                # Completed job
+                if status == "finished":
+                    result["status"] = "Completed"
+                    if job_data.result:
+                        try:
+                            result["result"] = json.loads(job_data.result)
+                        except Exception:
+                            result["result"] = job_data.result
+
+                # Failed job
+                if status == "failed":
+                    result["status"] = "Failed"
+
+                return result
+
+        # If RQ Job doesn’t exist (older versions), fallback to background_jobs utils
         try:
             from frappe.utils.background_jobs import get_job_status as get_rq_job_status
             status = get_rq_job_status(job_id)
             if status:
-                result["status"] = status
+                result["status"] = status.capitalize()
         except Exception as e:
-            frappe.logger().warning(f"Error getting job status via RQ: {str(e)}")
-        
-        return result
+            frappe.logger().warning(f"Fallback RQ status check failed: {str(e)}")
+        #latest code
+        try:
+            status = get_job_status_RQ(job_id)
+            if status:
+                result["status"] = status.status
+        except Exception as e:
+            frappe.logger().warning(f"Fallback RQ status check failed: {str(e)}")
+
     except Exception as e:
         frappe.logger().error(f"Error in get_job_status: {str(e)}")
-        # Return a fallback response that won't break the UI
+
+    return result
+
+import frappe
+from rq.job import Job
+from frappe.utils.background_jobs import get_redis_conn
+
+@frappe.whitelist()
+def get_job_status(job_id):
+    """Check job status using Redis RQ (works even if no RQ Job table)"""
+    try:
+        conn = get_redis_conn()
+        job = Job.fetch(job_id, connection=conn)
+                # Map RQ's "finished" to "Completed"
+        status = job.get_status()
+        if status == "finished":
+            status = "Completed"
         return {
-            "status": "Unknown",
-            "message": "Unable to determine job status. The job may still be running or have completed."
+            "status": status,
+            "result": job.result,
+            "progress": job.meta.get("progress") if hasattr(job, "meta") else None
         }
+    except Exception as e:
+        frappe.logger().error(f"[get_job_status] {e}")
+        return {"status": "Not Found"}
+
 
 @frappe.whitelist()
 def debug_student_processing(student_name, phone_number):
