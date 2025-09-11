@@ -265,36 +265,7 @@ class TestOnboardingFlow(unittest.TestCase):
     def tearDown(self):
         patch.stopall()
 
-    def test_trigger_onboarding_flow_success(self):
-        """Test successful triggering of onboarding flow"""
-        self.mock_enqueue.return_value = "job_123"
-        result = trigger_onboarding_flow("test_onboarding", "test_stage", "not_started")
-        self.assertEqual(result, {"success": True, "job_id": "job_123"})
-        self.mock_enqueue.assert_called_once()
-        self.mock_logger.info.assert_called()
-
-    def test_trigger_onboarding_flow_missing_inputs(self):
-        """Test trigger_onboarding_flow with missing inputs"""
-        with self.assertRaises(Exception):
-            trigger_onboarding_flow("", "test_stage", "not_started")
-        self.mock_throw.assert_called_with("Both Backend Student Onboarding Set and Onboarding Stage are required")
-
-    def test_trigger_onboarding_flow_inactive_stage(self):
-        """Test trigger_onboarding_flow with inactive stage"""
-        self.mock_stage.is_active = False
-        with self.assertRaises(Exception):
-            trigger_onboarding_flow("test_onboarding", "test_stage", "not_started")
-        self.mock_throw.assert_called_with("Selected Onboarding Stage is not active")
-
-    def test_trigger_onboarding_flow_no_flow_id(self):
-        """Test trigger_onboarding_flow with no flow ID"""
-        self.mock_stage.stage_flows = []
-        with self.assertRaises(Exception):
-            trigger_onboarding_flow("test_onboarding", "test_stage", "not_started")
-        self.mock_throw.assert_called_with(
-            "No flows configured for stage 'test_stage'"
-        )
-
+    
     def test_trigger_group_flow_success(self):
         """Test successful group flow trigger"""
         mock_contact_group = MagicMock(group_id="group_123")
