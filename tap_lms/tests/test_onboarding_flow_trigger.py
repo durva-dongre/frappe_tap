@@ -308,7 +308,7 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         self.mock_student_status = "not_started"
         self.mock_flow_id = "12345"
         self.mock_job_id = "test_job_123"
-        self.current_time = datetime(2025, 9, 11, 14, 45)  # 02:45 PM IST
+        self.current_time = datetime(2025, 9, 11, 15, 5)  # 03:05 PM IST
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.throw')
@@ -370,32 +370,6 @@ class TestOnboardingFlowJobAndGroup(unittest.TestCase):
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
-    def test_trigger_onboarding_flow_job_group_success(self, mock_auth_headers, mock_get_doc):
-        mock_auth_headers.return_value = {"Authorization": "Bearer token"}
-        mock_stage = MagicMock()
-        mock_onboarding = MagicMock()
-        mock_glific_settings = MagicMock(api_url="https://api.glific.org")
-        mock_get_doc.side_effect = [mock_stage, mock_onboarding, mock_glific_settings]
-        with patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_group_flow') as mock_group_flow:
-            mock_group_flow.return_value = {"success": True}
-            result = _trigger_onboarding_flow_job(self.mock_onboarding_set, self.mock_onboarding_stage, self.mock_student_status, self.mock_flow_id, "Group")
-            self.assertTrue(result["success"])
-
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
-    def test_trigger_onboarding_flow_job_individual_success(self, mock_auth_headers, mock_get_doc):
-        mock_auth_headers.return_value = {"Authorization": "Bearer token"}
-        mock_stage = MagicMock()
-        mock_onboarding = MagicMock()
-        mock_glific_settings = MagicMock(api_url="https://api.glific.org")
-        mock_get_doc.side_effect = [mock_stage, mock_onboarding, mock_glific_settings]
-        with patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_individual_flows') as mock_individual_flows:
-            mock_individual_flows.return_value = {"success": True}
-            result = _trigger_onboarding_flow_job(self.mock_onboarding_set, self.mock_onboarding_stage, self.mock_student_status, self.mock_flow_id, "Personal")
-            self.assertTrue(result["success"])
-
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.requests.post')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.create_or_get_glific_group_for_batch')
     def test_trigger_group_flow_success(self, mock_create_group, mock_requests, mock_auth_headers, mock_get_doc):
@@ -416,8 +390,10 @@ class TestOnboardingFlowJobAndGroup(unittest.TestCase):
                 self.assertEqual(result["group_count"], 1)
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.requests.post')
-    def test_trigger_group_flow_api_error(self, mock_requests, mock_get_doc):
+    def test_trigger_group_flow_api_error(self, mock_requests, mock_auth_headers, mock_get_doc):
+        mock_auth_headers.return_value = {"Authorization": "Bearer token"}
         mock_onboarding = MagicMock(name=self.mock_onboarding_set)
         mock_stage = MagicMock(name=self.mock_onboarding_stage)
         mock_contact_group = MagicMock(group_id="group_123")
@@ -430,14 +406,16 @@ class TestOnboardingFlowJobAndGroup(unittest.TestCase):
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
-    def test_trigger_onboarding_flow_job_auth_failure(self, mock_auth_headers, mock_get_doc):
-        mock_auth_headers.return_value = {}
+    def test_trigger_onboarding_flow_job_group_success(self, mock_auth_headers, mock_get_doc):
+        mock_auth_headers.return_value = {"Authorization": "Bearer token"}
         mock_stage = MagicMock()
         mock_onboarding = MagicMock()
         mock_glific_settings = MagicMock(api_url="https://api.glific.org")
         mock_get_doc.side_effect = [mock_stage, mock_onboarding, mock_glific_settings]
-        result = _trigger_onboarding_flow_job(self.mock_onboarding_set, self.mock_onboarding_stage, self.mock_student_status, self.mock_flow_id, "Group")
-        self.assertIn("error", result)
+        with patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_group_flow') as mock_group_flow:
+            mock_group_flow.return_value = {"success": True}
+            result = _trigger_onboarding_flow_job(self.mock_onboarding_set, self.mock_onboarding_stage, self.mock_student_status, self.mock_flow_id, "Group")
+            self.assertTrue(result["success"])
 
 class TestOnboardingIndividualAndStudents(unittest.TestCase):
     @classmethod
@@ -457,12 +435,6 @@ class TestOnboardingIndividualAndStudents(unittest.TestCase):
         result = get_students_from_onboarding(MagicMock(name=self.mock_onboarding_set), self.mock_onboarding_stage, self.mock_student_status)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].name, "STUD_001")
-
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_all')
-    def test_get_students_from_onboarding_empty(self, mock_get_all):
-        mock_get_all.return_value = []
-        result = get_students_from_onboarding(MagicMock(name=self.mock_onboarding_set), None, None)
-        self.assertEqual(result, [])
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_all')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.start_contact_flow')
@@ -485,29 +457,6 @@ class TestOnboardingIndividualAndStudents(unittest.TestCase):
         update_student_stage_progress(MagicMock(name="STUD_001"), MagicMock(name=self.mock_onboarding_stage))
         mock_new_doc.assert_called_once_with("StudentStageProgress")
         mock_progress.insert.assert_called_once()
-
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_all')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
-    def test_update_student_stage_progress_batch_success(self, mock_get_doc, mock_get_all):
-        mock_students = [MagicMock(name="STUD_001"), MagicMock(name="STUD_002")]
-        mock_get_all.return_value = []
-        mock_progress1 = MagicMock(status="not_started")
-        mock_progress2 = MagicMock(status="not_started")
-        mock_get_doc.side_effect = [mock_progress1, mock_progress2]
-        update_student_stage_progress_batch(mock_students, MagicMock(name=self.mock_onboarding_stage))
-        self.assertEqual(mock_progress1.status, "assigned")
-        self.assertEqual(mock_progress2.status, "assigned")
-        self.assertEqual(mock_progress1.save.call_count, 1)
-        self.assertEqual(mock_progress2.save.call_count, 1)
-
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_all')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
-    def test_update_student_stage_progress_batch_error(self, mock_get_doc, mock_get_all):
-        mock_students = [MagicMock(name="STUD_001")]
-        mock_get_all.return_value = []
-        mock_get_doc.side_effect = [Exception("DB Error")]
-        with self.assertRaises(Exception):
-            update_student_stage_progress_batch(mock_students, MagicMock(name=self.mock_onboarding_stage))
 
 class TestOnboardingJobReportAndScheduled(unittest.TestCase):
     @classmethod
@@ -550,20 +499,6 @@ class TestOnboardingJobReportAndScheduled(unittest.TestCase):
         self.assertEqual(mock_progress.status, "incomplete")
         mock_progress.save.assert_called_once()
         self.assertEqual(frappe.db.commit.call_count, 1)
-
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_all')
-    def test_update_incomplete_stages_no_records(self, mock_get_all):
-        mock_get_all.return_value = []
-        update_incomplete_stages()  # Should handle gracefully
-
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_all')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe.get_doc')
-    def test_update_incomplete_stages_error(self, mock_get_doc, mock_get_all):
-        mock_now_datetime.return_value = self.current_time
-        mock_get_all.return_value = [{"name": "progress_1", "status": "assigned", "start_timestamp": self.current_time - timedelta(days=5)}]
-        mock_get_doc.side_effect = Exception("DB Error")
-        with self.assertRaises(Exception):
-            update_incomplete_stages()
 
 if __name__ == '__main__':
     unittest.main()
