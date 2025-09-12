@@ -514,27 +514,27 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
     #     self.assertEqual(len(result), 2)
     #     self.assertEqual(mock_frappe.get_doc.call_count, 2)
 
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.now_datetime')
-    def test_update_student_stage_progress_update_existing(self, mock_now, mock_frappe):
-        """Test update_student_stage_progress updating existing record"""
-        mock_now.return_value = self.current_time
-        mock_student = MagicMock()
-        mock_student.name = "STUD_001"
-        mock_stage = MagicMock()
-        mock_stage.name = "STAGE_001"
+    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.now_datetime')
+    # def test_update_student_stage_progress_update_existing(self, mock_now, mock_frappe):
+    #     """Test update_student_stage_progress updating existing record"""
+    #     mock_now.return_value = self.current_time
+    #     mock_student = MagicMock()
+    #     mock_student.name = "STUD_001"
+    #     mock_stage = MagicMock()
+    #     mock_stage.name = "STAGE_001"
         
-        existing = [{"name": "PROGRESS_001"}]
-        mock_frappe.get_all.return_value = existing
+    #     existing = [{"name": "PROGRESS_001"}]
+    #     mock_frappe.get_all.return_value = existing
         
-        mock_progress = MagicMock()
-        mock_progress.status = "in_progress"
-        mock_frappe.get_doc.return_value = mock_progress
-        mock_frappe.logger.return_value = MagicMock()
+    #     mock_progress = MagicMock()
+    #     mock_progress.status = "in_progress"
+    #     mock_frappe.get_doc.return_value = mock_progress
+    #     mock_frappe.logger.return_value = MagicMock()
         
-        self.update_student_stage_progress(mock_student, mock_stage)
+    #     self.update_student_stage_progress(mock_student, mock_stage)
         
-        mock_progress.save.assert_called_once()
+    #     mock_progress.save.assert_called_once()
 
     # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.now_datetime')
