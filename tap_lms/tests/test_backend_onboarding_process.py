@@ -1,356 +1,454 @@
-# """
-# Test Suite for Backend Onboarding Process
-# Tests for backend student onboarding functionality
-# """
+import unittest
+from unittest.mock import Mock, patch, MagicMock, call
+from datetime import datetime, date
+import sys
+import os
+import json
 
-# import sys
-# import os
-# import unittest
-# from unittest.mock import Mock, patch, MagicMock
-# import json
-# from datetime import datetime, date
+# Add the project root to Python path if needed
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(_file_))))
 
-# # Add the parent directory to Python path
-# sys.path.insert(0, os.path.join(os.path.dirname(_file_), '..'))
+class TestBackendOnboardingFunctions(unittest.TestCase):
 
-# # =============================================================================
-# # COMPREHENSIVE MOCKING SETUP
-# # =============================================================================
+    def setUp(self):
+        """Set up test fixtures before each test method."""
+        self.mock_phone_10 = "9876543210"
+        self.mock_phone_12 = "919876543210"
+        self.mock_student_name = "Test Student"
+        self.mock_batch_id = "BATCH001"
+        self.current_date = date(2025, 8, 20)
 
-# # Create mock modules that will be needed
-# mock_frappe = Mock()
-# mock_frappe.session = Mock()
-# mock_frappe.session.user = 'test_user'
-# mock_frappe.local = Mock()
-# mock_frappe.local.response = Mock()
-# mock_frappe.local.response.http_status_code = 200
+        # Mock frappe module at module level
+        self.frappe_patcher = patch.dict('sys.modules', {
+            'frappe': MagicMock(),
+            'frappe.utils': MagicMock(),
+            'tap_lms.glific_integration': MagicMock(),
+            'tap_lms.api': MagicMock()
+        })
+        self.frappe_patcher.start()
 
-# # Mock frappe.utils
-# mock_frappe_utils = Mock()
-# mock_frappe_utils.nowdate = Mock(return_value=date(2025, 8, 20))
-# mock_frappe_utils.nowtime = Mock(return_value="10:30:00")
-# mock_frappe_utils.now = Mock(return_value=datetime.now())
-# mock_frappe_utils.getdate = Mock(return_value=date(2025, 8, 20))
+        # Import after patching
+        from tap_lms.page.backend_onboarding_process.backend_onboarding_process import (
+            normalize_phone_number,
+            find_existing_student_by_phone_and_name,
+            get_onboarding_batches,
+            get_batch_details,
+            validate_student,
+            get_onboarding_stages,
+            get_initial_stage,
+            get_current_academic_year_backend,
+            get_job_status,
+            process_batch
+        )
 
-# mock_frappe.utils = mock_frappe_utils
-# mock_frappe.log_error = Mock()
-# mock_frappe.get_all = Mock()
-# mock_frappe.get_doc = Mock()
-# mock_frappe.new_doc = Mock()
-# mock_frappe.enqueue = Mock()
-# mock_frappe.publish_progress = Mock()
-# mock_frappe.db = Mock()
-# mock_frappe.db.sql = Mock()
-# mock_frappe.db.exists = Mock()
-# mock_frappe.db.get_value = Mock()
-# mock_frappe.db.table_exists = Mock()
-# mock_frappe.whitelist = lambda allow_guest=False: lambda func: func
-# mock_frappe._ = lambda x: x
+        # Store references to the actual functions
+        self.normalize_phone_number = normalize_phone_number
+        self.find_existing_student_by_phone_and_name = find_existing_student_by_phone_and_name
+        self.get_onboarding_batches = get_onboarding_batches
+        self.get_batch_details = get_batch_details
+        self.validate_student = validate_student
+        self.get_onboarding_stages = get_onboarding_stages
+        self.get_initial_stage = get_initial_stage
+        self.get_current_academic_year_backend = get_current_academic_year_backend
+        self.get_job_status = get_job_status
+        self.process_batch = process_batch
 
-# # Mock other required modules
-# mock_glific = Mock()
-# mock_glific.create_or_get_glific_group_for_batch = Mock()
-# mock_glific.add_student_to_glific_for_onboarding = Mock()
-# mock_glific.get_contact_by_phone = Mock()
+    def tearDown(self):
+        """Clean up after each test."""
+        self.frappe_patcher.stop()
 
-# mock_api = Mock()
-# mock_api.get_course_level = Mock(return_value="TEST_COURSE_LEVEL")
+    # Phone Number Normalization Tests
+    def test_normalize_phone_number_10_digit(self):
+        """Test normalizing 10-digit phone number"""
+        phone_12, phone_10 = self.normalize_phone_number("9876543210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
 
-# # Mock json module
-# mock_json = Mock()
-# mock_json.loads = json.loads
+    def test_normalize_phone_number_12_digit(self):
+        """Test normalizing 12-digit phone number"""
+        phone_12, phone_10 = self.normalize_phone_number("919876543210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
 
-# # Patch all the modules in sys.modules before any imports
-# sys.modules['frappe'] = mock_frappe
-# sys.modules['frappe.utils'] = mock_frappe_utils
-# sys.modules['tap_lms.glific_integration'] = mock_glific
-# sys.modules['tap_lms.api'] = mock_api
-# sys.modules['json'] = mock_json
+    def test_normalize_phone_number_11_digit_with_1_prefix(self):
+        """Test normalizing 11-digit phone number starting with 1"""
+        phone_12, phone_10 = self.normalize_phone_number("19876543210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
 
-# # Now we can import the actual functions
-# try:
-#     from tap_lms.page.backend_onboarding_process.backend_onboarding_process import (
-#         normalize_phone_number,
-#         find_existing_student_by_phone_and_name,
-#         get_onboarding_batches,
-#         get_batch_details,
-#         validate_student,
-#         get_onboarding_stages,
-#         get_initial_stage,
-#         get_current_academic_year_backend,
-#         get_job_status
-#     )
-#     IMPORTS_SUCCESSFUL = True
-#     print("✓ Successfully imported backend onboarding functions")
-# except ImportError as e:
-#     print(f"✗ Import failed: {e}")
-#     IMPORTS_SUCCESSFUL = False
-    
-#     # Create fallback implementations for testing
-#     def normalize_phone_number(phone):
-#         if not phone:
-#             return None, None
-#         phone = ''.join(filter(str.isdigit, str(phone).replace(' ', '').replace('-', '').replace('(', '').replace(')', '')))
-#         if len(phone) == 10:
-#             return f"91{phone}", phone
-#         elif len(phone) == 12 and phone.startswith('91'):
-#             return phone, phone[2:]
-#         elif len(phone) == 11 and phone.startswith('1'):
-#             return f"9{phone}", phone[1:]
-#         else:
-#             return None, None
-    
-#     def validate_student(student):
-#         validation = {}
-#         required_fields = ["student_name", "phone", "school", "grade", "language", "batch"]
-#         for field in required_fields:
-#             if not student.get(field):
-#                 validation[field] = "missing"
-#         return validation
-    
-#     def get_current_academic_year_backend():
-#         current_date = date(2025, 8, 20)
-#         if current_date.month >= 4:
-#             return f"{current_date.year}-{str(current_date.year + 1)[-2:]}"
-#         else:
-#             return f"{current_date.year - 1}-{str(current_date.year)[-2:]}"
-    
-#     def find_existing_student_by_phone_and_name(phone, name):
-#         return None
-    
-#     def get_onboarding_batches():
-#         return []
-    
-#     def get_batch_details(batch_id):
-#         return {"batch": None, "students": [], "glific_group": None}
-    
-#     def get_onboarding_stages():
-#         return []
-    
-#     def get_initial_stage():
-#         return None
-    
-#     def get_job_status(job_id):
-#         return {"status": "Unknown"}
+    def test_normalize_phone_number_with_formatting(self):
+        """Test normalizing phone number with formatting characters"""
+        phone_12, phone_10 = self.normalize_phone_number("(987) 654-3210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
 
-# # =============================================================================
-# # TEST CLASSES
-# # =============================================================================
+    def test_normalize_phone_number_invalid_length(self):
+        """Test normalizing invalid phone number length"""
+        phone_12, phone_10 = self.normalize_phone_number("12345")
+        self.assertIsNone(phone_12)
+        self.assertIsNone(phone_10)
 
-# class TestPhoneNumberNormalization(unittest.TestCase):
-#     """Test phone number normalization functionality"""
-    
-#     def test_normalize_10_digit_phone(self):
-#         """Test normalizing 10-digit phone number"""
-#         phone_12, phone_10 = normalize_phone_number("9876543210")
-#         self.assertEqual(phone_12, "919876543210")
-#         self.assertEqual(phone_10, "9876543210")
-    
-#     def test_normalize_12_digit_phone(self):
-#         """Test normalizing 12-digit phone number"""
-#         phone_12, phone_10 = normalize_phone_number("919876543210")
-#         self.assertEqual(phone_12, "919876543210")
-#         self.assertEqual(phone_10, "9876543210")
-    
-#     def test_normalize_11_digit_phone_with_1_prefix(self):
-#         """Test normalizing 11-digit phone number starting with 1"""
-#         phone_12, phone_10 = normalize_phone_number("19876543210")
-#         self.assertEqual(phone_12, "919876543210")
-#         self.assertEqual(phone_10, "9876543210")
-    
-#     def test_normalize_phone_with_formatting(self):
-#         """Test normalizing phone number with formatting characters"""
-#         phone_12, phone_10 = normalize_phone_number("(987) 654-3210")
-#         self.assertEqual(phone_12, "919876543210")
-#         self.assertEqual(phone_10, "9876543210")
-    
-#     def test_normalize_invalid_phone(self):
-#         """Test normalizing invalid phone numbers"""
-#         # Test with invalid length
-#         phone_12, phone_10 = normalize_phone_number("12345")
-#         self.assertIsNone(phone_12)
-#         self.assertIsNone(phone_10)
+    def test_normalize_phone_number_none_input(self):
+        """Test normalizing None phone number"""
+        phone_12, phone_10 = self.normalize_phone_number(None)
+        self.assertIsNone(phone_12)
+        self.assertIsNone(phone_10)
+
+    def test_normalize_phone_number_empty_string(self):
+        """Test normalizing empty phone number"""
+        phone_12, phone_10 = self.normalize_phone_number("")
+        self.assertIsNone(phone_12)
+        self.assertIsNone(phone_10)
+
+    def test_normalize_phone_number_spaces_and_dashes(self):
+        """Test normalizing phone number with various formatting"""
+        test_cases = [
+            ("987-654-3210", "919876543210", "9876543210"),
+            ("987 654 3210", "919876543210", "9876543210"),
+            ("91 9876543210", "919876543210", "9876543210"),
+            ("91-9876543210", "919876543210", "9876543210"),
+        ]
         
-#         # Test with None
-#         phone_12, phone_10 = normalize_phone_number(None)
-#         self.assertIsNone(phone_12)
-#         self.assertIsNone(phone_10)
-        
-#         # Test with empty string
-#         phone_12, phone_10 = normalize_phone_number("")
-#         self.assertIsNone(phone_12)
-#         self.assertIsNone(phone_10)
-    
-#     def test_normalize_phone_edge_cases(self):
-#         """Test edge cases for phone normalization"""
-#         test_cases = [
-#             ("987-654-3210", "919876543210", "9876543210"),
-#             ("987 654 3210", "919876543210", "9876543210"),
-#             ("91 9876543210", "919876543210", "9876543210"),
-#             ("91-9876543210", "919876543210", "9876543210"),
-#         ]
-        
-#         for input_phone, expected_12, expected_10 in test_cases:
-#             with self.subTest(phone=input_phone):
-#                 phone_12, phone_10 = normalize_phone_number(input_phone)
-#                 self.assertEqual(phone_12, expected_12)
-#                 self.assertEqual(phone_10, expected_10)
+        for input_phone, expected_12, expected_10 in test_cases:
+            with self.subTest(phone=input_phone):
+                phone_12, phone_10 = self.normalize_phone_number(input_phone)
+                self.assertEqual(phone_12, expected_12)
+                self.assertEqual(phone_10, expected_10)
 
-# class TestStudentValidation(unittest.TestCase):
-#     """Test student validation functionality"""
-    
-#     def setUp(self):
-#         """Set up test data"""
-#         self.complete_student = {
-#             'student_name': 'Test Student',
-#             'phone': '919876543210',
-#             'school': 'Test School',
-#             'grade': '5',
-#             'language': 'English',
-#             'batch': 'Test Batch'
-#         }
-    
-#     def test_validate_complete_student(self):
-#         """Test validation of complete student record"""
-#         validation = validate_student(self.complete_student)
-#         self.assertEqual(validation, {})
-    
-#     def test_validate_student_missing_fields(self):
-#         """Test validation with missing required fields"""
-#         incomplete_student = self.complete_student.copy()
-#         incomplete_student['student_name'] = ''
-#         incomplete_student['school'] = ''
-#         incomplete_student['phone'] = ''
-        
-#         validation = validate_student(incomplete_student)
-        
-#         self.assertIn('student_name', validation)
-#         self.assertEqual(validation['student_name'], 'missing')
-#         self.assertIn('school', validation)
-#         self.assertEqual(validation['school'], 'missing')
-#         self.assertIn('phone', validation)
-#         self.assertEqual(validation['phone'], 'missing')
-    
-#     def test_validate_all_missing_fields(self):
-#         """Test validation when all required fields are missing"""
-#         empty_student = {
-#             'student_name': '',
-#             'phone': '',
-#             'school': '',
-#             'grade': '',
-#             'language': '',
-#             'batch': ''
-#         }
-        
-#         validation = validate_student(empty_student)
-        
-#         required_fields = ['student_name', 'phone', 'school', 'grade', 'language', 'batch']
-#         for field in required_fields:
-#             self.assertIn(field, validation)
-#             self.assertEqual(validation[field], 'missing')
+    # Student Finding Tests
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_find_existing_student_success(self, mock_frappe):
+        """Test successfully finding existing student"""
+        mock_student_data = {
+            'name': 'STU001',
+            'phone': '919876543210',
+            'name1': 'Test Student'
+        }
+        mock_frappe.db.sql.return_value = [mock_student_data]
 
-# class TestAcademicYear(unittest.TestCase):
-#     """Test academic year calculation"""
-    
-#     def test_current_academic_year_after_april(self):
-#         """Test academic year calculation when current date is after April"""
-#         result = get_current_academic_year_backend()
-#         self.assertEqual(result, "2025-26")
-    
-#     def test_current_academic_year_logic(self):
-#         """Test the academic year calculation logic"""
-#         # This test works with our fallback implementation
-#         result = get_current_academic_year_backend()
-#         # Should return current academic year based on August date
-#         self.assertIsInstance(result, str)
-#         self.assertIn("-", result)
+        result = self.find_existing_student_by_phone_and_name("919876543210", "Test Student")
 
-# class TestBasicFunctionality(unittest.TestCase):
-#     """Test basic functionality to ensure imports work"""
-    
-#     def test_find_existing_student_basic(self):
-#         """Test basic find student functionality"""
-#         result = find_existing_student_by_phone_and_name("919876543210", "Test Student")
-#         # Should return None in test environment
-#         self.assertIsNone(result)
-    
-#     def test_get_onboarding_batches_basic(self):
-#         """Test basic get onboarding batches functionality"""
-#         result = get_onboarding_batches()
-#         self.assertIsInstance(result, list)
-    
-#     def test_get_batch_details_basic(self):
-#         """Test basic get batch details functionality"""
-#         result = get_batch_details("BATCH001")
-#         self.assertIsInstance(result, dict)
-#         self.assertIn('batch', result)
-#         self.assertIn('students', result)
-#         self.assertIn('glific_group', result)
-    
-#     def test_get_onboarding_stages_basic(self):
-#         """Test basic get onboarding stages functionality"""
-#         result = get_onboarding_stages()
-#         self.assertIsInstance(result, list)
-    
-#     def test_get_initial_stage_basic(self):
-#         """Test basic get initial stage functionality"""
-#         result = get_initial_stage()
-#         # Should return None or a string
-#         self.assertTrue(result is None or isinstance(result, str))
-    
-#     def test_get_job_status_basic(self):
-#         """Test basic get job status functionality"""
-#         result = get_job_status("job123")
-#         self.assertIsInstance(result, dict)
-#         self.assertIn('status', result)
+        self.assertEqual(result, mock_student_data)
+        self.assertTrue(mock_frappe.db.sql.called)
 
-# class TestFrappeMocking(unittest.TestCase):
-#     """Test that frappe mocking is working correctly"""
-    
-#     def test_frappe_session_user(self):
-#         """Test that frappe session user is mocked correctly"""
-#         self.assertEqual(mock_frappe.session.user, 'test_user')
-    
-#     def test_frappe_utils_date(self):
-#         """Test that frappe utils date functions are mocked"""
-#         result = mock_frappe.utils.nowdate()
-#         self.assertEqual(result, date(2025, 8, 20))
-    
-#     def test_frappe_functions_callable(self):
-#         """Test that frappe functions can be called without error"""
-#         # These should not raise exceptions
-#         mock_frappe.get_all("Test")
-#         mock_frappe.log_error("Test message")
-#         mock_frappe.db.sql("SELECT * FROM test")
-        
-#         # Assert that the mocks were called
-#         self.assertTrue(mock_frappe.get_all.called)
-#         self.assertTrue(mock_frappe.log_error.called)
-#         self.assertTrue(mock_frappe.db.sql.called)
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_find_existing_student_not_found(self, mock_frappe):
+        """Test when student is not found"""
+        mock_frappe.db.sql.return_value = []
 
-# class TestImportStatus(unittest.TestCase):
-#     """Test the import status and provide helpful information"""
-    
-#     def test_import_status_info(self):
-#         """Display information about import status"""
-#         if IMPORTS_SUCCESSFUL:
-#             print("✓ All imports successful - testing actual implementation")
-#         else:
-#             print("ℹ Using fallback implementations - some functionality may be limited")
-        
-#         # This test always passes but provides useful info
-#         self.assertTrue(True)
+        result = self.find_existing_student_by_phone_and_name("919876543210", "Test Student")
 
-# # =============================================================================
-# # MAIN EXECUTION
-# # =============================================================================
+        self.assertIsNone(result)
 
-# # if _name_ == '_main_':
-# #     # Print import status
-# #     if IMPORTS_SUCCESSFUL:
-# #         print("✓ Backend onboarding process functions imported successfully")
-# #     else:
-# #         print("ℹ Using fallback implementations for testing")
-    
-# #     # Run the tests
-# #     unittest.main(verbosity=2)
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_find_existing_student_invalid_phone(self, mock_frappe):
+        """Test with invalid phone input"""
+        result = self.find_existing_student_by_phone_and_name(None, "Test Student")
+        self.assertIsNone(result)
+
+        result = self.find_existing_student_by_phone_and_name("919876543210", None)
+        self.assertIsNone(result)
+
+    # Batch Management Tests
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_onboarding_batches_success(self, mock_frappe):
+        """Test successfully getting onboarding batches"""
+        mock_batches = [
+            {
+                'name': 'BATCH001',
+                'set_name': 'Test Batch 1',
+                'upload_date': self.current_date,
+                'uploaded_by': 'test_user',
+                'student_count': 10,
+                'processed_student_count': 5
+            }
+        ]
+        mock_frappe.get_all.return_value = mock_batches
+
+        result = self.get_onboarding_batches()
+
+        self.assertEqual(result, mock_batches)
+        mock_frappe.get_all.assert_called_with(
+            "Backend Student Onboarding", 
+            filters={"status": ["in", ["Draft", "Processing", "Failed"]]},
+            fields=["name", "set_name", "upload_date", "uploaded_by", 
+                   "student_count", "processed_student_count"]
+        )
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_batch_details_success(self, mock_frappe):
+        """Test successfully getting batch details"""
+        mock_batch = Mock()
+        mock_batch.name = 'BATCH001'
+        mock_batch.status = 'Draft'
+
+        mock_students = [
+            {
+                'name': 'BACKEND_STU001',
+                'student_name': 'Test Student',
+                'phone': '919876543210',
+                'gender': 'Male',
+                'batch': 'BT001',
+                'course_vertical': 'CV001',
+                'grade': '5',
+                'school': 'SCH001',
+                'language': 'LANG_EN',
+                'processing_status': 'Pending',
+                'student_id': None
+            }
+        ]
+
+        mock_frappe.get_doc.return_value = mock_batch
+        mock_frappe.get_all.side_effect = [mock_students, []]  # students, then glific_group
+
+        result = self.get_batch_details('BATCH001')
+
+        self.assertEqual(result['batch'], mock_batch)
+        self.assertEqual(len(result['students']), 1)
+        self.assertIn('validation', result['students'][0])
+        self.assertIsNone(result['glific_group'])
+
+    # Student Validation Tests
+    def test_validate_student_complete(self):
+        """Test validating a complete student record"""
+        complete_student = {
+            'student_name': 'Test Student',
+            'phone': '919876543210',
+            'school': 'SCH001',
+            'grade': '5',
+            'language': 'LANG_EN',
+            'batch': 'BT001'
+        }
+
+        with patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.find_existing_student_by_phone_and_name') as mock_find:
+            mock_find.return_value = None
+            
+            validation = self.validate_student(complete_student)
+            
+            self.assertEqual(validation, {})
+
+    def test_validate_student_missing_fields(self):
+        """Test validating student with missing required fields"""
+        incomplete_student = {
+            'student_name': '',
+            'phone': '919876543210',
+            'school': '',
+            'grade': '5',
+            'language': 'LANG_EN',
+            'batch': 'BT001'
+        }
+
+        with patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.find_existing_student_by_phone_and_name') as mock_find:
+            mock_find.return_value = None
+            
+            validation = self.validate_student(incomplete_student)
+            
+            self.assertIn('student_name', validation)
+            self.assertEqual(validation['student_name'], 'missing')
+            self.assertIn('school', validation)
+            self.assertEqual(validation['school'], 'missing')
+
+    def test_validate_student_duplicate(self):
+        """Test validating student with duplicate"""
+        student = {
+            'student_name': 'Test Student',
+            'phone': '919876543210',
+            'school': 'SCH001',
+            'grade': '5',
+            'language': 'LANG_EN',
+            'batch': 'BT001'
+        }
+
+        existing_student = {
+            'name': 'STU001',
+            'name1': 'Test Student'
+        }
+
+        with patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.find_existing_student_by_phone_and_name') as mock_find:
+            mock_find.return_value = existing_student
+            
+            validation = self.validate_student(student)
+            
+            self.assertIn('duplicate', validation)
+            self.assertEqual(validation['duplicate']['student_id'], 'STU001')
+            self.assertEqual(validation['duplicate']['student_name'], 'Test Student')
+
+    # Onboarding Stages Tests
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_onboarding_stages_success(self, mock_frappe):
+        """Test successfully getting onboarding stages"""
+        mock_frappe.db.table_exists.return_value = True
+        mock_stages = [
+            {'name': 'STAGE001', 'description': 'Initial Stage', 'order': 0},
+            {'name': 'STAGE002', 'description': 'Second Stage', 'order': 1}
+        ]
+        mock_frappe.get_all.return_value = mock_stages
+
+        result = self.get_onboarding_stages()
+
+        self.assertEqual(result, mock_stages)
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_onboarding_stages_table_not_exists(self, mock_frappe):
+        """Test when OnboardingStage table doesn't exist"""
+        mock_frappe.db.table_exists.return_value = False
+
+        result = self.get_onboarding_stages()
+
+        self.assertEqual(result, [])
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_onboarding_stages_exception(self, mock_frappe):
+        """Test exception handling in get_onboarding_stages"""
+        mock_frappe.db.table_exists.return_value = True
+        mock_frappe.get_all.side_effect = Exception("Database error")
+
+        result = self.get_onboarding_stages()
+
+        self.assertEqual(result, [])
+        self.assertTrue(mock_frappe.log_error.called)
+
+    # Initial Stage Tests
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_initial_stage_with_order_zero(self, mock_frappe):
+        """Test getting initial stage with order=0"""
+        mock_frappe.get_all.side_effect = [
+            [{'name': 'STAGE_INITIAL'}],  # First call with order=0
+        ]
+
+        result = self.get_initial_stage()
+
+        self.assertEqual(result, 'STAGE_INITIAL')
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_initial_stage_no_order_zero(self, mock_frappe):
+        """Test getting initial stage when no order=0 exists"""
+        mock_frappe.get_all.side_effect = [
+            [],  # First call with order=0 returns empty
+            [{'name': 'STAGE_MIN', 'order': 1}],  # Second call with minimum order
+        ]
+
+        result = self.get_initial_stage()
+
+        self.assertEqual(result, 'STAGE_MIN')
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_initial_stage_exception(self, mock_frappe):
+        """Test exception handling in get_initial_stage"""
+        mock_frappe.get_all.side_effect = Exception("Database error")
+
+        result = self.get_initial_stage()
+
+        self.assertIsNone(result)
+        self.assertTrue(mock_frappe.log_error.called)
+
+    # Academic Year Tests
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_current_academic_year_after_april(self, mock_frappe):
+        """Test academic year calculation when current date is after April"""
+        mock_frappe.utils.getdate.return_value = date(2025, 8, 20)
+
+        result = self.get_current_academic_year_backend()
+
+        self.assertEqual(result, "2025-26")
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_current_academic_year_before_april(self, mock_frappe):
+        """Test academic year calculation when current date is before April"""
+        mock_frappe.utils.getdate.return_value = date(2025, 2, 20)
+
+        result = self.get_current_academic_year_backend()
+
+        self.assertEqual(result, "2024-25")
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_current_academic_year_exception(self, mock_frappe):
+        """Test exception handling in academic year calculation"""
+        mock_frappe.utils.getdate.side_effect = Exception("Date error")
+
+        result = self.get_current_academic_year_backend()
+
+        self.assertIsNone(result)
+        self.assertTrue(mock_frappe.log_error.called)
+
+    # Job Status Tests
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_job_status_success(self, mock_frappe):
+        """Test getting job status successfully"""
+        mock_frappe.db.table_exists.return_value = True
+        mock_frappe.db.get_value.return_value = {
+            'status': 'finished',
+            'progress_data': None,
+            'result': '{"success_count": 5, "failure_count": 0}'
+        }
+
+        result = self.get_job_status('job123')
+
+        self.assertIn('status', result)
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_get_job_status_unknown(self, mock_frappe):
+        """Test getting job status when status is unknown"""
+        mock_frappe.db.table_exists.return_value = False
+
+        result = self.get_job_status('job123')
+
+        self.assertEqual(result['status'], 'Unknown')
+
+    # Process Batch Tests
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_process_batch_background_job(self, mock_frappe):
+        """Test processing batch with background job"""
+        mock_batch = Mock()
+        mock_batch.status = 'Draft'
+        mock_frappe.get_doc.return_value = mock_batch
+
+        mock_job = Mock()
+        mock_job.id = 'job123'
+        mock_frappe.enqueue.return_value = mock_job
+
+        result = self.process_batch('BATCH001', use_background_job=True)
+
+        self.assertEqual(result['job_id'], 'job123')
+        self.assertEqual(mock_batch.status, 'Processing')
+        self.assertTrue(mock_batch.save.called)
+
+    @patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.frappe')
+    def test_process_batch_immediate(self, mock_frappe):
+        """Test processing batch immediately"""
+        mock_batch = Mock()
+        mock_batch.status = 'Draft'
+        mock_frappe.get_doc.return_value = mock_batch
+
+        with patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.process_batch_job') as mock_job:
+            mock_job.return_value = {'success_count': 5, 'failure_count': 0}
+
+            result = self.process_batch('BATCH001', use_background_job=False)
+
+            self.assertEqual(result['success_count'], 5)
+            self.assertEqual(result['failure_count'], 0)
+
+    # Edge Cases Tests
+    def test_validate_all_missing_fields(self):
+        """Test validation when all required fields are missing"""
+        empty_student = {
+            'student_name': '',
+            'phone': '',
+            'school': '',
+            'grade': '',
+            'language': '',
+            'batch': ''
+        }
+
+        with patch('tap_lms.page.backend_onboarding_process.backend_onboarding_process.find_existing_student_by_phone_and_name') as mock_find:
+            mock_find.return_value = None
+            
+            validation = self.validate_student(empty_student)
+            
+            required_fields = ['student_name', 'phone', 'school', 'grade', 'language', 'batch']
+            for field in required_fields:
+                self.assertIn(field, validation)
+                self.assertEqual(validation[field], 'missing')
+
+# if _name_ == '_main_':
+#     unittest.main(verbosity=2)
