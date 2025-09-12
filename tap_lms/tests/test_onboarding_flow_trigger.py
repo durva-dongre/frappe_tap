@@ -604,6 +604,173 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         """Clean up after each test."""
         self.frappe_patcher.stop()
 
+    # ============= Main Entry Point Tests =============
+    
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_trigger_onboarding_flow_success_with_stage_flows(self, mock_frappe):
+        """Test successful trigger_onboarding_flow with stage_flows"""
+        # Setup stage with stage_flows
+        mock_stage = MagicMock()
+        mock_stage.is_active = True
+        mock_stage.name = "STAGE_001"
+        
+        mock_flow = MagicMock()
+        mock_flow.student_status = "not_started"
+        mock_flow.glific_flow_id = "flow_123"
+        mock_flow.flow_type = "Group"
+        mock_stage.stage_flows = [mock_flow]
+        
+        # Setup onboarding
+        mock_onboarding = MagicMock()
+        mock_onboarding.status = "Processed"
+        mock_onboarding.name = "ONBOARDING_001"
+        
+        mock_frappe.get_doc.side_effect = [mock_stage, mock_onboarding]
+        mock_frappe.enqueue.return_value = "job_123"
+        mock_frappe.logger.return_value = MagicMock()
+        
+        result = self.trigger_onboarding_flow("ONBOARDING_001", "STAGE_001", "not_started")
+        
+        self.assertTrue(result["success"])
+        self.assertEqual(result["job_id"], "job_123")
+        mock_frappe.enqueue.assert_called_once()
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_trigger_onboarding_flow_exception_handling(self, mock_frappe):
+        """Test trigger_onboarding_flow exception handling"""
+        mock_frappe.get_doc.side_effect = Exception("Database error")
+        mock_frappe.log_error = MagicMock()
+        mock_frappe.throw = Mock(side_effect=Exception("Error triggering onboarding flow"))
+        
+        with self.assertRaises(Exception):
+            self.trigger_onboarding_flow("SET", "STAGE", "not_started")
+        
+        mock_frappe.log_error.assert_called_once()
+
+    # ============= Background Job Tests =============
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
+    def test_trigger_onboarding_flow_job_exception_handling(self, mock_auth, mock_frappe):
+        """Test _trigger_onboarding_flow_job exception handling"""
+        mock_auth.return_value = {"authorization": "Bearer token"}
+        mock_frappe.get_doc.side_effect = Exception("Database error")
+        mock_frappe.log_error = MagicMock()
+        mock_frappe.logger.return_value = MagicMock()
+        
+        result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "Group")
+        
+        self.assertIn("error", result)
+        mock_frappe.log_error.assert_called_once()
+
+    # ============= Get Stage Flow Statuses Tests =============
+    
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_stage_flow_statuses_success(self, mock_frappe):
+        """Test get_stage_flow_statuses with stage_flows"""
+        mock_stage = MagicMock()
+        mock_flow1 = MagicMock()
+        mock_flow1.student_status = "not_started"
+        mock_flow2 = MagicMock()
+        mock_flow2.student_status = "completed"
+        mock_stage.stage_flows = [mock_flow1, mock_flow2]
+        
+        mock_frappe.get_doc.return_value = mock_stage
+        
+        result = self.get_stage_flow_statuses("STAGE_001")
+        
+        self.assertIn("not_started", result["statuses"])
+        self.assertIn("completed", result["statuses"])
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_stage_flow_statuses_exception(self, mock_frappe):
+        """Test get_stage_flow_statuses exception handling"""
+        mock_frappe.get_doc.side_effect = Exception("Not found")
+        mock_frappe.log_error = MagicMock()
+        
+        result = self.get_stage_flow_statuses("INVALID_STAGE")
+        
+        self.assertIn("error", result)
+        self.assertEqual(result["statuses"], [])
+
+    # ============= Get Job Status Tests =============
+    
+    def test_get_job_status_unknown(self):
+        """Test get_job_status with no job ID"""
+        result = self.get_job_status(None)
+        self.assertEqual(result["status"], "unknown")
+        
+        result = self.get_job_status("")
+        self.assertEqual(result["status"], "unknown")
+
+    # ============= Progress Report Tests =============
+    
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_onboarding_progress_report_basic(self, mock_frappe):
+        """Test basic get_onboarding_progress_report"""
+        mock_frappe.get_all.return_value = [
+            {
+                "name": "PROG_001",
+                "student": "STUD_001",
+                "stage": "STAGE_001",
+                "status": "completed",
+                "start_timestamp": None,
+                "last_activity_timestamp": None,
+                "completion_timestamp": None
+            }
+        ]
+        
+        mock_student = MagicMock()
+        mock_student.name = "STUD_001"
+        mock_student.name1 = "Test Student"
+        mock_student.phone = "1234567890"
+        
+        mock_stage = MagicMock()
+        mock_stage.name = "STAGE_001"
+        
+        mock_frappe.get_doc.side_effect = [mock_student, mock_stage]
+        mock_frappe.logger.return_value = MagicMock()
+        
+        result = self.get_onboarding_progress_report()
+        
+        self.assertEqual(result["summary"]["total"], 1)
+        self.assertEqual(result["summary"]["completed"], 1)
+        self.assertEqual(len(result["details"]), 1)
+
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    def test_get_onboarding_progress_report_exception(self, mock_frappe):
+        """Test get_onboarding_progress_report exception handling"""
+        mock_frappe.get_all.side_effect = Exception("Database error")
+        mock_frappe.log_error = MagicMock()
+        mock_frappe.throw = Mock(side_effect=Exception("Error generating report"))
+        
+        with self.assertRaises(Exception):
+            self.get_onboarding_progress_report()
+
+    # ============= Update Incomplete Stages Tests =============
+    
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.now_datetime')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.add_to_date')
+    def test_update_incomplete_stages_with_updates(self, mock_add_to_date, mock_now, mock_frappe):
+        """Test update_incomplete_stages with records to update"""
+        mock_now.return_value = self.current_time
+        mock_add_to_date.return_value = self.current_time - timedelta(days=3)
+        
+        mock_frappe.get_all.return_value = [
+            {"name": "PROG_001", "student": "STUD_001", "stage": "STAGE_001", "start_timestamp": self.current_time - timedelta(days=4)}
+        ]
+        
+        mock_progress = MagicMock()
+        mock_frappe.get_doc.return_value = mock_progress
+        mock_frappe.logger.return_value = MagicMock()
+        
+        self.update_incomplete_stages()
+        
+        self.assertEqual(mock_progress.status, "incomplete")
+        mock_progress.save.assert_called_once()
+        mock_frappe.db.commit.assert_called_once()
+
     # ============= Working Tests from Original =============
     
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
@@ -1013,3 +1180,6 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         self.assertEqual(mock_update_progress.call_count, 1)  # Only called for successful student
         self.assertEqual(mock_start_flow.call_count, 2)  # Called for students with glific_id
 
+
+if __name__ == '__main__':
+    unittest.main()
