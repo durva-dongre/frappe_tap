@@ -343,12 +343,12 @@ class TestImportStatus(unittest.TestCase):
 # MAIN EXECUTION
 # =============================================================================
 
-# if _name_ == '_main_':
-#     # Print import status
-#     if IMPORTS_SUCCESSFUL:
-#         print("✓ Backend onboarding process functions imported successfully")
-#     else:
-#         print("ℹ Using fallback implementations for testing")
+if _name_ == '_main_':
+    # Print import status
+    if IMPORTS_SUCCESSFUL:
+        print("✓ Backend onboarding process functions imported successfully")
+    else:
+        print("ℹ Using fallback implementations for testing")
     
-#     # Run the tests
-#     unittest.main(verbosity=2)
+    # Run the tests
+    unittest.main(verbosity=2)
