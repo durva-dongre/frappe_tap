@@ -376,34 +376,38 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
-    def test_trigger_onboarding_flow_job_success_group(self, mock_auth, mock_frappe):
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_group_flow')
+    def test_trigger_onboarding_flow_job_success_group(self, mock_group_flow, mock_auth, mock_frappe):
         """Test successful group flow trigger job"""
         mock_auth.return_value = {"Authorization": "Bearer token"}
+        mock_group_flow.return_value = {"group_count": 1}
         mock_frappe.logger.return_value = MagicMock()
         
-        with patch.object(self, 'trigger_group_flow', return_value={"group_count": 1}) as mock_group_flow:
-            result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "group")
-            
-            self.assertEqual(result["group_count"], 1)
-            mock_group_flow.assert_called_once()
+        result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "group")
+        
+        self.assertEqual(result["group_count"], 1)
+        mock_group_flow.assert_called_once()
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
-    def test_trigger_onboarding_flow_job_success_individual(self, mock_auth, mock_frappe):
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_individual_flows')
+    def test_trigger_onboarding_flow_job_success_individual(self, mock_individual_flow, mock_auth, mock_frappe):
         """Test successful individual flow trigger job"""
         mock_auth.return_value = {"Authorization": "Bearer token"}
+        mock_individual_flow.return_value = {"individual_count": 5}
         mock_frappe.logger.return_value = MagicMock()
         
-        with patch.object(self, 'trigger_individual_flows', return_value={"individual_count": 5}) as mock_individual_flow:
-            result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "individual")
-            
-            self.assertEqual(result["individual_count"], 5)
-            mock_individual_flow.assert_called_once()
+        result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "individual")
+        
+        self.assertEqual(result["individual_count"], 5)
+        mock_individual_flow.assert_called_once()
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.requests')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.create_or_get_glific_group_for_batch')
-    def test_trigger_group_flow_success(self, mock_create_group, mock_requests, mock_frappe):
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_student_stage_progress_batch')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_students_from_onboarding')
+    def test_trigger_group_flow_success(self, mock_get_students, mock_update_batch, mock_create_group, mock_requests, mock_frappe):
         """Test successful group flow trigger"""
         mock_onboarding = MagicMock()
         mock_onboarding.name = "TEST_ONBOARDING"
@@ -415,6 +419,7 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         mock_settings.glific_url = "https://api.glific.com"
         
         mock_create_group.return_value = {"group_id": "group_123"}
+        mock_get_students.return_value = [MagicMock()]
         mock_frappe.logger.return_value = MagicMock()
         
         def mock_get_doc_side_effect(doctype, filters=None):
@@ -431,16 +436,16 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         }
         mock_requests.post.return_value = mock_response
         
-        with patch.object(self, 'update_student_stage_progress_batch') as mock_update:
-            with patch.object(self, 'get_students_from_onboarding', return_value=[MagicMock()]):
-                result = self.trigger_group_flow(mock_onboarding, mock_stage, "Bearer token", self.mock_student_status, self.mock_flow_id)
-                
-                self.assertEqual(result["group_count"], 1)
-                mock_update.assert_called_once()
+        result = self.trigger_group_flow(mock_onboarding, mock_stage, "Bearer token", self.mock_student_status, self.mock_flow_id)
+        
+        self.assertEqual(result["group_count"], 1)
+        mock_update_batch.assert_called_once()
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.start_contact_flow')
-    def test_trigger_individual_flows_success(self, mock_start_flow, mock_frappe):
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_students_from_onboarding')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_student_stage_progress')
+    def test_trigger_individual_flows_success(self, mock_update_progress, mock_get_students, mock_start_flow, mock_frappe):
         """Test successful individual flows trigger"""
         mock_onboarding = MagicMock()
         mock_stage = MagicMock()
@@ -453,19 +458,18 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         mock_student2.name = "STUD_002"
         mock_student2.glific_id = "contact_002"
         
+        mock_get_students.return_value = [mock_student1, mock_student2]
         mock_start_flow.return_value = {"success": True}
         mock_frappe.logger.return_value = MagicMock()
         
-        with patch.object(self, 'get_students_from_onboarding', return_value=[mock_student1, mock_student2]):
-            with patch.object(self, 'update_student_stage_progress') as mock_update:
-                result = self.trigger_individual_flows(
-                    mock_onboarding, mock_stage, "Bearer token", 
-                    self.mock_student_status, self.mock_flow_id
-                )
-                
-                self.assertEqual(result["individual_count"], 2)
-                self.assertEqual(mock_update.call_count, 2)
-                self.assertEqual(mock_start_flow.call_count, 2)
+        result = self.trigger_individual_flows(
+            mock_onboarding, mock_stage, "Bearer token", 
+            self.mock_student_status, self.mock_flow_id
+        )
+        
+        self.assertEqual(result["individual_count"], 2)
+        self.assertEqual(mock_update_progress.call_count, 2)
+        self.assertEqual(mock_start_flow.call_count, 2)
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     def test_get_stage_flow_statuses_success(self, mock_frappe):
@@ -634,7 +638,9 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.start_contact_flow')
-    def test_trigger_individual_flows_partial_success(self, mock_start_flow, mock_frappe):
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_students_from_onboarding')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_student_stage_progress')
+    def test_trigger_individual_flows_partial_success(self, mock_update_progress, mock_get_students, mock_start_flow, mock_frappe):
         """Test trigger_individual_flows with partial success"""
         mock_onboarding = MagicMock()
         mock_stage = MagicMock()
@@ -651,24 +657,24 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         mock_student3.name = "STUD_003"
         mock_student3.glific_id = "contact_003"
         
-        # First call succeeds, third call fails
+        mock_get_students.return_value = [mock_student1, mock_student2, mock_student3]
+        # First call succeeds, second call fails
         mock_start_flow.side_effect = [{"success": True}, Exception("Flow failed")]
         mock_frappe.logger.return_value = MagicMock()
         
-        with patch.object(self, 'get_students_from_onboarding', return_value=[mock_student1, mock_student2, mock_student3]):
-            with patch.object(self, 'update_student_stage_progress') as mock_update:
-                result = self.trigger_individual_flows(
-                    mock_onboarding, mock_stage, "Bearer token", 
-                    self.mock_student_status, self.mock_flow_id
-                )
-                
-                self.assertEqual(result["individual_count"], 1)  # Only STUD_001 succeeded
-                self.assertEqual(mock_update.call_count, 1)  # Only called for successful student
-                self.assertEqual(mock_start_flow.call_count, 2)  # Called for students with glific_id
+        result = self.trigger_individual_flows(
+            mock_onboarding, mock_stage, "Bearer token", 
+            self.mock_student_status, self.mock_flow_id
+        )
+        
+        self.assertEqual(result["individual_count"], 1)  # Only STUD_001 succeeded
+        self.assertEqual(mock_update_progress.call_count, 1)  # Only called for successful student
+        self.assertEqual(mock_start_flow.call_count, 2)  # Called for students with glific_id
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
-    def test_trigger_onboarding_flow_job_invalid_flow_type(self, mock_auth, mock_frappe):
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_group_flow')
+    def test_trigger_onboarding_flow_job_invalid_flow_type(self, mock_group_flow, mock_auth, mock_frappe):
         """Test _trigger_onboarding_flow_job with invalid flow type"""
         mock_auth.return_value = {"Authorization": "Bearer token"}
         mock_frappe.logger.return_value = MagicMock()
@@ -680,13 +686,14 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
 
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
-    def test_trigger_onboarding_flow_job_exception_handling(self, mock_auth, mock_frappe):
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_group_flow')
+    def test_trigger_onboarding_flow_job_exception_handling(self, mock_group_flow, mock_auth, mock_frappe):
         """Test _trigger_onboarding_flow_job exception handling"""
         mock_auth.return_value = {"Authorization": "Bearer token"}
+        mock_group_flow.side_effect = Exception("Unexpected error")
         mock_frappe.logger.return_value = MagicMock()
         
-        with patch.object(self, 'trigger_group_flow', side_effect=Exception("Unexpected error")):
-            result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "group")
-            
-            self.assertIn("error", result)
-            self.assertIn("Unexpected error", result["error"])
+        result = self._trigger_onboarding_flow_job("set", "stage", "status", "flow", "group")
+        
+        self.assertIn("error", result)
+        self.assertIn("Unexpected error", result["error"])
