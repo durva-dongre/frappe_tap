@@ -354,3 +354,465 @@
     
 # #     # Run the tests
 # #     unittest.main(verbosity=2)
+
+import unittest
+import frappe
+from frappe.utils import nowdate
+from unittest.mock import patch, MagicMock, call
+import json
+
+# Import the module functions
+from tap_lms.backend_student_onboarding import (
+    normalize_phone_number,
+    find_existing_student_by_phone_and_name,
+    validate_student,
+    get_initial_stage,
+    process_batch,
+    process_glific_contact,
+    determine_student_type_backend,
+    get_current_academic_year_backend,
+    validate_enrollment_data,
+    process_student_record,
+    update_backend_student_status,
+    format_phone_number,
+    get_course_level_with_validation_backend
+)
+
+class TestPhoneNumberNormalization(unittest.TestCase):
+    """Test phone number normalization functionality"""
+    
+    def test_10_digit_phone(self):
+        """Test normalization of 10-digit phone number"""
+        phone_12, phone_10 = normalize_phone_number("9876543210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
+    
+    def test_12_digit_phone(self):
+        """Test normalization of 12-digit phone number with country code"""
+        phone_12, phone_10 = normalize_phone_number("919876543210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
+    
+    def test_11_digit_phone_starting_with_1(self):
+        """Test normalization of 11-digit phone starting with 1"""
+        phone_12, phone_10 = normalize_phone_number("19876543210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
+    
+    def test_phone_with_special_characters(self):
+        """Test normalization with special characters"""
+        phone_12, phone_10 = normalize_phone_number("(98) 765-43210")
+        self.assertEqual(phone_12, "919876543210")
+        self.assertEqual(phone_10, "9876543210")
+    
+    def test_invalid_phone(self):
+        """Test invalid phone number"""
+        phone_12, phone_10 = normalize_phone_number("12345")
+        self.assertIsNone(phone_12)
+        self.assertIsNone(phone_10)
+    
+    def test_empty_phone(self):
+        """Test empty phone number"""
+        phone_12, phone_10 = normalize_phone_number("")
+        self.assertIsNone(phone_12)
+        self.assertIsNone(phone_10)
+
+
+class TestFindExistingStudent(unittest.TestCase):
+    """Test finding existing student by phone and name"""
+    
+    @patch('frappe.db.sql')
+    def test_find_existing_student_found(self, mock_sql):
+        """Test finding an existing student"""
+        mock_sql.return_value = [
+            {"name": "ST00001", "phone": "919876543210", "name1": "John Doe"}
+        ]
+        
+        result = find_existing_student_by_phone_and_name("9876543210", "John Doe")
+        
+        self.assertIsNotNone(result)
+        self.assertEqual(result["name"], "ST00001")
+        self.assertEqual(result["name1"], "John Doe")
+    
+    @patch('frappe.db.sql')
+    def test_find_existing_student_not_found(self, mock_sql):
+        """Test when student is not found"""
+        mock_sql.return_value = []
+        
+        result = find_existing_student_by_phone_and_name("9876543210", "Jane Doe")
+        
+        self.assertIsNone(result)
+    
+    def test_find_student_invalid_phone(self):
+        """Test finding student with invalid phone"""
+        result = find_existing_student_by_phone_and_name("12345", "John Doe")
+        self.assertIsNone(result)
+    
+    def test_find_student_empty_params(self):
+        """Test finding student with empty parameters"""
+        result = find_existing_student_by_phone_and_name("", "")
+        self.assertIsNone(result)
+
+
+class TestValidateStudent(unittest.TestCase):
+    """Test student validation functionality"""
+    
+    @patch('tap_lms.backend_student_onboarding.find_existing_student_by_phone_and_name')
+    def test_validate_complete_student(self, mock_find):
+        """Test validation of student with all required fields"""
+        mock_find.return_value = None
+        
+        student = {
+            "student_name": "John Doe",
+            "phone": "9876543210",
+            "school": "SCH001",
+            "grade": "5",
+            "language": "English",
+            "batch": "BT001"
+        }
+        
+        validation = validate_student(student)
+        
+        self.assertEqual(validation, {})
+    
+    def test_validate_missing_fields(self):
+        """Test validation with missing required fields"""
+        student = {
+            "student_name": "John Doe",
+            "phone": "9876543210"
+        }
+        
+        validation = validate_student(student)
+        
+        self.assertIn("school", validation)
+        self.assertIn("grade", validation)
+        self.assertIn("language", validation)
+        self.assertIn("batch", validation)
+        self.assertEqual(validation["school"], "missing")
+    
+    @patch('tap_lms.backend_student_onboarding.find_existing_student_by_phone_and_name')
+    def test_validate_duplicate_student(self, mock_find):
+        """Test validation detecting duplicate student"""
+        mock_find.return_value = {
+            "name": "ST00001",
+            "name1": "John Doe"
+        }
+        
+        student = {
+            "student_name": "John Doe",
+            "phone": "9876543210",
+            "school": "SCH001",
+            "grade": "5",
+            "language": "English",
+            "batch": "BT001"
+        }
+        
+        validation = validate_student(student)
+        
+        self.assertIn("duplicate", validation)
+        self.assertEqual(validation["duplicate"]["student_id"], "ST00001")
+
+
+class TestDetermineStudentType(unittest.TestCase):
+    """Test student type determination (New/Old)"""
+    
+    @patch('frappe.db.sql')
+    def test_new_student_no_existing_record(self, mock_sql):
+        """Test new student when no existing record found"""
+        mock_sql.return_value = []
+        
+        result = determine_student_type_backend("9876543210", "John Doe", "Mathematics")
+        
+        self.assertEqual(result, "New")
+    
+    @patch('frappe.db.sql')
+    @patch('frappe.db.exists')
+    def test_old_student_same_vertical(self, mock_exists, mock_sql):
+        """Test old student with enrollment in same vertical"""
+        # First call: find student
+        # Second call: get enrollments
+        # Third call: get course vertical
+        mock_sql.side_effect = [
+            [{"name": "ST00001", "phone": "919876543210", "name1": "John Doe"}],
+            [{"name": "EN001", "course": "CL001", "batch": "BT001", "grade": "5", "school": "SCH001"}],
+            [{"vertical_name": "Mathematics"}]
+        ]
+        mock_exists.return_value = True
+        
+        result = determine_student_type_backend("9876543210", "John Doe", "Mathematics")
+        
+        self.assertEqual(result, "Old")
+    
+    @patch('frappe.db.sql')
+    @patch('frappe.db.exists')
+    def test_new_student_different_vertical(self, mock_exists, mock_sql):
+        """Test new student with enrollment only in different vertical"""
+        mock_sql.side_effect = [
+            [{"name": "ST00001", "phone": "919876543210", "name1": "John Doe"}],
+            [{"name": "EN001", "course": "CL001", "batch": "BT001", "grade": "5", "school": "SCH001"}],
+            [{"vertical_name": "Science"}]
+        ]
+        mock_exists.return_value = True
+        
+        result = determine_student_type_backend("9876543210", "John Doe", "Mathematics")
+        
+        self.assertEqual(result, "New")
+    
+    @patch('frappe.db.sql')
+    @patch('frappe.db.exists')
+    def test_old_student_broken_course_link(self, mock_exists, mock_sql):
+        """Test old student with broken course link"""
+        mock_sql.side_effect = [
+            [{"name": "ST00001", "phone": "919876543210", "name1": "John Doe"}],
+            [{"name": "EN001", "course": "CL999", "batch": "BT001", "grade": "5", "school": "SCH001"}]
+        ]
+        mock_exists.return_value = False  # Course doesn't exist
+        
+        result = determine_student_type_backend("9876543210", "John Doe", "Mathematics")
+        
+        self.assertEqual(result, "Old")
+
+
+class TestGetCurrentAcademicYear(unittest.TestCase):
+    """Test academic year calculation"""
+    
+    @patch('frappe.utils.getdate')
+    def test_academic_year_after_april(self, mock_getdate):
+        """Test academic year calculation for months after April"""
+        from datetime import date
+        mock_getdate.return_value = date(2025, 5, 15)  # May 2025
+        
+        result = get_current_academic_year_backend()
+        
+        self.assertEqual(result, "2025-26")
+    
+    @patch('frappe.utils.getdate')
+    def test_academic_year_before_april(self, mock_getdate):
+        """Test academic year calculation for months before April"""
+        from datetime import date
+        mock_getdate.return_value = date(2025, 2, 15)  # February 2025
+        
+        result = get_current_academic_year_backend()
+        
+        self.assertEqual(result, "2024-25")
+    
+    @patch('frappe.utils.getdate')
+    def test_academic_year_in_april(self, mock_getdate):
+        """Test academic year calculation for April"""
+        from datetime import date
+        mock_getdate.return_value = date(2025, 4, 1)  # April 1, 2025
+        
+        result = get_current_academic_year_backend()
+        
+        self.assertEqual(result, "2025-26")
+
+
+class TestProcessGlificContact(unittest.TestCase):
+    """Test Glific contact processing"""
+    
+    @patch('tap_lms.backend_student_onboarding.get_contact_by_phone')
+    @patch('tap_lms.backend_student_onboarding.add_student_to_glific_for_onboarding')
+    @patch('frappe.get_value')
+    def test_create_new_glific_contact(self, mock_get_value, mock_add_student, mock_get_contact):
+        """Test creating new Glific contact"""
+        mock_get_contact.return_value = None  # No existing contact
+        mock_add_student.return_value = {"id": "12345"}
+        mock_get_value.side_effect = ["Test School", "BT001", "1", "Test Level", "Mathematics"]
+        
+        student = MagicMock()
+        student.student_name = "John Doe"
+        student.phone = "9876543210"
+        student.school = "SCH001"
+        student.batch = "BT001"
+        student.language = "English"
+        student.course_vertical = "CV001"
+        student.grade = "5"
+        
+        glific_group = {"group_id": "GRP001"}
+        
+        result = process_glific_contact(student, glific_group, "CL001")
+        
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "12345")
+        mock_add_student.assert_called_once()
+    
+    @patch('tap_lms.backend_student_onboarding.get_contact_by_phone')
+    @patch('tap_lms.glific_integration.add_contact_to_group')
+    @patch('tap_lms.glific_integration.update_contact_fields')
+    @patch('frappe.get_value')
+    def test_update_existing_glific_contact(self, mock_get_value, mock_update, mock_add_group, mock_get_contact):
+        """Test updating existing Glific contact"""
+        mock_get_contact.return_value = {"id": "12345"}
+        mock_get_value.side_effect = ["Test School", "BT001", "Test Level", "Mathematics"]
+        
+        student = MagicMock()
+        student.student_name = "John Doe"
+        student.phone = "9876543210"
+        student.school = "SCH001"
+        student.batch = "BT001"
+        student.language = "English"
+        student.course_vertical = "CV001"
+        student.grade = "5"
+        
+        glific_group = {"group_id": "GRP001"}
+        
+        result = process_glific_contact(student, glific_group, "CL001")
+        
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "12345")
+        mock_add_group.assert_called_once_with("12345", "GRP001")
+        mock_update.assert_called_once()
+
+
+class TestProcessBatch(unittest.TestCase):
+    """Test batch processing functionality"""
+    
+    @patch('frappe.get_doc')
+    @patch('frappe.enqueue')
+    def test_process_batch_with_background_job(self, mock_enqueue, mock_get_doc):
+        """Test processing batch with background job"""
+        mock_batch = MagicMock()
+        mock_batch.status = "Draft"
+        mock_get_doc.return_value = mock_batch
+        
+        mock_job = MagicMock()
+        mock_job.id = "JOB123"
+        mock_enqueue.return_value = mock_job
+        
+        result = process_batch("BSO001", use_background_job=True)
+        
+        self.assertEqual(result["job_id"], "JOB123")
+        self.assertEqual(mock_batch.status, "Processing")
+        mock_batch.save.assert_called_once()
+        mock_enqueue.assert_called_once()
+    
+    @patch('frappe.get_doc')
+    @patch('tap_lms.backend_student_onboarding.process_batch_job')
+    def test_process_batch_immediate(self, mock_process_job, mock_get_doc):
+        """Test immediate batch processing"""
+        mock_batch = MagicMock()
+        mock_batch.status = "Draft"
+        mock_get_doc.return_value = mock_batch
+        
+        mock_process_job.return_value = {
+            "success_count": 5,
+            "failure_count": 0,
+            "results": {"success": [], "failed": []}
+        }
+        
+        result = process_batch("BSO001", use_background_job=False)
+        
+        self.assertEqual(result["success_count"], 5)
+        self.assertEqual(mock_batch.status, "Processing")
+        mock_process_job.assert_called_once_with("BSO001")
+
+
+class TestUpdateBackendStudentStatus(unittest.TestCase):
+    """Test backend student status update"""
+    
+    def test_update_success_status(self):
+        """Test updating student status to success"""
+        student = MagicMock()
+        student_doc = MagicMock()
+        student_doc.name = "ST00001"
+        student_doc.glific_id = "12345"
+        
+        update_backend_student_status(student, "Success", student_doc)
+        
+        self.assertEqual(student.processing_status, "Success")
+        self.assertEqual(student.student_id, "ST00001")
+        student.save.assert_called_once()
+    
+    def test_update_failed_status_with_error(self):
+        """Test updating student status to failed with error message"""
+        student = MagicMock()
+        student.processing_notes = ""
+        
+        error_msg = "Test error message"
+        update_backend_student_status(student, "Failed", error=error_msg)
+        
+        self.assertEqual(student.processing_status, "Failed")
+        self.assertEqual(student.processing_notes, error_msg)
+        student.save.assert_called_once()
+
+
+class TestValidateEnrollmentData(unittest.TestCase):
+    """Test enrollment data validation"""
+    
+    @patch('frappe.db.sql')
+    @patch('frappe.db.exists')
+    def test_validate_valid_enrollments(self, mock_exists, mock_sql):
+        """Test validation of valid enrollments"""
+        mock_sql.return_value = [
+            {
+                "student_id": "ST00001",
+                "enrollment_id": "EN001",
+                "course": "CL001",
+                "batch": "BT001",
+                "grade": "5"
+            }
+        ]
+        mock_exists.return_value = True
+        
+        result = validate_enrollment_data("John Doe", "9876543210")
+        
+        self.assertEqual(result["total_enrollments"], 1)
+        self.assertEqual(result["valid_enrollments"], 1)
+        self.assertEqual(result["broken_enrollments"], 0)
+    
+    @patch('frappe.db.sql')
+    @patch('frappe.db.exists')
+    def test_validate_broken_enrollments(self, mock_exists, mock_sql):
+        """Test validation detecting broken course links"""
+        mock_sql.return_value = [
+            {
+                "student_id": "ST00001",
+                "enrollment_id": "EN001",
+                "course": "CL999",
+                "batch": "BT001",
+                "grade": "5"
+            }
+        ]
+        mock_exists.return_value = False
+        
+        result = validate_enrollment_data("John Doe", "9876543210")
+        
+        self.assertEqual(result["total_enrollments"], 1)
+        self.assertEqual(result["valid_enrollments"], 0)
+        self.assertEqual(result["broken_enrollments"], 1)
+        self.assertEqual(len(result["broken_details"]), 1)
+
+
+class TestGetInitialStage(unittest.TestCase):
+    """Test getting initial onboarding stage"""
+    
+    @patch('frappe.get_all')
+    def test_get_initial_stage_with_order_zero(self, mock_get_all):
+        """Test getting stage with order=0"""
+        mock_get_all.return_value = [{"name": "Stage1"}]
+        
+        result = get_initial_stage()
+        
+        self.assertEqual(result, "Stage1")
+        mock_get_all.assert_called_once_with(
+            "OnboardingStage",
+            filters={"order": 0},
+            fields=["name"]
+        )
+    
+    @patch('frappe.get_all')
+    def test_get_initial_stage_fallback(self, mock_get_all):
+        """Test getting stage with minimum order when no order=0"""
+        mock_get_all.side_effect = [
+            [],  # No stage with order=0
+            [{"name": "Stage2", "order": 1}]  # Stage with minimum order
+        ]
+        
+        result = get_initial_stage()
+        
+        self.assertEqual(result, "Stage2")
+        self.assertEqual(mock_get_all.call_count, 2)
+
+
+if __name__ == '__main__':
+    unittest.main()
