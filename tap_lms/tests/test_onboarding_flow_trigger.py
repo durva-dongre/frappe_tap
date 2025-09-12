@@ -441,35 +441,35 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         self.assertEqual(result["group_count"], 1)
         mock_update_batch.assert_called_once()
 
-    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
-    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.start_contact_flow')
-    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_students_from_onboarding')
-    # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_student_stage_progress')
-    # def test_trigger_individual_flows_success(self, mock_update_progress, mock_get_students, mock_start_flow, mock_frappe):
-    #     """Test successful individual flows trigger"""
-    #     mock_onboarding = MagicMock()
-    #     mock_stage = MagicMock()
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.start_contact_flow')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_students_from_onboarding')
+    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_student_stage_progress')
+    def test_trigger_individual_flows_success(self, mock_update_progress, mock_get_students, mock_start_flow, mock_frappe):
+        """Test successful individual flows trigger"""
+        mock_onboarding = MagicMock()
+        mock_stage = MagicMock()
         
-    #     mock_student1 = MagicMock()
-    #     mock_student1.name = "STUD_001"
-    #     mock_student1.glific_id = "contact_001"
+        mock_student1 = MagicMock()
+        mock_student1.name = "STUD_001"
+        mock_student1.glific_id = "contact_001"
         
-    #     mock_student2 = MagicMock()
-    #     mock_student2.name = "STUD_002"
-    #     mock_student2.glific_id = "contact_002"
+        mock_student2 = MagicMock()
+        mock_student2.name = "STUD_002"
+        mock_student2.glific_id = "contact_002"
         
-    #     mock_get_students.return_value = [mock_student1, mock_student2]
-    #     mock_start_flow.return_value = {"success": True}
-    #     mock_frappe.logger.return_value = MagicMock()
+        mock_get_students.return_value = [mock_student1, mock_student2]
+        mock_start_flow.return_value = {"success": True}
+        mock_frappe.logger.return_value = MagicMock()
         
-    #     result = self.trigger_individual_flows(
-    #         mock_onboarding, mock_stage, "Bearer token", 
-    #         self.mock_student_status, self.mock_flow_id
-    #     )
+        result = self.trigger_individual_flows(
+            mock_onboarding, mock_stage, "Bearer token", 
+            self.mock_student_status, self.mock_flow_id
+        )
         
-    #     self.assertEqual(result["individual_count"], 2)
-    #     self.assertEqual(mock_update_progress.call_count, 2)
-    #     self.assertEqual(mock_start_flow.call_count, 2)
+        self.assertEqual(result["individual_count"], 2)
+        self.assertEqual(mock_update_progress.call_count, 2)
+        self.assertEqual(mock_start_flow.call_count, 2)
 
     # @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     # def test_get_stage_flow_statuses_success(self, mock_frappe):
