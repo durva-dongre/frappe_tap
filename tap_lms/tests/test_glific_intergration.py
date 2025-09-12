@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 import json
 
 # Add the parent directory to Python path for imports
-current_dir = os.path.dirname(os.path.abspath(_file_))
+current_dir = os.path.dirname(os.path.abspath(__file__))  # Fixed: Changed _file_ to __file__
 parent_dir = os.path.dirname(current_dir)  # This goes from tests/ to tap_lms/
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
@@ -743,5 +743,5 @@ def test_function_signatures():
             pytest.skip("Could not import module: " + str(e))
 
 
-# if _name_ == "_main_":
-#     pytest.main([_file_, "-v"])
+# if __name__ == "__main__":  # Fixed: Changed _name_ to __name__ and _main_ to __main__
+#     pytest.main([__file__, "-v"])  # Fixed: Changed _file_ to __file__
