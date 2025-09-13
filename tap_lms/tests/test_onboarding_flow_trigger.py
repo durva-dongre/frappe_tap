@@ -1334,4 +1334,3 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         
         self.assertIn("error", result)
         mock_frappe.log_error.assert_called_once()
-
