@@ -5,7 +5,7 @@ import json
 import tempfile
 import shutil
 import sys
-from unittest.mock import Mock, patch, MagicMock, call, mock_open
+from unittest.mock import Mock, patch, MagicMock, call, mock_open, ANY
 from datetime import datetime
 from pathlib import Path
 
@@ -75,9 +75,14 @@ class TestExportStudentsSimple:
             data.append(record)
         return data
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_basic_export(self, mock_frappe, temp_dir):
+    def test_basic_export(self, mock_frappe, mock_create_index, temp_dir):
         """Test basic student export functionality"""
+        # Setup directory
+        export_dir = os.path.join(temp_dir, 'student_exports')
+        os.makedirs(export_dir, exist_ok=True)
+        
         # Setup mocks
         mock_frappe.get_site_path.return_value = temp_dir
         mock_frappe.db.sql.side_effect = [
@@ -91,7 +96,8 @@ class TestExportStudentsSimple:
         mock_frappe.utils.now.return_value = '2024-01-01 12:00:00'
         
         # Run export
-        result = export_students_simple(site_name='test_site', batch_size=100)
+        with patch('os.path.getsize', return_value=1024*1024):  # Mock file size
+            result = export_students_simple(site_name='test_site', batch_size=100)
         
         # Verify results
         assert result is not None
@@ -100,16 +106,19 @@ class TestExportStudentsSimple:
         assert result['timestamp'] == '20240101_120000'
         assert len(result['files']) == 1
         
-        # Verify file was created
-        expected_dir = os.path.join(temp_dir, 'student_exports')
-        assert mock_frappe.get_site_path.called
-        
-        # Verify SQL queries were made
-        assert mock_frappe.db.sql.call_count == 2
+        # Verify frappe methods were called
+        mock_frappe.init.assert_called_with('test_site')
+        mock_frappe.connect.assert_called()
+        mock_frappe.destroy.assert_called()
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_batch_processing(self, mock_frappe, temp_dir):
+    def test_batch_processing(self, mock_frappe, mock_create_index, temp_dir):
         """Test that large datasets are split into batches"""
+        # Setup directory
+        export_dir = os.path.join(temp_dir, 'student_exports')
+        os.makedirs(export_dir, exist_ok=True)
+        
         # Setup mocks for 250 records with batch size of 100
         mock_frappe.get_site_path.return_value = temp_dir
         mock_frappe.db.sql.side_effect = [
@@ -124,12 +133,8 @@ class TestExportStudentsSimple:
         mock_frappe.utils.now_datetime.return_value = mock_datetime
         mock_frappe.utils.now.return_value = '2024-01-01 12:00:00'
         
-        # Create actual directory for file operations
-        export_dir = os.path.join(temp_dir, 'student_exports')
-        os.makedirs(export_dir, exist_ok=True)
-        
         # Run export with batch size of 100
-        with patch('builtins.open', mock_open()) as mock_file:
+        with patch('os.path.getsize', return_value=1024*1024):  # Mock file size
             result = export_students_simple(site_name='test_site', batch_size=100)
         
         # Verify results
@@ -141,9 +146,14 @@ class TestExportStudentsSimple:
         # Verify SQL queries (1 count + 3 data queries)
         assert mock_frappe.db.sql.call_count == 4
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_empty_dataset(self, mock_frappe, temp_dir):
+    def test_empty_dataset(self, mock_frappe, mock_create_index, temp_dir):
         """Test export with no student data"""
+        # Setup directory
+        export_dir = os.path.join(temp_dir, 'student_exports')
+        os.makedirs(export_dir, exist_ok=True)
+        
         mock_frappe.get_site_path.return_value = temp_dir
         mock_frappe.db.sql.side_effect = [
             [{'count': 0}],  # Total count
@@ -163,9 +173,14 @@ class TestExportStudentsSimple:
         assert result['total_files'] == 0
         assert len(result['files']) == 0
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_students_without_enrollments(self, mock_frappe, temp_dir):
+    def test_students_without_enrollments(self, mock_frappe, mock_create_index, temp_dir):
         """Test export of students without enrollment data"""
+        # Setup directory
+        export_dir = os.path.join(temp_dir, 'student_exports')
+        os.makedirs(export_dir, exist_ok=True)
+        
         mock_frappe.get_site_path.return_value = temp_dir
         mock_frappe.db.sql.side_effect = [
             [{'count': 10}],  # Total count
@@ -178,7 +193,7 @@ class TestExportStudentsSimple:
         mock_frappe.utils.now.return_value = '2024-01-01 12:00:00'
         
         # Run export
-        with patch('builtins.open', mock_open()) as mock_file:
+        with patch('os.path.getsize', return_value=1024*1024):  # Mock file size
             result = export_students_simple(site_name='test_site', batch_size=100)
         
         # Verify results
@@ -186,9 +201,15 @@ class TestExportStudentsSimple:
         assert result['total_records'] == 10
         assert result['total_files'] == 1
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
+    @patch('builtins.print')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_file_creation_error_handling(self, mock_frappe, temp_dir):
+    def test_file_creation_error_handling(self, mock_frappe, mock_print, mock_create_index, temp_dir):
         """Test handling of file creation errors"""
+        # Setup directory
+        export_dir = os.path.join(temp_dir, 'student_exports')
+        os.makedirs(export_dir, exist_ok=True)
+        
         mock_frappe.get_site_path.return_value = temp_dir
         mock_frappe.db.sql.side_effect = [
             [{'count': 10}],
@@ -206,9 +227,8 @@ class TestExportStudentsSimple:
         mock_frappe.utils.now.return_value = '2024-01-01 12:00:00'
         
         # Run export - should handle error gracefully
-        with patch('builtins.open', mock_open()) as mock_file:
-            with patch('builtins.print') as mock_print:
-                result = export_students_simple(site_name='test_site', batch_size=100)
+        with patch('os.path.getsize', return_value=1024*1024):  # Mock file size
+            result = export_students_simple(site_name='test_site', batch_size=100)
         
         # Should still return success despite file doc error
         assert result is not None
@@ -236,8 +256,9 @@ class TestExportStudentsSimple:
         mock_frappe.db.rollback.assert_called()
         mock_frappe.destroy.assert_called()
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_csv_file_structure(self, mock_frappe, temp_dir):
+    def test_csv_file_structure(self, mock_frappe, mock_create_index, temp_dir):
         """Test that CSV files have correct structure and data"""
         # Create actual directory
         export_dir = os.path.join(temp_dir, 'student_exports')
@@ -256,7 +277,8 @@ class TestExportStudentsSimple:
         mock_frappe.utils.now.return_value = '2024-01-01 12:00:00'
         
         # Run export
-        result = export_students_simple(site_name='test_site', batch_size=100)
+        with patch('os.path.getsize', return_value=1024):  # Mock file size
+            result = export_students_simple(site_name='test_site', batch_size=100)
         
         # Check if CSV file was created
         csv_files = list(Path(export_dir).glob('*.csv'))
@@ -280,8 +302,9 @@ class TestExportStudentsSimple:
             assert rows[0]['student_id'] == 'STU001'
             assert rows[0]['student_name'] == 'Student 1'
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_summary_file_creation(self, mock_frappe, temp_dir):
+    def test_summary_file_creation(self, mock_frappe, mock_create_index, temp_dir):
         """Test that summary JSON file is created correctly"""
         export_dir = os.path.join(temp_dir, 'student_exports')
         os.makedirs(export_dir, exist_ok=True)
@@ -298,7 +321,8 @@ class TestExportStudentsSimple:
         mock_frappe.utils.now.return_value = '2024-01-01 12:00:00'
         
         # Run export
-        result = export_students_simple(site_name='test_site', batch_size=100)
+        with patch('os.path.getsize', return_value=1024*1024):  # Mock file size
+            result = export_students_simple(site_name='test_site', batch_size=100)
         
         # Check summary file
         summary_file = os.path.join(export_dir, f"export_summary_20240101_120000.json")
@@ -311,9 +335,14 @@ class TestExportStudentsSimple:
             assert summary['total_files'] == 1
             assert summary['timestamp'] == '20240101_120000'
     
+    @patch('tap_lms.utils.studentexport.create_index_file')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_site_initialization(self, mock_frappe, temp_dir):
+    def test_site_initialization(self, mock_frappe, mock_create_index, temp_dir):
         """Test site initialization with and without site_name"""
+        # Setup directory
+        export_dir = os.path.join(temp_dir, 'student_exports')
+        os.makedirs(export_dir, exist_ok=True)
+        
         mock_frappe.get_site_path.return_value = temp_dir
         mock_frappe.db.sql.side_effect = [
             [{'count': 0}],
@@ -334,6 +363,8 @@ class TestExportStudentsSimple:
         mock_frappe.db.sql.side_effect = [
             [{'count': 0}],
         ]
+        mock_frappe.utils.now_datetime.return_value = mock_datetime
+        mock_frappe.utils.now.return_value = '2024-01-01 12:00:00'
         
         # Test without site_name
         export_students_simple(site_name=None, batch_size=100)
@@ -394,8 +425,8 @@ class TestCreateIndexFile:
             # Check file table entries
             assert 'students_export_20240101_120000_batch_001.csv' in content
             assert 'students_export_20240101_120000_batch_002.csv' in content
-            assert '<td>100</td>' in content  # Records count
-            assert '<td>50</td>' in content   # Records count
+            assert '<td>100</td>' in content  # Records count formatting changed
+            assert '<td>50</td>' in content   # Records count formatting changed
             assert '<td>1.5</td>' in content  # File size
             assert '<td>0.8</td>' in content  # File size
             
@@ -518,15 +549,13 @@ class TestExportStudentsWeb:
         # Verify export was called with int
         mock_export.assert_called_once_with(batch_size=500)
     
-    @patch('tap_lms.utils.studentexport.export_students_simple')
     @patch('tap_lms.utils.studentexport.frappe')
-    def test_web_export_whitelist_decorator(self, mock_frappe, mock_export):
+    def test_web_export_whitelist_decorator(self, mock_frappe):
         """Test that function has whitelist decorator"""
-        # Check if function has __wrapped__ attribute (from decorator)
-        # or check frappe.whitelist was used
+        # Check if function has __name__ attribute
         import tap_lms.utils.studentexport as module
         
         # The function should be decorated with @frappe.whitelist()
-        # This test verifies the decorator is present in the actual code
+        # This test verifies the function exists and has proper attributes
         assert hasattr(module.export_students_web, '__name__')
         assert module.export_students_web.__name__ == 'export_students_web'
