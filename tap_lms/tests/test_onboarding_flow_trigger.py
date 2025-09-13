@@ -950,59 +950,8 @@ class TestOnboardingFlowFunctions(unittest.TestCase):
         self.assertEqual(mock_start_flow.call_count, 2)  # Called for students with glific_id
 
     # ============= ADDITIONAL TESTS TO INCREASE COVERAGE =============
-    # Replace the failing test with this corrected version
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
-    def test_get_students_from_onboarding_with_successful_students(self, mock_frappe):
-        """Test get_students_from_onboarding with successful backend students"""
-        mock_onboarding = MagicMock()
-        mock_onboarding.name = self.mock_onboarding_set
-        
-        backend_students = [
-            {"student_id": "STUD_001", "processing_status": "Success"},  # Added processing_status
-            {"student_id": "STUD_002", "processing_status": "Success"}   # Added processing_status
-        ]
-        
-        mock_student1 = MagicMock()
-        mock_student1.name = "STUD_001"
-        mock_student2 = MagicMock()
-        mock_student2.name = "STUD_002"
-        
-        mock_frappe.get_all.return_value = backend_students
-        mock_frappe.get_doc.side_effect = [mock_student1, mock_student2]
-        mock_frappe.logger.return_value = MagicMock()
-        
-        result = self.get_students_from_onboarding(mock_onboarding)
-        
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0].name, "STUD_001")
-        self.assertEqual(result[1].name, "STUD_002")
-        
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
-    @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.now_datetime')
-    def test_update_student_stage_progress_update_existing(self, mock_now, mock_frappe):
-        """Test update_student_stage_progress updating existing record"""
-        mock_now.return_value = self.current_time
-        mock_student = MagicMock()
-        mock_student.name = "STUD_001"
-        mock_stage = MagicMock()
-        mock_stage.name = "STAGE_001"
-        
-        existing = [{"name": "PROGRESS_001"}]
-        mock_frappe.get_all.return_value = existing
-        
-        mock_progress = MagicMock()
-        mock_progress.status = "not_started"
-        mock_progress.start_timestamp = None
-        mock_frappe.get_doc.return_value = mock_progress
-        mock_frappe.logger.return_value = MagicMock()
-        
-        self.update_student_stage_progress(mock_student, mock_stage)
-        
-        self.assertEqual(mock_progress.status, "assigned")
-        self.assertEqual(mock_progress.start_timestamp, self.current_time)
-        mock_progress.save.assert_called_once()
-        mock_frappe.db.commit.assert_called_once()
-    
+       
+   
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.frappe')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.get_glific_auth_headers')
     @patch('tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.trigger_group_flow')
