@@ -23,6 +23,9 @@ def import_backend_module():
     mock_frappe.utils.now = MagicMock(return_value="2025-01-01 10:00:00")
     mock_frappe.utils.getdate = MagicMock()
     
+    # Mock the whitelist decorator to return function unchanged
+    mock_frappe.whitelist.return_value = lambda func: func
+    
     sys.modules['frappe'] = mock_frappe
     sys.modules['frappe.utils'] = mock_frappe.utils
     sys.modules['tap_lms.glific_integration'] = MagicMock()
@@ -143,6 +146,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
                     "processed_student_count": 0
                 }
             ]
+            # Mock whitelist decorator
+            mock_frappe.whitelist.return_value = lambda func: func
 
             result = self.backend_module.get_onboarding_batches()
 
@@ -164,6 +169,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
                     [{"name": "BS_001", "student_name": "Test Student", "phone": "9876543210"}],
                     []  # No glific group
                 ]
+                # Mock whitelist decorator
+                mock_frappe.whitelist.return_value = lambda func: func
 
                 result = self.backend_module.get_batch_details("BSO_001")
 
@@ -205,6 +212,7 @@ class TestBackendOnboardingProcess(unittest.TestCase):
         }
 
         with patch.object(self.backend_module, 'find_existing_student_by_phone_and_name') as mock_find:
+            # Return dictionary instead of object to match the fixed validate_student function
             mock_find.return_value = {
                 "name": "STUD_001",
                 "name1": "Test Student"
@@ -232,7 +240,7 @@ class TestBackendOnboardingProcess(unittest.TestCase):
     def test_determine_student_type_backend_old_student_same_vertical(self):
         """Test determine_student_type_backend for old student with same vertical"""
         with patch.object(self.backend_module, 'frappe') as mock_frappe:
-            # Mock existing student
+            # Mock existing student with same vertical enrollment
             mock_frappe.db.sql.side_effect = [
                 [{"name": "STUD_001", "phone": "919876543210", "name1": "Test Student"}],  # Student found
                 [{"name": "ENR_001", "course": "MATH_L5", "batch": "BT001", "grade": "5", "school": "SCH001"}],  # Enrollments
@@ -252,8 +260,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
         with patch.object(self.backend_module, 'frappe') as mock_frappe:
             # Mock existing student with broken course
             mock_frappe.db.sql.side_effect = [
-                [{"name": "STUD_001", "phone": "919876543210", "name1": "Test Student"}],
-                [{"name": "ENR_001", "course": "BROKEN_COURSE", "batch": "BT001", "grade": "5", "school": "SCH001"}]
+                [{"name": "STUD_001", "phone": "919876543210", "name1": "Test Student"}],  # Student found
+                [{"name": "ENR_001", "course": "BROKEN_COURSE", "batch": "BT001", "grade": "5", "school": "SCH001"}]  # Broken enrollment
             ]
             mock_frappe.db.exists.return_value = False  # Broken course
             mock_frappe.log_error = MagicMock()
@@ -269,8 +277,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
         with patch.object(self.backend_module, 'frappe') as mock_frappe:
             # Mock existing student with different vertical
             mock_frappe.db.sql.side_effect = [
-                [{"name": "STUD_001", "phone": "919876543210", "name1": "Test Student"}],
-                [{"name": "ENR_001", "course": "ENG_L5", "batch": "BT001", "grade": "5", "school": "SCH001"}],
+                [{"name": "STUD_001", "phone": "919876543210", "name1": "Test Student"}],  # Student found
+                [{"name": "ENR_001", "course": "ENG_L5", "batch": "BT001", "grade": "5", "school": "SCH001"}],  # Different vertical enrollment
                 [{"vertical_name": "English"}]  # Different vertical
             ]
             mock_frappe.db.exists.return_value = True
@@ -303,6 +311,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
             mock_job = MagicMock()
             mock_job.id = "job_123"
             mock_frappe.enqueue.return_value = mock_job
+            # Mock whitelist decorator
+            mock_frappe.whitelist.return_value = lambda func: func
 
             result = self.backend_module.process_batch("BSO_001", use_background_job=True)
 
@@ -316,6 +326,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
             with patch.object(self.backend_module, 'process_batch_job', return_value={"success_count": 5, "failure_count": 0}) as mock_process_job:
                 mock_batch = MagicMock()
                 mock_frappe.get_doc.return_value = mock_batch
+                # Mock whitelist decorator
+                mock_frappe.whitelist.return_value = lambda func: func
 
                 result = self.backend_module.process_batch("BSO_001", use_background_job=False)
 
@@ -361,6 +373,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
                         {"assigned_course_level": "MATH_L5", "mapping_name": "Math Grade 5 New"}
                     ]
                     mock_frappe.log_error = MagicMock()
+                    # Mock whitelist decorator
+                    mock_frappe.whitelist.return_value = lambda func: func
 
                     result = self.backend_module.get_course_level_with_mapping_backend(
                         "Math", "5", "9876543210", "Test Student", False
@@ -446,6 +460,9 @@ class TestBackendOnboardingProcess(unittest.TestCase):
                     mock_job.result = {"success": True}
                     mock_job.meta = {"progress": 100}
                     mock_job_class.fetch.return_value = mock_job
+                    
+                    # Mock whitelist decorator
+                    mock_frappe.whitelist.return_value = lambda func: func
 
                     result = self.backend_module.get_job_status("job_123")
 
@@ -461,6 +478,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
                     mock_redis.return_value = mock_conn
                     mock_job_class.fetch.side_effect = Exception("Job not found")
                     mock_frappe.logger.return_value = MagicMock()
+                    # Mock whitelist decorator
+                    mock_frappe.whitelist.return_value = lambda func: func
 
                     result = self.backend_module.get_job_status("invalid_job")
 
@@ -517,6 +536,8 @@ class TestBackendOnboardingProcess(unittest.TestCase):
         with patch.object(self.backend_module, 'frappe') as mock_frappe:
             with patch.object(self.backend_module, 'determine_student_type_backend', return_value="New") as mock_determine:
                 mock_frappe.db.sql.return_value = []  # No existing student
+                # Mock whitelist decorator
+                mock_frappe.whitelist.return_value = lambda func: func
                 
                 result = self.backend_module.debug_student_type_analysis(
                     "Test Student", "9876543210", "Math"
@@ -532,17 +553,9 @@ class TestBackendOnboardingProcess(unittest.TestCase):
             mock_frappe.get_all.return_value = [{"name": "STUD_001"}]
             mock_frappe.db.sql.return_value = []  # No broken enrollments
             mock_frappe.db.commit = MagicMock()
+            # Mock whitelist decorator
+            mock_frappe.whitelist.return_value = lambda func: func
             
             result = self.backend_module.fix_broken_course_links()
             
             self.assertIn("No broken course links found", result)
-
-# if __name__ == '__main__':
-#     # First verify the file exists
-#     file_path = "/home/frappe/frappe-bench/apps/tap_lms/tap_lms/tap_lms/page/backend_onboarding_process/backend_onboarding_process.py"
-#     if not os.path.exists(file_path):
-#         print(f"ERROR: File not found at {file_path}")
-#         print("Please check the file path and update it in the test.")
-#         sys.exit(1)
-    
-#     unittest.main(verbosity=2)
