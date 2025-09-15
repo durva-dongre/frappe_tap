@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Mock frappe module before importing the module under test
 sys.modules['frappe'] = MagicMock()
 sys.modules['frappe.utils.background_jobs'] = MagicMock()
+sys.modules['requests'] = MagicMock()
 
 # Create mock for DoesNotExistError
 class DoesNotExistError(Exception):
@@ -28,8 +29,15 @@ frappe.get_doc = MagicMock()
 frappe.get_all = MagicMock()
 frappe.whitelist = MagicMock(return_value=lambda x: x)
 
+# Mock the glific_integration module dependencies
+sys.modules['tap_lms.glific_integration'] = MagicMock()
+
 # Import the module under test
 from tap_lms import glific_batch_id_update
+
+# Mock the imported functions from glific_integration
+glific_batch_id_update.get_glific_settings = MagicMock()
+glific_batch_id_update.get_glific_auth_headers = MagicMock()
 
 
 # ============= Fixtures =============
@@ -182,19 +190,17 @@ class TestUpdateSpecificSetContacts:
         assert "No successfully processed students" in result["message"]
     
     @patch('requests.post')
-    @patch('tap_lms.glific_batch_id_update.get_glific_auth_headers')
-    @patch('tap_lms.glific_batch_id_update.get_glific_settings')
-    @patch('tap_lms.glific_batch_id_update.get_student_batch_id')
     @patch('tap_lms.glific_batch_id_update.frappe.logger')
     @patch('tap_lms.glific_batch_id_update.frappe.db.exists')
     @patch('tap_lms.glific_batch_id_update.frappe.get_doc')
     @patch('tap_lms.glific_batch_id_update.frappe.get_all')
     def test_successfully_adds_batch_id_to_contact(self, mock_get_all, mock_get_doc, mock_exists,
-                                                   mock_logger, mock_get_batch_id, mock_settings,
-                                                   mock_headers, mock_requests, test_data,
+                                                   mock_logger, mock_requests, test_data,
                                                    mock_onboarding_set, mock_backend_student,
                                                    mock_student_doc, mock_glific_settings):
         """Test successful addition of batch_id to Glific contact"""
+        import requests
+        
         # Setup mocks
         mock_get_doc.side_effect = [mock_onboarding_set, mock_backend_student, mock_student_doc]
         mock_exists.return_value = True
@@ -207,9 +213,9 @@ class TestUpdateSpecificSetContacts:
             "batch_skeyword": "batch_key"
         }]
         
-        mock_settings.return_value = mock_glific_settings
-        mock_headers.return_value = {"Authorization": "Bearer token"}
-        mock_get_batch_id.return_value = test_data["batch_id"]
+        # Mock glific settings and headers
+        glific_batch_id_update.get_glific_settings.return_value = mock_glific_settings
+        glific_batch_id_update.get_glific_auth_headers.return_value = {"Authorization": "Bearer token"}
         
         # Mock Glific API responses
         fetch_response = Mock()
@@ -242,6 +248,7 @@ class TestUpdateSpecificSetContacts:
         }
         
         mock_requests.side_effect = [fetch_response, update_response]
+        requests.post = mock_requests
         
         result = glific_batch_id_update.update_specific_set_contacts_with_batch_id("ONBOARD_SET_001")
         
@@ -251,19 +258,17 @@ class TestUpdateSpecificSetContacts:
         assert result["total_processed"] == 1
     
     @patch('requests.post')
-    @patch('tap_lms.glific_batch_id_update.get_glific_auth_headers')
-    @patch('tap_lms.glific_batch_id_update.get_glific_settings')
-    @patch('tap_lms.glific_batch_id_update.get_student_batch_id')
     @patch('tap_lms.glific_batch_id_update.frappe.logger')
     @patch('tap_lms.glific_batch_id_update.frappe.db.exists')
     @patch('tap_lms.glific_batch_id_update.frappe.get_doc')
     @patch('tap_lms.glific_batch_id_update.frappe.get_all')
     def test_updates_existing_batch_id_field(self, mock_get_all, mock_get_doc, mock_exists,
-                                             mock_logger, mock_get_batch_id, mock_settings,
-                                             mock_headers, mock_requests, test_data,
+                                             mock_logger, mock_requests, test_data,
                                              mock_onboarding_set, mock_backend_student,
                                              mock_student_doc, mock_glific_settings):
         """Test updating existing batch_id field with new value"""
+        import requests
+        
         new_batch = "NEW_BATCH_2024"
         mock_backend_student.batch = new_batch
         
@@ -278,9 +283,9 @@ class TestUpdateSpecificSetContacts:
             "batch_skeyword": "batch_key"
         }]
         
-        mock_settings.return_value = mock_glific_settings
-        mock_headers.return_value = {"Authorization": "Bearer token"}
-        mock_get_batch_id.return_value = new_batch
+        # Mock glific settings and headers
+        glific_batch_id_update.get_glific_settings.return_value = mock_glific_settings
+        glific_batch_id_update.get_glific_auth_headers.return_value = {"Authorization": "Bearer token"}
         
         # Contact already has batch_id
         existing_fields = {
@@ -321,6 +326,7 @@ class TestUpdateSpecificSetContacts:
         }
         
         mock_requests.side_effect = [fetch_response, update_response]
+        requests.post = mock_requests
         
         result = glific_batch_id_update.update_specific_set_contacts_with_batch_id("ONBOARD_SET_001")
         
@@ -435,9 +441,13 @@ class TestProcessMultipleSets:
 class TestProcessMultipleSetsBackground:
     """Test cases for process_multiple_sets_batch_id_background function"""
     
-    @patch('tap_lms.glific_batch_id_update.enqueue')
+    @patch('frappe.utils.background_jobs.enqueue')
     def test_enqueues_job_with_list_input(self, mock_enqueue):
         """Test background job enqueueing with list input"""
+        # Re-import to get the enqueue function
+        from frappe.utils.background_jobs import enqueue
+        glific_batch_id_update.enqueue = enqueue
+        
         mock_job = MagicMock()
         mock_job.id = "JOB123"
         mock_enqueue.return_value = mock_job
@@ -455,9 +465,13 @@ class TestProcessMultipleSetsBackground:
         assert call_args[1]['queue'] == 'long'
         assert call_args[1]['timeout'] == 7200
     
-    @patch('tap_lms.glific_batch_id_update.enqueue')
+    @patch('frappe.utils.background_jobs.enqueue')
     def test_enqueues_job_with_string_input(self, mock_enqueue):
         """Test background job enqueueing with comma-separated string input"""
+        # Re-import to get the enqueue function
+        from frappe.utils.background_jobs import enqueue
+        glific_batch_id_update.enqueue = enqueue
+        
         mock_job = MagicMock()
         mock_job.id = "JOB456"
         mock_enqueue.return_value = mock_job
@@ -519,16 +533,15 @@ class TestIntegration:
     """Integration tests for complete workflows"""
     
     @patch('requests.post')
-    @patch('tap_lms.glific_batch_id_update.get_glific_auth_headers')
-    @patch('tap_lms.glific_batch_id_update.get_glific_settings')
     @patch('tap_lms.glific_batch_id_update.frappe.logger')
     @patch('tap_lms.glific_batch_id_update.frappe.db.exists')
     @patch('tap_lms.glific_batch_id_update.frappe.get_doc')
     @patch('tap_lms.glific_batch_id_update.frappe.get_all')
     def test_complete_batch_id_update_workflow(self, mock_get_all, mock_get_doc, mock_exists,
-                                               mock_logger, mock_settings, mock_headers,
-                                               mock_requests):
+                                               mock_logger, mock_requests):
         """Test complete batch_id update workflow with multiple students"""
+        import requests
+        
         # Setup mock onboarding set
         mock_set = MagicMock()
         mock_set.status = "Processed"
@@ -571,10 +584,10 @@ class TestIntegration:
         mock_exists.return_value = True
         
         # Mock Glific settings
-        mock_settings_obj = MagicMock()
-        mock_settings_obj.api_url = "https://api.glific.com"
-        mock_settings.return_value = mock_settings_obj
-        mock_headers.return_value = {"Authorization": "Bearer token"}
+        mock_settings = MagicMock()
+        mock_settings.api_url = "https://api.glific.com"
+        glific_batch_id_update.get_glific_settings.return_value = mock_settings
+        glific_batch_id_update.get_glific_auth_headers.return_value = {"Authorization": "Bearer token"}
         
         # Mock API responses
         api_responses = []
@@ -614,6 +627,7 @@ class TestIntegration:
                     api_responses.append(update_resp)
         
         mock_requests.side_effect = api_responses
+        requests.post = mock_requests
         
         # Execute
         result = glific_batch_id_update.update_specific_set_contacts_with_batch_id("Integration Test Set")
@@ -650,9 +664,13 @@ class TestPerformance:
         assert mock_update.call_count <= 21  # Initial call + 20 batch limit
         assert results[0]["status"] == "completed"
     
-    @patch('tap_lms.glific_batch_id_update.enqueue')
+    @patch('frappe.utils.background_jobs.enqueue')
     def test_background_job_uses_correct_timeout(self, mock_enqueue):
         """Test that background job is configured with proper timeout"""
+        # Re-import to get the enqueue function
+        from frappe.utils.background_jobs import enqueue
+        glific_batch_id_update.enqueue = enqueue
+        
         mock_job = MagicMock()
         mock_job.id = "TIMEOUT_TEST"
         mock_enqueue.return_value = mock_job
@@ -705,13 +723,12 @@ class TestEdgeCases:
         assert result["updated"] == 0
         mock_logger().warning.assert_called_once()
     
-    @patch('tap_lms.glific_batch_id_update.get_student_batch_id')
     @patch('tap_lms.glific_batch_id_update.frappe.logger')
     @patch('tap_lms.glific_batch_id_update.frappe.db.exists')
     @patch('tap_lms.glific_batch_id_update.frappe.get_doc')
     @patch('tap_lms.glific_batch_id_update.frappe.get_all')
     def test_skips_student_without_batch(self, mock_get_all, mock_get_doc,
-                                         mock_exists, mock_logger, mock_get_batch_id):
+                                         mock_exists, mock_logger):
         """Test skipping of student without batch"""
         mock_set = MagicMock()
         mock_set.status = "Processed"
@@ -726,7 +743,6 @@ class TestEdgeCases:
         
         mock_get_doc.side_effect = [mock_set, mock_backend_student, mock_student_doc]
         mock_exists.return_value = True
-        mock_get_batch_id.return_value = None  # No batch_id
         
         mock_get_all.return_value = [{
             "name": "BACKEND_STU_001",
@@ -736,6 +752,12 @@ class TestEdgeCases:
             "batch": None,
             "batch_skeyword": "key"
         }]
+        
+        # Mock glific settings and headers (needed when glific_id exists)
+        mock_settings = MagicMock()
+        mock_settings.api_url = "https://api.glific.com"
+        glific_batch_id_update.get_glific_settings.return_value = mock_settings
+        glific_batch_id_update.get_glific_auth_headers.return_value = {"Authorization": "Bearer token"}
         
         result = glific_batch_id_update.update_specific_set_contacts_with_batch_id("Test Set")
         
