@@ -7,8 +7,8 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "quiz_id",
   "question_name",
-  "question_number",
   "question_type",
   "options",
   "points",
@@ -28,7 +28,7 @@
    "fieldname": "options",
    "fieldtype": "Table",
    "label": "Options",
-   "options": "QuizOption"
+   "options": "QuizOptionList"
   },
   {
    "fieldname": "points",
@@ -39,11 +39,6 @@
    "fieldname": "correct_option",
    "fieldtype": "Int",
    "label": "Correct Option"
-  },
-  {
-   "fieldname": "question_number",
-   "fieldtype": "Int",
-   "label": "Question Number"
   },
   {
    "fieldname": "explanation",
@@ -65,18 +60,36 @@
    "fieldname": "question_name",
    "fieldtype": "Text Editor",
    "label": "Question"
+  },
+  {
+   "fieldname": "quiz_id",
+   "fieldtype": "Link",
+   "label": "Quiz",
+   "options": "Quiz"
   }
  ],
  "index_web_pages_for_search": 1,
- "istable": 1,
  "links": [],
- "modified": "2025-09-06 19:53:10.458408",
+ "modified": "2025-09-15 17:14:20.491383",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "QuizQuestion",
  "naming_rule": "Expression",
  "owner": "Administrator",
- "permissions": [],
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []

@@ -1,11 +1,12 @@
 {
  "actions": [],
- "autoname": "format:{option_number}",
+ "autoname": "format:{question_id}-{option_number}",
  "creation": "2024-10-17 16:27:27.927015",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "question_id",
   "option_text",
   "option_number",
   "option_translations"
@@ -28,18 +29,36 @@
    "fieldtype": "Table",
    "label": "Option Translations",
    "options": "QuizOptionTranslation"
+  },
+  {
+   "fieldname": "question_id",
+   "fieldtype": "Link",
+   "label": "Quiz Question",
+   "options": "QuizQuestion"
   }
  ],
  "index_web_pages_for_search": 1,
- "istable": 1,
  "links": [],
- "modified": "2025-09-09 23:32:42.908632",
+ "modified": "2025-09-15 17:04:20.928917",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "QuizOption",
  "naming_rule": "Expression",
  "owner": "Administrator",
- "permissions": [],
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []

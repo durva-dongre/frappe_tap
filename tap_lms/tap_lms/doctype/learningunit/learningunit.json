@@ -11,7 +11,7 @@
   "unit_name",
   "unit_type",
   "difficulty_tier",
-  "course_level",
+  "course_vertical",
   "parent_unit",
   "order",
   "content_items",
@@ -25,12 +25,6 @@
   "certificate_on_completion"
  ],
  "fields": [
-  {
-   "fieldname": "course_level",
-   "fieldtype": "Link",
-   "label": "Course Vertical",
-   "options": "Course Verticals"
-  },
   {
    "fieldname": "description",
    "fieldtype": "Text Editor",
@@ -117,11 +111,17 @@
    "fieldtype": "Table",
    "label": "Content Items",
    "options": "UnitContentItem"
+  },
+  {
+   "fieldname": "course_vertical",
+   "fieldtype": "Link",
+   "label": "Course Vertical",
+   "options": "Course Verticals"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-11 10:00:17.173177",
+ "modified": "2025-09-11 16:21:09.258790",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "LearningUnit",
