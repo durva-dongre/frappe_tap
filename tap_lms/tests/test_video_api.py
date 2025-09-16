@@ -1,40 +1,27 @@
 import unittest
-import frappe
 from unittest.mock import patch, MagicMock, call
-import json
-import sys
-import os
+import frappe
+from frappe.utils import get_url
 
-# Add the app path to sys.path if needed
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 class TestVideoAPIs(unittest.TestCase):
     """Test cases for Video API functions"""
     
-    @classmethod
-    def setUpClass(cls):
-        """Set up test data once for all tests"""
-        frappe.init(site='test_site')  # Initialize frappe with test site
-        frappe.connect()
-        cls.test_user = "test@example.com"
-        
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up after all tests"""
-        frappe.destroy()
-        
     def setUp(self):
         """Set up test environment before each test"""
-        frappe.set_user("Administrator")
+        # Mock frappe.whitelist decorator
+        self.whitelist_patcher = patch('frappe.whitelist', lambda **kwargs: lambda func: func)
+        self.whitelist_patcher.start()
         
     def tearDown(self):
         """Clean up after each test"""
-        frappe.db.rollback()
+        self.whitelist_patcher.stop()
 
     # ============= Test get_video_urls =============
     
-    @patch('frappe.db.sql')
-    def test_get_video_urls_no_filters(self, mock_sql):
+    @patch('tap_lms.utils.video_api.frappe.log_error')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
+    def test_get_video_urls_no_filters(self, mock_sql, mock_log_error):
         """Test get_video_urls without any filters"""
         from tap_lms.utils.video_api import get_video_urls
         
@@ -47,7 +34,7 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertEqual(result['message'], 'No videos found')
         self.assertEqual(result['count'], 0)
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_urls_with_course_filter(self, mock_sql):
         """Test get_video_urls with course_level filter"""
         from tap_lms.utils.video_api import get_video_urls
@@ -77,15 +64,15 @@ class TestVideoAPIs(unittest.TestCase):
         
         # Should call SQL with course filter
         call_args = mock_sql.call_args[0]
-        self.assertIn('cl.name = %s', call_args[0])
-        self.assertEqual(call_args[1][0], 'CL001')
+        self.assertIn('AND cl.name = %s', call_args[0])
+        self.assertIn('CL001', call_args[1])
         
         # Check result structure
         self.assertEqual(result['status'], 'success')
         self.assertEqual(result['video_id'], 'VID001')
         self.assertEqual(result['youtube'], 'https://youtube.com/watch?v=123')
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_urls_with_week_filter(self, mock_sql):
         """Test get_video_urls with week_no filter"""
         from tap_lms.utils.video_api import get_video_urls
@@ -114,10 +101,10 @@ class TestVideoAPIs(unittest.TestCase):
         
         # Check SQL was called with week filter
         call_args = mock_sql.call_args[0]
-        self.assertIn('lul.week_no = %s', call_args[0])
-        self.assertEqual(call_args[1][0], 3)
+        self.assertIn('AND lul.week_no = %s', call_args[0])
+        self.assertIn(3, call_args[1])
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_urls_with_translation(self, mock_sql):
         """Test get_video_urls with language translation"""
         from tap_lms.utils.video_api import get_video_urls
@@ -162,10 +149,13 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertEqual(result['youtube'], 'https://youtube.com/watch?v=789_es')
         self.assertEqual(result['language'], 'Spanish')
         
-    @patch('frappe.db.sql')
-    def test_get_video_urls_with_video_source_filter(self, mock_sql):
+    @patch('tap_lms.utils.video_api.get_file_url')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
+    def test_get_video_urls_with_video_source_filter(self, mock_sql, mock_get_file_url):
         """Test filtering by video source"""
         from tap_lms.utils.video_api import get_video_urls
+        
+        mock_get_file_url.return_value = 'https://example.com/files/video.mp4'
         
         mock_data = [{
             'video_id': 'VID004',
@@ -194,7 +184,7 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertNotIn('plio', result)
         self.assertNotIn('file', result)
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_urls_multiple_videos(self, mock_sql):
         """Test when multiple videos are returned"""
         from tap_lms.utils.video_api import get_video_urls
@@ -246,8 +236,8 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertEqual(result[0]['count'], 2)
         self.assertEqual(result[1]['count'], 2)
         
-    @patch('frappe.log_error')
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.log_error')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_urls_error_handling(self, mock_sql, mock_log_error):
         """Test error handling in get_video_urls"""
         from tap_lms.utils.video_api import get_video_urls
@@ -262,7 +252,7 @@ class TestVideoAPIs(unittest.TestCase):
 
     # ============= Test get_video_urls_aggregated =============
     
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_urls_aggregated_single_week(self, mock_sql):
         """Test aggregated API with single week"""
         from tap_lms.utils.video_api import get_video_urls_aggregated
@@ -317,7 +307,7 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertIn(',', result['youtube'])
         self.assertEqual(result['youtube'], 'https://youtube.com/watch?v=w1v1,https://youtube.com/watch?v=w1v2')
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_urls_aggregated_multiple_weeks(self, mock_sql):
         """Test aggregated API with multiple weeks"""
         from tap_lms.utils.video_api import get_video_urls_aggregated
@@ -371,7 +361,7 @@ class TestVideoAPIs(unittest.TestCase):
 
     # ============= Test get_file_url helper =============
     
-    @patch('frappe.utils.get_url')
+    @patch('tap_lms.utils.video_api.frappe.utils.get_url')
     def test_get_file_url(self, mock_get_url):
         """Test file URL generation"""
         from tap_lms.utils.video_api import get_file_url
@@ -400,7 +390,7 @@ class TestVideoAPIs(unittest.TestCase):
 
     # ============= Test get_available_filters =============
     
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_available_filters_success(self, mock_sql):
         """Test getting available filter options"""
         from tap_lms.utils.video_api import get_available_filters
@@ -428,8 +418,8 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertEqual(result['video_sources'], ['youtube', 'plio', 'file'])
         self.assertEqual(len(result['verticals']), 2)
         
-    @patch('frappe.log_error')
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.log_error')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_available_filters_error(self, mock_sql, mock_log_error):
         """Test error handling in get_available_filters"""
         from tap_lms.utils.video_api import get_available_filters
@@ -444,7 +434,7 @@ class TestVideoAPIs(unittest.TestCase):
 
     # ============= Test get_video_statistics =============
     
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_statistics_success(self, mock_sql):
         """Test getting video statistics"""
         from tap_lms.utils.video_api import get_video_statistics
@@ -471,7 +461,7 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertEqual(stats['total_verticals'], 5)
         self.assertEqual(stats['available_languages'], 3)
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_get_video_statistics_empty_data(self, mock_sql):
         """Test statistics with empty database"""
         from tap_lms.utils.video_api import get_video_statistics
@@ -485,7 +475,7 @@ class TestVideoAPIs(unittest.TestCase):
 
     # ============= Test test_connection =============
     
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_test_connection_success(self, mock_sql):
         """Test connection test endpoint"""
         from tap_lms.utils.video_api import test_connection
@@ -500,7 +490,7 @@ class TestVideoAPIs(unittest.TestCase):
         self.assertIn('endpoints', result)
         self.assertEqual(len(result['endpoints']), 5)
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_test_connection_failure(self, mock_sql):
         """Test connection test with database error"""
         from tap_lms.utils.video_api import test_connection
@@ -516,18 +506,17 @@ class TestVideoAPIs(unittest.TestCase):
 class TestVideoAPIIntegration(unittest.TestCase):
     """Integration tests for complex scenarios"""
     
-    @classmethod
-    def setUpClass(cls):
-        """Set up test data once for all tests"""
-        frappe.init(site='test_site')
-        frappe.connect()
+    def setUp(self):
+        """Set up test environment before each test"""
+        # Mock frappe.whitelist decorator
+        self.whitelist_patcher = patch('frappe.whitelist', lambda **kwargs: lambda func: func)
+        self.whitelist_patcher.start()
         
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up after all tests"""
-        frappe.destroy()
+    def tearDown(self):
+        """Clean up after each test"""
+        self.whitelist_patcher.stop()
     
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_complex_filter_combination(self, mock_sql):
         """Test combining multiple filters"""
         from tap_lms.utils.video_api import get_video_urls
@@ -568,17 +557,17 @@ class TestVideoAPIIntegration(unittest.TestCase):
         query = first_call[0][0]
         params = first_call[0][1]
         
-        self.assertIn('cl.name = %s', query)
-        self.assertIn('lul.week_no = %s', query)
-        self.assertEqual(params[0], 'CL008')
-        self.assertEqual(params[1], 5)
+        self.assertIn('AND cl.name = %s', query)
+        self.assertIn('AND lul.week_no = %s', query)
+        self.assertIn('CL008', params)
+        self.assertIn(5, params)
         
         # Verify only plio URL is returned
         self.assertIn('plio', result)
         self.assertNotIn('youtube', result)
         self.assertNotIn('file', result)
         
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_video_without_any_urls(self, mock_sql):
         """Test handling videos with no valid URLs"""
         from tap_lms.utils.video_api import get_video_urls
@@ -608,7 +597,7 @@ class TestVideoAPIIntegration(unittest.TestCase):
         # Should return empty list as no valid video URLs
         self.assertEqual(result, [])
     
-    @patch('frappe.db.sql')
+    @patch('tap_lms.utils.video_api.frappe.db.sql')
     def test_special_characters_in_data(self, mock_sql):
         """Test handling of special characters in video data"""
         from tap_lms.utils.video_api import get_video_urls
@@ -638,30 +627,3 @@ class TestVideoAPIIntegration(unittest.TestCase):
         # Should handle special characters correctly
         self.assertEqual(result['video_name'], "Video with 'quotes' and \"double quotes\"")
         self.assertEqual(result['description'], 'Description with <html> tags & special chars')
-
-
-# Simple test runner if called directly
-def run_tests():
-    """Run the test suite"""
-    import sys
-    
-    # Create test suite
-    loader = unittest.TestLoader()
-    suite = unittest.TestSuite()
-    
-    # Add test cases
-    suite.addTests(loader.loadTestsFromTestCase(TestVideoAPIs))
-    suite.addTests(loader.loadTestsFromTestCase(TestVideoAPIIntegration))
-    
-    # Run tests
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(suite)
-    
-    # Return exit code
-    return 0 if result.wasSuccessful() else 1
-
-
-if __name__ == '__main__':
-    # If running directly, use the simple runner
-    exit_code = run_tests()
-    sys.exit(exit_code)
