@@ -1,623 +1,79 @@
+"""
+Test suite for video_api module with 60%+ coverage target
+Run with: pytest test_video_api.py --cov=video_api --cov-report=term-missing
+"""
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch, MagicMock
 import sys
 
-# ============================================================================
-# ACTUAL CODE FROM THE MODULE (copied here to avoid import)
-# ============================================================================
-
-def get_file_url(file_path):
-    """Convert file path to full URL"""
-    import frappe
-    
-    if not file_path:
-        return None
-    
-    if file_path.startswith('/files/'):
-        return frappe.utils.get_url() + file_path
-    elif file_path.startswith('http'):
-        return file_path
-    else:
-        return frappe.utils.get_url() + '/files/' + file_path
+# Mock frappe at module level before any imports
+sys.modules['frappe'] = MagicMock()
 
 
-def get_video_urls(course_level=None, week_no=None, language=None, video_source=None):
-    """
-    API to get video URLs with filters - Returns individual video objects (RECOMMENDED)
-    """
-    import frappe
-    
-    try:
-        # Base query to get video data
-        base_query = """
-        SELECT
-            vc.name as video_id,
-            vc.video_name,
-            vc.video_youtube_url,
-            vc.video_plio_url,
-            vc.video_file,
-            vc.duration,
-            vc.description,
-            vc.difficulty_tier,
-            vc.estimated_duration,
-            lu.unit_name,
-            lu.order as unit_order,
-            cl.name as course_level_id,
-            cl.name1 as course_level_name,
-            lul.week_no,
-            cv.name1 as vertical_name
-        FROM
-            tabVideoClass vc
-        INNER JOIN
-            tabUnitContentItem uci ON uci.content = vc.name
-            AND uci.content_type = 'VideoClass'
-        INNER JOIN
-            tabLearningUnit lu ON lu.name = uci.parent
-        INNER JOIN
-            tabLearningUnitList lul ON lul.learning_unit = lu.name
-        INNER JOIN
-            tabCourse Level cl ON cl.name = lul.parent
-        LEFT JOIN
-            tabCourse Verticals cv ON cv.name = vc.course_vertical
-        WHERE 1=1
-        """
-        
-        params = []
-        
-        # Add filters
-        if course_level:
-            base_query += " AND cl.name = %s"
-            params.append(course_level)
-            
-        if week_no:
-            base_query += " AND lul.week_no = %s"
-            params.append(int(week_no))
-        
-        # Order the results
-        base_query += " ORDER BY lul.week_no, lu.order, vc.name"
-        
-        # Execute query
-        base_data = frappe.db.sql(base_query, params, as_dict=True)
-        
-        if not base_data:
-            return {
-                "status": "success",
-                "message": "No videos found",
-                "count": 0
-            }
-        
-        # Get translations if language is specified
-        translations = {}
-        if language and language.lower() != 'default':
-            video_ids = [row.video_id for row in base_data]
-            if video_ids:
-                video_ids_placeholders = ','.join(['%s'] * len(video_ids))
-                translation_query = f"""
-                SELECT
-                    parent as video_id,
-                    language,
-                    translated_name,
-                    translated_description,
-                    video_youtube_url as translated_youtube_url,
-                    video_plio_url as translated_plio_url,
-                    video_file as translated_video_file
-                FROM tabVideoTranslation
-                WHERE parent IN ({video_ids_placeholders})
-                AND language = %s
-                """
-                
-                translation_params = video_ids + [language]
-                translation_data = frappe.db.sql(translation_query, translation_params, as_dict=True)
-                
-                for trans in translation_data:
-                    translations[trans.video_id] = trans
-        
-        # Process results
-        result = []
-        for row in base_data:
-            translation = translations.get(row.video_id, {})
-            
-            video_data = {
-                "status": "success",
-                "video_id": row.video_id,
-                "video_name": translation.get("translated_name") or row.video_name,
-                "description": translation.get("translated_description") or row.description,
-                "unit_name": row.unit_name,
-                "unit_order": row.unit_order,
-                "course_level": row.course_level_name,
-                "course_level_id": row.course_level_id,
-                "week_no": row.week_no,
-                "vertical": row.vertical_name,
-                "difficulty_tier": row.difficulty_tier,
-                "estimated_duration": row.estimated_duration,
-                "duration": row.duration,
-                "language": language if translation else "default"
-            }
-            
-            # Add video URLs as direct properties
-            has_video = False
-            
-            # Use translated URLs if available
-            if translation:
-                if translation.get("translated_youtube_url"):
-                    video_data["youtube"] = translation["translated_youtube_url"]
-                    has_video = True
-                if translation.get("translated_plio_url"):
-                    video_data["plio"] = translation["translated_plio_url"]
-                    has_video = True
-                if translation.get("translated_video_file"):
-                    video_data["file"] = get_file_url(translation["translated_video_file"])
-                    has_video = True
-            
-            # Fallback to original URLs
-            if not has_video or not translation:
-                if row.video_youtube_url:
-                    video_data["youtube"] = row.video_youtube_url
-                    has_video = True
-                if row.video_plio_url:
-                    video_data["plio"] = row.video_plio_url
-                    has_video = True
-                if row.video_file:
-                    video_data["file"] = get_file_url(row.video_file)
-                    has_video = True
-            
-            # Filter by video source if specified
-            if video_source:
-                source_key = video_source.lower()
-                if source_key not in video_data:
-                    continue  # Skip if requested source not available
-                
-                # Keep only the requested source
-                sources_to_remove = []
-                if source_key != "youtube" and "youtube" in video_data:
-                    sources_to_remove.append("youtube")
-                if source_key != "plio" and "plio" in video_data:
-                    sources_to_remove.append("plio")
-                if source_key != "file" and "file" in video_data:
-                    sources_to_remove.append("file")
-                
-                for source in sources_to_remove:
-                    del video_data[source]
-            
-            # Add to result if has video URLs
-            if has_video:
-                result.append(video_data)
-        
-        # Add count to each video
-        total_count = len(result)
-        for video in result:
-            video["count"] = total_count
-        
-        # Return single object if only one video, array if multiple
-        if total_count == 1:
-            return result[0]
-        else:
-            return result
-        
-    except Exception as e:
-        import frappe
-        frappe.log_error(f"Error in get_video_urls API: {str(e)}", "Video URLs API Error")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
+# Import the module to test (adjust the import based on your actual module name)
+import video_api
 
-
-def get_video_urls_aggregated(course_level=None, week_no=None, language=None, video_source=None):
-    """
-    API to get video URLs aggregated by week - Returns comma-separated values
-    """
-    import frappe
-    
-    try:
-        # Base query to get video data
-        base_query = """
-        SELECT
-            vc.name as video_id,
-            vc.video_name,
-            vc.video_youtube_url,
-            vc.video_plio_url,
-            vc.video_file,
-            vc.duration,
-            vc.description,
-            vc.difficulty_tier,
-            vc.estimated_duration,
-            lu.unit_name,
-            lu.order as unit_order,
-            cl.name as course_level_id,
-            cl.name1 as course_level_name,
-            lul.week_no,
-            cv.name1 as vertical_name
-        FROM
-            tabVideoClass vc
-        INNER JOIN
-            tabUnitContentItem uci ON uci.content = vc.name
-            AND uci.content_type = 'VideoClass'
-        INNER JOIN
-            tabLearningUnit lu ON lu.name = uci.parent
-        INNER JOIN
-            tabLearningUnitList lul ON lul.learning_unit = lu.name
-        INNER JOIN
-            tabCourse Level cl ON cl.name = lul.parent
-        LEFT JOIN
-            tabCourse Verticals cv ON cv.name = vc.course_vertical
-        WHERE 1=1
-        """
-        
-        params = []
-        
-        # Add filters
-        if course_level:
-            base_query += " AND cl.name = %s"
-            params.append(course_level)
-            
-        if week_no:
-            base_query += " AND lul.week_no = %s"
-            params.append(int(week_no))
-        
-        # Order the results
-        base_query += " ORDER BY lul.week_no, lu.order, vc.name"
-        
-        # Execute query
-        base_data = frappe.db.sql(base_query, params, as_dict=True)
-        
-        if not base_data:
-            return {
-                "status": "success",
-                "message": "No videos found",
-                "count": 0
-            }
-        
-        # Get translations if language is specified
-        translations = {}
-        if language and language.lower() != 'default':
-            video_ids = [row.video_id for row in base_data]
-            if video_ids:
-                video_ids_placeholders = ','.join(['%s'] * len(video_ids))
-                translation_query = f"""
-                SELECT
-                    parent as video_id,
-                    language,
-                    translated_name,
-                    translated_description,
-                    video_youtube_url as translated_youtube_url,
-                    video_plio_url as translated_plio_url,
-                    video_file as translated_video_file
-                FROM tabVideoTranslation
-                WHERE parent IN ({video_ids_placeholders})
-                AND language = %s
-                """
-                
-                translation_params = video_ids + [language]
-                translation_data = frappe.db.sql(translation_query, translation_params, as_dict=True)
-                
-                for trans in translation_data:
-                    translations[trans.video_id] = trans
-        
-        # Group videos by week
-        weeks_data = {}
-        
-        for row in base_data:
-            translation = translations.get(row.video_id, {})
-            week_key = row.week_no
-            
-            if week_key not in weeks_data:
-                weeks_data[week_key] = {
-                    "videos": [],
-                    "course_level": row.course_level_name,
-                    "course_level_id": row.course_level_id,
-                    "vertical": row.vertical_name,
-                    "week_no": row.week_no
-                }
-            
-            # Prepare video data
-            video_info = {
-                "video_id": row.video_id,
-                "video_name": translation.get("translated_name") or row.video_name,
-                "description": translation.get("translated_description") or row.description,
-                "unit_name": row.unit_name,
-                "unit_order": row.unit_order,
-                "difficulty_tier": row.difficulty_tier,
-                "estimated_duration": row.estimated_duration,
-                "duration": row.duration,
-                "youtube": None,
-                "plio": None,
-                "file": None
-            }
-            
-            # Add URLs
-            if translation:
-                if translation.get("translated_youtube_url"):
-                    video_info["youtube"] = translation["translated_youtube_url"]
-                if translation.get("translated_plio_url"):
-                    video_info["plio"] = translation["translated_plio_url"]
-                if translation.get("translated_video_file"):
-                    video_info["file"] = get_file_url(translation["translated_video_file"])
-            
-            # Fallback to original URLs
-            if not video_info["youtube"] and row.video_youtube_url:
-                video_info["youtube"] = row.video_youtube_url
-            if not video_info["plio"] and row.video_plio_url:
-                video_info["plio"] = row.video_plio_url
-            if not video_info["file"] and row.video_file:
-                video_info["file"] = get_file_url(row.video_file)
-            
-            weeks_data[week_key]["videos"].append(video_info)
-        
-        # Create aggregated response
-        result = []
-        
-        for week_no_key, week_data in weeks_data.items():
-            videos = week_data["videos"]
-            
-            # Filter by video source if specified
-            if video_source:
-                source_key = video_source.lower()
-                videos = [v for v in videos if v.get(source_key)]
-                
-                if not videos:
-                    continue
-            
-            if not videos:
-                continue
-                
-            # Aggregate data
-            aggregated = {
-                "status": "success",
-                "video_id": f"week-{week_no_key}-videos",
-                "video_name": ", ".join([v["video_name"] for v in videos if v["video_name"]]),
-                "description": " | ".join([v["description"] for v in videos if v["description"]]),
-                "unit_name": ", ".join([v["unit_name"] for v in videos if v["unit_name"]]),
-                "course_level": week_data["course_level"],
-                "course_level_id": week_data["course_level_id"],
-                "week_no": week_no_key,
-                "vertical": week_data["vertical"],
-                "difficulty_tier": ", ".join(list(set([v["difficulty_tier"] for v in videos if v["difficulty_tier"]]))),
-                "estimated_duration": ", ".join([v["estimated_duration"] for v in videos if v["estimated_duration"]]),
-                "duration": ", ".join([v["duration"] for v in videos if v["duration"]]),
-                "language": language if language else "default",
-                "count": len(videos)
-            }
-            
-            # Aggregate URLs
-            youtube_urls = [v["youtube"] for v in videos if v["youtube"]]
-            plio_urls = [v["plio"] for v in videos if v["plio"]]
-            file_urls = [v["file"] for v in videos if v["file"]]
-            
-            if youtube_urls:
-                aggregated["youtube"] = ",".join(youtube_urls)
-            if plio_urls:
-                aggregated["plio"] = ",".join(plio_urls)
-            if file_urls:
-                aggregated["file"] = ",".join(file_urls)
-            
-            # Filter by video source if specified
-            if video_source:
-                source_key = video_source.lower()
-                if source_key not in aggregated:
-                    continue
-                
-                # Keep only the requested source
-                sources_to_remove = []
-                if source_key != "youtube" and "youtube" in aggregated:
-                    sources_to_remove.append("youtube")
-                if source_key != "plio" and "plio" in aggregated:
-                    sources_to_remove.append("plio")
-                if source_key != "file" and "file" in aggregated:
-                    sources_to_remove.append("file")
-                
-                for source in sources_to_remove:
-                    del aggregated[source]
-            
-            result.append(aggregated)
-        
-        # Return single object if only one week, array if multiple weeks
-        if len(result) == 1:
-            return result[0]
-        else:
-            return result
-        
-    except Exception as e:
-        import frappe
-        frappe.log_error(f"Error in get_video_urls_aggregated API: {str(e)}", "Aggregated Video URLs API Error")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-
-def get_available_filters():
-    """
-    API to get available filter options
-    """
-    import frappe
-    
-    try:
-        # Get available course levels
-        course_levels = frappe.db.sql("""
-            SELECT name, name1 as display_name
-            FROM tabCourse Level
-            ORDER BY name1
-        """, as_dict=True)
-        
-        # Get available weeks
-        weeks = frappe.db.sql("""
-            SELECT DISTINCT week_no
-            FROM tabLearningUnitList
-            WHERE week_no IS NOT NULL
-            ORDER BY week_no
-        """, as_dict=True)
-        
-        # Get available languages
-        languages = frappe.db.sql("""
-            SELECT DISTINCT language
-            FROM tabVideoTranslation
-            WHERE language IS NOT NULL
-            ORDER BY language
-        """, as_dict=True)
-        
-        # Get course verticals
-        verticals = frappe.db.sql("""
-            SELECT name, name1 as display_name
-            FROM tabCourse Verticals
-            ORDER BY name1
-        """, as_dict=True)
-        
-        return {
-            "status": "success",
-            "course_levels": course_levels,
-            "weeks": [w.week_no for w in weeks],
-            "languages": [l.language for l in languages],
-            "video_sources": ["youtube", "plio", "file"],
-            "verticals": verticals
-        }
-        
-    except Exception as e:
-        import frappe
-        frappe.log_error(f"Error in get_available_filters API: {str(e)}", "Filters API Error")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-
-def get_video_statistics():
-    """
-    API to get video statistics
-    """
-    import frappe
-    
-    try:
-        # Basic video counts
-        video_stats = frappe.db.sql("""
-            SELECT
-                COUNT(*) as total_videos,
-                COUNT(CASE WHEN video_youtube_url IS NOT NULL AND video_youtube_url != '' THEN 1 END) as youtube_videos,
-                COUNT(CASE WHEN video_plio_url IS NOT NULL AND video_plio_url != '' THEN 1 END) as plio_videos,
-                COUNT(CASE WHEN video_file IS NOT NULL AND video_file != '' THEN 1 END) as file_videos
-            FROM tabVideoClass
-        """, as_dict=True)
-        
-        # Course and unit counts
-        course_stats = frappe.db.sql("""
-            SELECT
-                COUNT(DISTINCT cl.name) as total_courses,
-                COUNT(DISTINCT lul.week_no) as total_weeks,
-                COUNT(DISTINCT cv.name) as total_verticals
-            FROM tabCourse Level cl
-            LEFT JOIN tabLearningUnitList lul ON lul.parent = cl.name
-            LEFT JOIN tabCourse Verticals cv ON cv.name = cl.vertical
-        """, as_dict=True)
-        
-        # Language counts
-        language_stats = frappe.db.sql("""
-            SELECT COUNT(DISTINCT language) as available_languages
-            FROM tabVideoTranslation
-            WHERE language IS NOT NULL
-        """, as_dict=True)
-        
-        # Combine all statistics
-        combined_stats = {}
-        if video_stats:
-            combined_stats.update(video_stats[0])
-        if course_stats:
-            combined_stats.update(course_stats[0])
-        if language_stats:
-            combined_stats.update(language_stats[0])
-        
-        return {
-            "status": "success",
-            "statistics": combined_stats
-        }
-        
-    except Exception as e:
-        import frappe
-        frappe.log_error(f"Error in get_video_statistics API: {str(e)}", "Statistics API Error")
-        return {
-            "status": "error",
-            "message": str(e)
-        }
-
-
-def test_connection():
-    """
-    Simple test endpoint to verify API is working
-    """
-    import frappe
-    
-    try:
-        # Test basic database connection
-        result = frappe.db.sql("SELECT COUNT(*) as video_count FROM tabVideoClass", as_dict=True)
-        
-        return {
-            "status": "success",
-            "message": "API is working correctly",
-            "video_count": result[0].video_count if result else 0,
-            "endpoints": [
-                "get_video_urls - Individual video objects (recommended)",
-                "get_video_urls_aggregated - Comma-separated aggregated format",
-                "get_available_filters - Available filter options",
-                "get_video_statistics - Video statistics",
-                "test_connection - Connection test"
-            ]
-        }
-        
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": f"API test failed: {str(e)}"
-        }
-
-
-# ============================================================================
-# TEST CASES START HERE
-# ============================================================================
 
 class TestVideoAPI:
     """Test cases for Video API functions"""
     
-    # Test get_file_url helper function
-    @patch('frappe.utils.get_url')
-    def test_get_file_url_with_files_path(self, mock_get_url):
-        """Test get_file_url with /files/ path"""
-        mock_get_url.return_value = 'http://example.com'
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        """Setup test environment before each test"""
+        # Create mock frappe module with all required attributes
+        self.mock_frappe = MagicMock()
+        self.mock_frappe.whitelist = Mock(return_value=lambda f: f)
+        self.mock_frappe.db = MagicMock()
+        self.mock_frappe.utils = MagicMock()
+        self.mock_frappe.log_error = MagicMock()
         
-        result = get_file_url('/files/video.mp4')
-        assert result == 'http://example.com/files/video.mp4'
-    
-    def test_get_file_url_with_http(self):
-        """Test get_file_url with http URL"""
-        result = get_file_url('http://external.com/video.mp4')
-        assert result == 'http://external.com/video.mp4'
-    
-    @patch('frappe.utils.get_url')
-    def test_get_file_url_with_relative_path(self, mock_get_url):
-        """Test get_file_url with relative path"""
-        mock_get_url.return_value = 'http://example.com'
+        # Monkeypatch frappe in the video_api module
+        monkeypatch.setattr('video_api.frappe', self.mock_frappe)
         
-        result = get_file_url('video.mp4')
-        assert result == 'http://example.com/files/video.mp4'
+        # Reset mocks before each test
+        self.mock_frappe.reset_mock()
+        yield
+    
+    # ==================== get_file_url tests ====================
     
     def test_get_file_url_with_none(self):
         """Test get_file_url with None input"""
-        result = get_file_url(None)
+        result = video_api.get_file_url(None)
         assert result is None
     
-    # Test get_video_urls function
-    @patch('frappe.db.sql')
-    def test_get_video_urls_no_results(self, mock_sql):
-        """Test get_video_urls with no results"""
-        mock_sql.return_value = []
+    def test_get_file_url_with_http(self):
+        """Test get_file_url with http URL"""
+        result = video_api.get_file_url('http://external.com/video.mp4')
+        assert result == 'http://external.com/video.mp4'
+    
+    def test_get_file_url_with_files_path(self):
+        """Test get_file_url with /files/ path"""
+        self.mock_frappe.utils.get_url.return_value = 'http://example.com'
         
-        result = get_video_urls()
+        result = video_api.get_file_url('/files/video.mp4')
+        assert result == 'http://example.com/files/video.mp4'
+    
+    def test_get_file_url_with_relative_path(self):
+        """Test get_file_url with relative path"""
+        self.mock_frappe.utils.get_url.return_value = 'http://example.com'
+        
+        result = video_api.get_file_url('video.mp4')
+        assert result == 'http://example.com/files/video.mp4'
+    
+    # ==================== get_video_urls tests ====================
+    
+    def test_get_video_urls_no_results(self):
+        """Test get_video_urls with no results"""
+        self.mock_frappe.db.sql.return_value = []
+        
+        result = video_api.get_video_urls()
         
         assert result['status'] == 'success'
         assert result['message'] == 'No videos found'
         assert result['count'] == 0
     
-    @patch('frappe.db.sql')
-    @patch('frappe.utils.get_url')
-    def test_get_video_urls_single_video(self, mock_get_url, mock_sql):
+    def test_get_video_urls_single_video(self):
         """Test get_video_urls with single video result"""
         mock_video_data = [{
             'video_id': 'VID001',
@@ -637,9 +93,10 @@ class TestVideoAPI:
             'vertical_name': 'Math'
         }]
         
-        mock_sql.return_value = mock_video_data
+        self.mock_frappe.db.sql.return_value = mock_video_data
+        self.mock_frappe.utils.get_url.return_value = 'http://example.com'
         
-        result = get_video_urls(course_level='CL001', week_no=1)
+        result = video_api.get_video_urls(course_level='CL001', week_no=1)
         
         assert result['status'] == 'success'
         assert result['video_id'] == 'VID001'
@@ -647,9 +104,7 @@ class TestVideoAPI:
         assert result['youtube'] == 'https://youtube.com/watch?v=test'
         assert result['count'] == 1
     
-    @patch('frappe.db.sql')
-    @patch('frappe.utils.get_url')
-    def test_get_video_urls_with_translations(self, mock_get_url, mock_sql):
+    def test_get_video_urls_with_translations(self):
         """Test get_video_urls with language translations"""
         # First call returns base data
         mock_video_data = [{
@@ -681,32 +136,30 @@ class TestVideoAPI:
             'translated_video_file': None
         }]
         
-        mock_sql.side_effect = [mock_video_data, mock_translation_data]
+        self.mock_frappe.db.sql.side_effect = [mock_video_data, mock_translation_data]
         
-        result = get_video_urls(language='Spanish')
+        result = video_api.get_video_urls(language='Spanish')
         
         assert result['video_name'] == 'Video de Prueba'
         assert result['description'] == 'Descripción en español'
         assert result['youtube'] == 'https://youtube.com/spanish'
         assert result['language'] == 'Spanish'
     
-    @patch('frappe.db.sql')
-    @patch('frappe.log_error')
-    def test_get_video_urls_exception_handling(self, mock_log_error, mock_sql):
+    def test_get_video_urls_exception_handling(self):
         """Test get_video_urls exception handling"""
-        mock_sql.side_effect = Exception("Database error")
+        self.mock_frappe.db.sql.side_effect = Exception("Database error")
         
-        result = get_video_urls()
+        result = video_api.get_video_urls()
         
         assert result['status'] == 'error'
         assert 'Database error' in result['message']
-        mock_log_error.assert_called_once()
+        self.mock_frappe.log_error.assert_called_once()
     
-    # Test get_available_filters function
-    @patch('frappe.db.sql')
-    def test_get_available_filters_success(self, mock_sql):
+    # ==================== get_available_filters tests ====================
+    
+    def test_get_available_filters_success(self):
         """Test get_available_filters returns all filter options"""
-        mock_sql.side_effect = [
+        self.mock_frappe.db.sql.side_effect = [
             # Course levels
             [{'name': 'CL001', 'display_name': 'Basic'}, {'name': 'CL002', 'display_name': 'Advanced'}],
             # Weeks
@@ -717,7 +170,7 @@ class TestVideoAPI:
             [{'name': 'V001', 'display_name': 'Math'}, {'name': 'V002', 'display_name': 'Science'}]
         ]
         
-        result = get_available_filters()
+        result = video_api.get_available_filters()
         
         assert result['status'] == 'success'
         assert len(result['course_levels']) == 2
@@ -726,11 +179,11 @@ class TestVideoAPI:
         assert result['video_sources'] == ['youtube', 'plio', 'file']
         assert len(result['verticals']) == 2
     
-    # Test get_video_statistics function
-    @patch('frappe.db.sql')
-    def test_get_video_statistics_success(self, mock_sql):
+    # ==================== get_video_statistics tests ====================
+    
+    def test_get_video_statistics_success(self):
         """Test get_video_statistics returns correct statistics"""
-        mock_sql.side_effect = [
+        self.mock_frappe.db.sql.side_effect = [
             # Video stats
             [{'total_videos': 100, 'youtube_videos': 80, 'plio_videos': 50, 'file_videos': 30}],
             # Course stats
@@ -739,7 +192,7 @@ class TestVideoAPI:
             [{'available_languages': 4}]
         ]
         
-        result = get_video_statistics()
+        result = video_api.get_video_statistics()
         
         assert result['status'] == 'success'
         assert result['statistics']['total_videos'] == 100
@@ -747,13 +200,13 @@ class TestVideoAPI:
         assert result['statistics']['total_courses'] == 5
         assert result['statistics']['available_languages'] == 4
     
-    # Test test_connection function
-    @patch('frappe.db.sql')
-    def test_test_connection_success(self, mock_sql):
+    # ==================== test_connection tests ====================
+    
+    def test_test_connection_success(self):
         """Test test_connection when API is working"""
-        mock_sql.return_value = [{'video_count': 50}]
+        self.mock_frappe.db.sql.return_value = [{'video_count': 50}]
         
-        result = test_connection()
+        result = video_api.test_connection()
         
         assert result['status'] == 'success'
         assert result['message'] == 'API is working correctly'
@@ -761,36 +214,195 @@ class TestVideoAPI:
         assert len(result['endpoints']) == 5
 
 
+# Standalone test_connection function test (outside class)
+def test_connection():
+    """Test standalone test_connection function"""
+    with patch('video_api.frappe') as mock_frappe:
+        mock_frappe.db.sql.return_value = [{'video_count': 25}]
+        
+        result = video_api.test_connection()
+        
+        assert result['status'] == 'success'
+        assert result['video_count'] == 25
+
+
+# Additional tests for better coverage
+class TestVideoAPIAdditional:
+    """Additional tests for increased coverage"""
+    
+    @pytest.fixture(autouse=True)
+    def setup(self, monkeypatch):
+        """Setup test environment"""
+        self.mock_frappe = MagicMock()
+        monkeypatch.setattr('video_api.frappe', self.mock_frappe)
+        yield
+    
+    def test_get_video_urls_multiple_videos(self):
+        """Test get_video_urls with multiple videos"""
+        mock_video_data = [
+            {
+                'video_id': 'VID001',
+                'video_name': 'Video 1',
+                'video_youtube_url': 'https://youtube.com/1',
+                'video_plio_url': None,
+                'video_file': None,
+                'duration': '10:30',
+                'description': 'Description 1',
+                'difficulty_tier': 'Beginner',
+                'estimated_duration': '15 min',
+                'unit_name': 'Unit 1',
+                'unit_order': 1,
+                'course_level_id': 'CL001',
+                'course_level_name': 'Basic Course',
+                'week_no': 1,
+                'vertical_name': 'Math'
+            },
+            {
+                'video_id': 'VID002',
+                'video_name': 'Video 2',
+                'video_youtube_url': None,
+                'video_plio_url': 'https://plio.com/2',
+                'video_file': None,
+                'duration': '20:00',
+                'description': 'Description 2',
+                'difficulty_tier': 'Intermediate',
+                'estimated_duration': '25 min',
+                'unit_name': 'Unit 2',
+                'unit_order': 2,
+                'course_level_id': 'CL001',
+                'course_level_name': 'Basic Course',
+                'week_no': 1,
+                'vertical_name': 'Math'
+            }
+        ]
+        
+        self.mock_frappe.db.sql.return_value = mock_video_data
+        
+        result = video_api.get_video_urls()
+        
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(video['count'] == 2 for video in result)
+    
+    def test_get_video_urls_with_video_source_filter(self):
+        """Test filtering by video source"""
+        mock_video_data = [{
+            'video_id': 'VID001',
+            'video_name': 'Video 1',
+            'video_youtube_url': 'https://youtube.com/1',
+            'video_plio_url': 'https://plio.com/1',
+            'video_file': '/files/video1.mp4',
+            'duration': '10:30',
+            'description': 'Description 1',
+            'difficulty_tier': 'Beginner',
+            'estimated_duration': '15 min',
+            'unit_name': 'Unit 1',
+            'unit_order': 1,
+            'course_level_id': 'CL001',
+            'course_level_name': 'Basic Course',
+            'week_no': 1,
+            'vertical_name': 'Math'
+        }]
+        
+        self.mock_frappe.db.sql.return_value = mock_video_data
+        self.mock_frappe.utils.get_url.return_value = 'http://example.com'
+        
+        result = video_api.get_video_urls(video_source='youtube')
+        
+        assert 'youtube' in result
+        assert 'plio' not in result
+        assert 'file' not in result
+    
+    def test_get_video_urls_aggregated_single_week(self):
+        """Test aggregated video URLs for single week"""
+        mock_video_data = [
+            {
+                'video_id': 'VID001',
+                'video_name': 'Video 1',
+                'video_youtube_url': 'https://youtube.com/1',
+                'video_plio_url': None,
+                'video_file': None,
+                'duration': '10:30',
+                'description': 'Description 1',
+                'difficulty_tier': 'Beginner',
+                'estimated_duration': '15 min',
+                'unit_name': 'Unit 1',
+                'unit_order': 1,
+                'course_level_id': 'CL001',
+                'course_level_name': 'Basic Course',
+                'week_no': 1,
+                'vertical_name': 'Math'
+            },
+            {
+                'video_id': 'VID002',
+                'video_name': 'Video 2',
+                'video_youtube_url': 'https://youtube.com/2',
+                'video_plio_url': None,
+                'video_file': None,
+                'duration': '20:00',
+                'description': 'Description 2',
+                'difficulty_tier': 'Beginner',
+                'estimated_duration': '25 min',
+                'unit_name': 'Unit 1',
+                'unit_order': 1,
+                'course_level_id': 'CL001',
+                'course_level_name': 'Basic Course',
+                'week_no': 1,
+                'vertical_name': 'Math'
+            }
+        ]
+        
+        self.mock_frappe.db.sql.return_value = mock_video_data
+        
+        result = video_api.get_video_urls_aggregated(week_no=1)
+        
+        assert result['status'] == 'success'
+        assert result['video_id'] == 'week-1-videos'
+        assert 'Video 1' in result['video_name']
+        assert 'Video 2' in result['video_name']
+        assert result['count'] == 2
+    
+    def test_get_available_filters_exception(self):
+        """Test get_available_filters with exception"""
+        self.mock_frappe.db.sql.side_effect = Exception("Filter error")
+        
+        result = video_api.get_available_filters()
+        
+        assert result['status'] == 'error'
+        assert 'Filter error' in result['message']
+    
+    def test_get_video_statistics_exception(self):
+        """Test get_video_statistics with exception"""
+        self.mock_frappe.db.sql.side_effect = Exception("Stats error")
+        
+        result = video_api.get_video_statistics()
+        
+        assert result['status'] == 'error'
+        assert 'Stats error' in result['message']
+
+
 if __name__ == "__main__":
-    # Run tests with pytest if available, otherwise run basic tests
+    # Run with coverage report
+    import subprocess
+    import sys
+    
     try:
-        pytest.main([__file__, "-v"])
+        # Try to run with pytest and coverage
+        result = subprocess.run([
+            sys.executable, '-m', 'pytest', 
+            __file__, 
+            '--cov=video_api',
+            '--cov-report=term-missing',
+            '--cov-report=html',
+            '-v'
+        ], capture_output=True, text=True)
+        
+        print(result.stdout)
+        if result.stderr:
+            print(result.stderr)
+            
     except:
-        print("Running basic tests without pytest...")
-        
-        # Create a mock frappe module
-        sys.modules['frappe'] = MagicMock()
-        sys.modules['frappe.utils'] = MagicMock()
-        sys.modules['frappe.db'] = MagicMock()
-        
-        test_instance = TestVideoAPI()
-        
-        # Run each test method
-        test_methods = [method for method in dir(test_instance) if method.startswith('test_')]
-        
-        passed = 0
-        failed = 0
-        
-        for method_name in test_methods:
-            try:
-                method = getattr(test_instance, method_name)
-                method()
-                print(f"✓ {method_name} PASSED")
-                passed += 1
-            except Exception as e:
-                print(f"✗ {method_name} FAILED: {str(e)}")
-                failed += 1
-        
-        print(f"\n{'='*50}")
-        print(f"Tests completed: {passed} passed, {failed} failed")
-        print(f"{'='*50}")
+        print("Please install pytest and pytest-cov:")
+        print("pip install pytest pytest-cov")
+        print("\nThen run:")
+        print(f"pytest {__file__} --cov=video_api --cov-report=term-missing")
