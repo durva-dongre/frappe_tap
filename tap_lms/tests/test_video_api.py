@@ -1,18 +1,23 @@
 """
 Test suite for video_api module with 60%+ coverage target
-Run with: pytest test_video_api.py --cov=video_api --cov-report=term-missing
+File location: tap_lms/tests/test_video_api.py
+Testing: tap_lms/utils/video_api.py
+Run with: pytest tap_lms/tests/test_video_api.py --cov=tap_lms.utils.video_api --cov-report=term-missing
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 import sys
+import os
+from unittest.mock import Mock, patch, MagicMock
+
+# Add parent directory to path to import tap_lms modules
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 # Mock frappe at module level before any imports
 sys.modules['frappe'] = MagicMock()
 
-
-# Import the module to test (adjust the import based on your actual module name)
-import video_api
+# Now import the module to test
+from tap_lms.utils import video_api
 
 
 class TestVideoAPI:
@@ -27,9 +32,10 @@ class TestVideoAPI:
         self.mock_frappe.db = MagicMock()
         self.mock_frappe.utils = MagicMock()
         self.mock_frappe.log_error = MagicMock()
+        self.mock_frappe._ = Mock(side_effect=lambda x: x)  # Mock translation function
         
         # Monkeypatch frappe in the video_api module
-        monkeypatch.setattr('video_api.frappe', self.mock_frappe)
+        monkeypatch.setattr('tap_lms.utils.video_api.frappe', self.mock_frappe)
         
         # Reset mocks before each test
         self.mock_frappe.reset_mock()
@@ -217,7 +223,7 @@ class TestVideoAPI:
 # Standalone test_connection function test (outside class)
 def test_connection():
     """Test standalone test_connection function"""
-    with patch('video_api.frappe') as mock_frappe:
+    with patch('tap_lms.utils.video_api.frappe') as mock_frappe:
         mock_frappe.db.sql.return_value = [{'video_count': 25}]
         
         result = video_api.test_connection()
@@ -234,7 +240,8 @@ class TestVideoAPIAdditional:
     def setup(self, monkeypatch):
         """Setup test environment"""
         self.mock_frappe = MagicMock()
-        monkeypatch.setattr('video_api.frappe', self.mock_frappe)
+        monkeypatch.setattr('tap_lms.utils.video_api.frappe', self.mock_frappe)
+        self.mock_frappe._ = Mock(side_effect=lambda x: x)
         yield
     
     def test_get_video_urls_multiple_videos(self):
@@ -362,6 +369,16 @@ class TestVideoAPIAdditional:
         assert 'Video 2' in result['video_name']
         assert result['count'] == 2
     
+    def test_get_video_urls_aggregated_no_results(self):
+        """Test get_video_urls_aggregated with no results"""
+        self.mock_frappe.db.sql.return_value = []
+        
+        result = video_api.get_video_urls_aggregated()
+        
+        assert result['status'] == 'success'
+        assert result['message'] == 'No videos found'
+        assert result['count'] == 0
+    
     def test_get_available_filters_exception(self):
         """Test get_available_filters with exception"""
         self.mock_frappe.db.sql.side_effect = Exception("Filter error")
@@ -379,30 +396,46 @@ class TestVideoAPIAdditional:
         
         assert result['status'] == 'error'
         assert 'Stats error' in result['message']
+    
+    def test_test_connection_exception(self):
+        """Test test_connection with exception"""
+        self.mock_frappe.db.sql.side_effect = Exception("Connection failed")
+        
+        result = video_api.test_connection()
+        
+        assert result['status'] == 'error'
+        assert 'API test failed' in result['message']
+        assert 'Connection failed' in result['message']
 
 
 if __name__ == "__main__":
     # Run with coverage report
     import subprocess
-    import sys
     
     try:
         # Try to run with pytest and coverage
-        result = subprocess.run([
+        cmd = [
             sys.executable, '-m', 'pytest', 
             __file__, 
-            '--cov=video_api',
+            '--cov=tap_lms.utils.video_api',
             '--cov-report=term-missing',
             '--cov-report=html',
             '-v'
-        ], capture_output=True, text=True)
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True)
         
         print(result.stdout)
         if result.stderr:
             print(result.stderr)
             
-    except:
-        print("Please install pytest and pytest-cov:")
+        # Check if all tests passed
+        if "passed" in result.stdout and "failed" not in result.stdout:
+            print("\n✅ All tests passed!")
+        
+    except Exception as e:
+        print(f"Error running tests: {e}")
+        print("\nPlease install pytest and pytest-cov:")
         print("pip install pytest pytest-cov")
-        print("\nThen run:")
-        print(f"pytest {__file__} --cov=video_api --cov-report=term-missing")
+        print("\nThen run from the frappe-bench directory:")
+        print("pytest apps/tap_lms/tap_lms/tests/test_video_api.py --cov=tap_lms.utils.video_api --cov-report=term-missing")
