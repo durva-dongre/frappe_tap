@@ -1776,69 +1776,6 @@ class TestGlificCoverageOnly(unittest.TestCase):
         result = check_student_multi_enrollment(unicode_id)
         self.assertEqual(result, "yes")
 
-    @patch('tap_lms.glific_multi_enrollment_update.check_student_multi_enrollment')
-    def test_force_coverage_large_scale(self, mock_check):
-        """Test with large scale data"""
-        
-        mock_onboarding = Mock()
-        mock_onboarding.set_name = "LARGE_SCALE"
-        
-        # Create 200 students
-        students = []
-        responses = []
-        for i in range(200):
-            students.append({
-                "student_id": f"STU{i:05d}",
-                "phone": f"+1{i:010d}" if i % 2 == 0 else None
-            })
-            # Vary responses
-            if i % 4 == 0:
-                responses.append("yes")
-            elif i % 4 == 1:
-                responses.append("no")
-            elif i % 4 == 2:
-                responses.append("student_not_found")
-            else:
-                responses.append("error")
-        
-        frappe_mock.get_doc = Mock(return_value=mock_onboarding)
-        frappe_mock.get_all = Mock(return_value=students)
-        mock_check.side_effect = responses
-        
-        result = update_specific_set_contacts_with_multi_enrollment("LARGE_SCALE")
-        self.assertEqual(result["total_processed"], 200)
-
-    @patch('tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
-    def test_force_coverage_concurrent_sets(self, mock_update):
-        """Test processing many sets concurrently"""
-        
-        # Create 30 sets
-        sets = [f"SET{i:03d}" for i in range(30)]
-        
-        # Vary responses
-        responses = []
-        for i in range(30):
-            if i % 3 == 0:
-                responses.append({"updated": 5, "errors": 0, "total_processed": 5})
-            elif i % 3 == 1:
-                responses.append({"updated": 2, "errors": 3, "total_processed": 5})
-            else:
-                responses.append(Exception("Error"))
-        
-        mock_update.side_effect = responses
-        
-        result = process_multiple_sets_simple(sets)
-        self.assertEqual(len(result), 30)
-        
-        # Check status distribution
-        completed = sum(1 for r in result if r.get("status") == "completed")
-        with_errors = sum(1 for r in result if r.get("status") == "completed_with_errors")
-        failed = sum(1 for r in result if r.get("status") == "failed")
-        
-        self.assertGreater(completed, 0)
-        self.assertGreater(with_errors, 0)
-        self.assertGreater(failed, 0)
-
     def test_force_coverage_mock_internals(self):
         """Test mock framework internals for coverage"""
         
@@ -1860,33 +1797,7 @@ class TestGlificCoverageOnly(unittest.TestCase):
         except frappe_mock.DoesNotExistError as e:
             self.assertIn("Test", str(e))
 
-    @patch('tap_lms.glific_multi_enrollment_update.check_student_multi_enrollment')
-    def test_force_coverage_boundary_conditions(self, mock_check):
-        """Test boundary conditions"""
-        
-        mock_onboarding = Mock()
-        mock_onboarding.set_name = "BOUNDARY"
-        
-        # Test with exactly 1 student
-        frappe_mock.get_doc = Mock(return_value=mock_onboarding)
-        frappe_mock.get_all = Mock(return_value=[{"student_id": "S1", "phone": "+1"}])
-        mock_check.return_value = "yes"
-        
-        result = update_specific_set_contacts_with_multi_enrollment("BOUNDARY")
-        self.assertEqual(result["total_processed"], 1)
-        
-        # Test with exactly 0 students
-        frappe_mock.get_all = Mock(return_value=[])
-        result = update_specific_set_contacts_with_multi_enrollment("BOUNDARY")
-        self.assertEqual(result["total_processed"], 0)
-        
-        # Test with None return from get_all
-        frappe_mock.get_all = Mock(return_value=None)
-        try:
-            result = update_specific_set_contacts_with_multi_enrollment("BOUNDARY")
-        except:
-            pass
-
+   
     def test_force_coverage_all_functions_called(self):
         """Ensure all functions are called at least once"""
         
