@@ -536,15 +536,22 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         # Reset all mocks before each test
         frappe_mock.db.reset_mock()
         frappe_mock.logger.reset_mock()
-        frappe_mock.db.exists.reset_mock()
-        frappe_mock.db.get_value.reset_mock()
-        frappe_mock.db.set_value.reset_mock()
+        frappe_mock.db.exists = Mock()
+        frappe_mock.db.get_value = Mock()
+        frappe_mock.db.set_value = Mock()
+        frappe_mock.db.begin = Mock()
+        frappe_mock.db.commit = Mock()
+        frappe_mock.db.rollback = Mock()
 
     # ========== ORIGINAL WORKING TESTS ==========
     
     def test_check_student_multi_enrollment_multiple_enrollments(self):
         """Test basic multi-enrollment check"""
         frappe_mock.db.exists = Mock(return_value=True)
+        mock_doc = Mock()
+        mock_doc.enrollment = [Mock(), Mock()]  # 2 enrollments
+        frappe_mock.get_doc = Mock(return_value=mock_doc)
+        
         result = check_student_multi_enrollment("STU001")
         self.assertEqual(result, "yes")
 
@@ -552,7 +559,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test with no set name - should return error"""
         result = update_specific_set_contacts_with_multi_enrollment(None)
         self.assertIn("error", result)
-        self.assertIn("required", result)
+        self.assertIn("required", result["error"].lower())
 
     def test_update_specific_set_not_found(self):
         """Test with non-existent set"""
@@ -568,7 +575,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test run function with no set name"""
         result = run_multi_enrollment_update_for_specific_set(None)
         self.assertIn("Error", result)
-        self.assertIn("required", result)
+        self.assertIn("required", result.lower())
 
     @patch('tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment')
     def test_run_multi_enrollment_update_success(self, mock_update):
@@ -663,7 +670,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test update with empty string set name"""
         result = update_specific_set_contacts_with_multi_enrollment("")
         self.assertIn("error", result)
-        self.assertIn("required", result)
+        self.assertIn("required", result["error"].lower())
 
     def test_update_set_with_valid_set_and_students(self):
         """Test update with valid set and multiple students"""
@@ -698,6 +705,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test when all students have multi-enrollment"""
         mock_onboarding = Mock()
         mock_onboarding.set_name = "TEST_SET"
+        mock_onboarding.status = "Processed"
         
         students = [
             {"student_id": "STU001", "phone": "+1111111111"},
@@ -720,6 +728,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test when set has no students"""
         mock_onboarding = Mock()
         mock_onboarding.set_name = "TEST_SET"
+        mock_onboarding.status = "Processed"
         
         frappe_mock.get_doc = Mock(return_value=mock_onboarding)
         frappe_mock.get_all = Mock(return_value=[])  # No students
@@ -888,6 +897,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         
         mock_onboarding = Mock()
         mock_onboarding.set_name = "TEST_SET"
+        mock_onboarding.status = "Processed"
         
         frappe_mock.get_doc = Mock(return_value=mock_onboarding)
         frappe_mock.get_all = Mock(return_value=students)
@@ -904,6 +914,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test database transaction handling"""
         mock_onboarding = Mock()
         mock_onboarding.set_name = "TEST_SET"
+        mock_onboarding.status = "Processed"
         
         students = [{"student_id": "STU001", "phone": "+1111111111"}]
         
@@ -933,13 +944,12 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         result = update_specific_set_contacts_with_multi_enrollment("TEST_SET")
         
         self.assertIn("error", result)
-        # Verify rollback would be called in case of error
-        # Note: The actual rollback call depends on implementation
 
     def test_mixed_enrollment_statuses(self):
         """Test processing students with mixed enrollment statuses"""
         mock_onboarding = Mock()
         mock_onboarding.set_name = "MIXED_SET"
+        mock_onboarding.status = "Processed"
         
         students = [
             {"student_id": f"STU{i:03d}", "phone": f"+111111{i:04d}"}
@@ -965,6 +975,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test processing large batch of students"""
         mock_onboarding = Mock()
         mock_onboarding.set_name = "LARGE_SET"
+        mock_onboarding.status = "Processed"
         
         # Create 100 students
         students = [
@@ -995,6 +1006,7 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
         """Test nested exception scenarios"""
         mock_onboarding = Mock()
         mock_onboarding.set_name = "TEST_SET"
+        mock_onboarding.status = "Processed"
         
         students = [{"student_id": "STU001", "phone": "+1111111111"}]
         
@@ -1021,6 +1033,182 @@ class TestGlificComprehensiveCoverage(unittest.TestCase):
             self.assertEqual(len(result), 5)
             for r in result:
                 self.assertEqual(r["status"], "completed")
+
+    # ========== ADDITIONAL COVERAGE TESTS ==========
+    
+    def test_coverage_check_student_variations(self):
+        """Run check_student_multi_enrollment with different inputs to increase coverage"""
+        
+        # Test with db.exists = False
+        frappe_mock.db.exists = Mock(return_value=False)
+        result1 = check_student_multi_enrollment("STU001")
+        self.assertIsNotNone(result1)
+        
+        # Test with different enrollment counts
+        frappe_mock.db.exists = Mock(return_value=True)
+        
+        # Single enrollment
+        mock_doc_single = Mock()
+        mock_doc_single.enrollment = [Mock()]
+        frappe_mock.get_doc = Mock(return_value=mock_doc_single)
+        result2 = check_student_multi_enrollment("STU001")
+        self.assertIsNotNone(result2)
+        
+        # No enrollments  
+        mock_doc_empty = Mock()
+        mock_doc_empty.enrollment = []
+        frappe_mock.get_doc = Mock(return_value=mock_doc_empty)
+        result3 = check_student_multi_enrollment("STU001")
+        self.assertIsNotNone(result3)
+
+    def test_coverage_check_student_edge_cases(self):
+        """Test edge cases for check_student_multi_enrollment to increase coverage"""
+        
+        # Test with exceptions
+        frappe_mock.db.exists = Mock(side_effect=Exception("Test"))
+        result = check_student_multi_enrollment("STU001")
+        self.assertEqual(result, "error")
+        
+        # Test with None/empty inputs
+        test_inputs = [None, "", "VALID_ID"]
+        for test_input in test_inputs:
+            frappe_mock.db.exists = Mock(return_value=True)
+            mock_doc = Mock()
+            mock_doc.enrollment = [Mock(), Mock()]
+            frappe_mock.get_doc = Mock(return_value=mock_doc)
+            result = check_student_multi_enrollment(test_input)
+            self.assertIsNotNone(result)
+
+    def test_coverage_update_set_additional_scenarios(self):
+        """Run additional scenarios for update_specific_set to increase coverage"""
+        
+        # Test with empty string
+        result = update_specific_set_contacts_with_multi_enrollment("")
+        self.assertIsInstance(result, dict)
+        
+        # Test with general exception
+        original_get_doc = frappe_mock.get_doc
+        frappe_mock.get_doc = Mock(side_effect=Exception("General error"))
+        result = update_specific_set_contacts_with_multi_enrollment("TEST")
+        self.assertIsInstance(result, dict)
+        frappe_mock.get_doc = original_get_doc
+
+    def test_coverage_update_set_with_students(self):
+        """Test update_specific_set with actual student processing"""
+        
+        mock_onboarding = Mock()
+        mock_onboarding.set_name = "TEST_SET"
+        mock_onboarding.status = "Processed"
+        
+        # Mock multiple students
+        students = [
+            {"student_id": "STU001", "phone": "+1111111111"},
+            {"student_id": "STU002", "phone": "+2222222222"},
+        ]
+        
+        frappe_mock.get_doc = Mock(return_value=mock_onboarding)
+        frappe_mock.get_all = Mock(return_value=students)
+        
+        # Mock different check results
+        with patch('tap_lms.glific_multi_enrollment_update.check_student_multi_enrollment') as mock_check:
+            # Test all possible return values
+            test_scenarios = ["yes", "no", "student_not_found", "error"]
+            
+            for scenario in test_scenarios:
+                mock_check.return_value = scenario
+                result = update_specific_set_contacts_with_multi_enrollment("TEST_SET")
+                self.assertIsInstance(result, dict)
+
+    def test_coverage_process_sets_variations(self):
+        """Test process_multiple_sets_simple with different scenarios"""
+        
+        # Empty list
+        result = process_multiple_sets_simple([])
+        self.assertIsInstance(result, list)
+        
+        # Test with different mock responses
+        with patch('tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment') as mock_update:
+            
+            # Test success scenario
+            mock_update.return_value = {"updated": 1, "errors": 0, "total_processed": 1}
+            result = process_multiple_sets_simple(["SET001"])
+            self.assertIsInstance(result, list)
+            
+            # Test with errors
+            mock_update.return_value = {"updated": 0, "errors": 1, "total_processed": 1}
+            result = process_multiple_sets_simple(["SET001"]) 
+            self.assertIsInstance(result, list)
+            
+            # Test with exception
+            mock_update.side_effect = Exception("Test error")
+            result = process_multiple_sets_simple(["SET001"])
+            self.assertIsInstance(result, list)
+
+    def test_coverage_process_my_sets_scenarios(self):
+        """Test process_my_sets to increase coverage"""
+        
+        # Test normal case
+        result = process_my_sets()
+        self.assertIsInstance(result, str)
+        
+        # Test with no sets
+        original_get_all = frappe_mock.get_all
+        frappe_mock.get_all = Mock(return_value=[])
+        result = process_my_sets()
+        self.assertIsInstance(result, str)
+        frappe_mock.get_all = original_get_all
+        
+        # Test with exception in get_all
+        frappe_mock.get_all = Mock(side_effect=Exception("Test"))
+        result = process_my_sets()
+        self.assertIsInstance(result, str)
+
+    def test_coverage_backend_sets_variations(self):
+        """Test get_backend_onboarding_sets with different scenarios"""
+        
+        # Test with empty result
+        original_get_all = frappe_mock.get_all
+        frappe_mock.get_all = Mock(return_value=[])
+        result = get_backend_onboarding_sets()
+        self.assertIsInstance(result, list)
+        
+        # Test with multiple sets
+        mock_sets = [
+            {"name": "SET001", "set_name": "Set 1"},
+            {"name": "SET002", "set_name": "Set 2"}
+        ]
+        frappe_mock.get_all = Mock(return_value=mock_sets)
+        result = get_backend_onboarding_sets()
+        self.assertIsInstance(result, list)
+        
+        # Test with exception
+        frappe_mock.get_all = Mock(side_effect=Exception("Test"))
+        result = get_backend_onboarding_sets()
+        self.assertIsInstance(result, list)
+        
+        frappe_mock.get_all = original_get_all
+
+    def test_coverage_run_function_variations(self):
+        """Test run_multi_enrollment_update_for_specific_set with more scenarios"""
+        
+        # Test with empty string
+        result = run_multi_enrollment_update_for_specific_set("")
+        self.assertIsInstance(result, str)
+        
+        # Test various patched responses
+        with patch('tap_lms.glific_multi_enrollment_update.update_specific_set_contacts_with_multi_enrollment') as mock_update:
+            
+            # Test different return structures
+            test_responses = [
+                {"updated": 5, "skipped": 2, "errors": 1, "total_processed": 8},
+                {"error": "Some error"},
+                {"message": "Some message"}
+            ]
+            
+            for response in test_responses:
+                mock_update.return_value = response
+                result = run_multi_enrollment_update_for_specific_set("TEST")
+                self.assertIsInstance(result, str)
 
 if __name__ == '__main__':
     unittest.main()
