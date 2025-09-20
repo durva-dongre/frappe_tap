@@ -74,28 +74,119 @@ def get_onboarding_batches():
 @frappe.whitelist()
 def get_batch_details(batch_id):
     # Get the details of a specific batch
-    batch = frappe.get_doc("Backend Student Onboarding", batch_id)
+    # batch = frappe.get_doc("Backend Student Onboarding", batch_id)
     # Only request fields that exist in the database
     students = frappe.get_all("Backend Students", 
-                             filters={"parent": batch_id},
+                             filters={"parent": batch_id,"processing_status": ["in", ["Pending", "Failed"]]},
                              fields=["name", "student_name", "phone", "gender", 
                                     "batch", "course_vertical", "grade", "school",
                                     "language", "processing_status", "student_id"])
     
+
+    already_on_bground = False
     # Add validation flags
-    for student in students:
-        student["validation"] = validate_student(student)
+    # for student in students:
+    #     student["validation"] = validate_student(student)
     
-    # Get Glific group for this batch if exists
-    glific_group = frappe.get_all("GlificContactGroup", 
-                                 filters={"backend_onboarding_set": batch_id},
-                                 fields=["group_id", "label"])
+    # # Get Glific group for this batch if exists
+    # glific_group = frappe.get_all("GlificContactGroup", 
+    #                              filters={"backend_onboarding_set": batch_id},
+    #                              fields=["group_id", "label"])
     
     return {
-        "batch": batch,
-        "students": students,
-        "glific_group": glific_group[0] if glific_group else None
+        "batch": batch_id,
+        "students": len(students),
+        "on_queue": already_on_bground,
+        #"glific_group": glific_group[0] if glific_group else None
     }
+    #return {"students_"(students),bac}
+from frappe.utils.background_jobs import get_jobs
+def is_batch_job_running(batch_id):
+    """
+    Check if a student_onboarding job for the given batch_id is already running or queued.
+    """
+    job_name = f"student_onboarding_{batch_id}"
+    all_jobs = get_jobs(site=frappe.local.site, queue="long")  # can check all queues if needed
+
+    # all_jobs is a dict like {"long": [job1, job2, ...]}
+    for q, jobs in all_jobs.items():
+        for job in jobs:
+            if job_name == job.get("job_name"):
+                return True
+    return False
+
+from rq.job import Job
+from rq import Queue
+from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
+from frappe.utils.background_jobs import get_redis_conn
+
+def is_rq_job_running(batch_id):
+    job_name = f"student_onboarding_{batch_id}"
+    """
+    Return True if a job with the given job_name exists in any RQ queue, else False.
+    """
+    conn = get_redis_conn()
+    queue = Queue(name="long", connection=conn)
+
+    # 1️⃣ Check waiting jobs
+    for job_id in queue.job_ids:
+        job = Job.fetch(job_id, connection=conn)
+        if job.kwargs.get("job_name") == job_name:
+            return True
+
+    # 2️⃣ Check started jobs
+    started_registry = StartedJobRegistry(queue=queue)
+    for job_id in started_registry.get_job_ids():
+        job = Job.fetch(job_id, connection=conn)
+        if job.kwargs.get("job_name") == job_name:
+            return True
+
+    # 3️⃣ Optionally check failed jobs
+    failed_registry = FailedJobRegistry(queue=queue)
+    for job_id in failed_registry.get_job_ids():
+        job = Job.fetch(job_id, connection=conn)
+        if job.kwargs.get("job_name") == job_name:
+            return True
+
+    return False
+
+import frappe
+from rq import Queue
+from rq.job import Job 
+from frappe.utils.background_jobs import get_redis_conn
+
+@frappe.whitelist()
+def is_job_name_exist(batch_id):
+    job_name = f"student_onboarding_{batch_id}"
+    job_data = None
+
+    try:
+        # check if RQ Job doctype exists (v14+)
+        if frappe.db.table_exists("RQ Job"):
+            job_data = frappe.db.get_value(
+                "RQ Job",
+                {"job_name": job_name},
+                ["name", "status"],
+                as_dict=True
+            )
+        else:
+            # fallback to Redis RQ directly
+            from frappe.utils.background_jobs import get_job
+            job = get_job(job_name)
+            if job:
+                job_data = {
+                    "name": job.id,
+                    "status": job.get_status()
+                }
+
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "is_job_name_exist")
+
+    return True if job_data else False
+
+
+
+
 
 def validate_student(student):
     validation = {}
@@ -180,7 +271,8 @@ def process_batch(batch_id, use_background_job=False):
         job = frappe.enqueue(
             process_batch_job,
             queue='long',
-            timeout=1800, # 30 minutes
+            #timeout=1800, # 30 minutes
+            timeout=7200,  # 2 hours
             job_name=f"student_onboarding_{batch_id}",
             set_id=batch_id
         )
@@ -188,6 +280,8 @@ def process_batch(batch_id, use_background_job=False):
     else:
         # Process immediately
         return process_batch_job(batch_id)
+
+
 
 def process_batch_job(set_id):
     """Background job function to process the batch"""
