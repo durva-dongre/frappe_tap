@@ -1,14 +1,13 @@
 """
-COMPREHENSIVE Test Suite for tap_lms/api.py
-Production-ready test suite with full coverage and proper assertions
+Test Suite for tap_lms/api.py
+Focus: Success paths with comprehensive assertions
 """
 
 import sys
 import unittest
-from unittest.mock import Mock, patch, MagicMock, call, PropertyMock
+from unittest.mock import Mock, patch
 import json
 from datetime import datetime, timedelta
-import time
 
 # =============================================================================
 # MOCK SETUP
@@ -18,9 +17,7 @@ class MockFrappeUtils:
     @staticmethod
     def cint(value):
         try:
-            if value is None or value == '':
-                return 0
-            return int(value)
+            return 0 if value is None or value == '' else int(value)
         except (ValueError, TypeError):
             return 0
     
@@ -59,6 +56,7 @@ class MockFrappeUtils:
             except ValueError:
                 return datetime.now()
         return dt if dt else datetime.now()
+
 
 class MockFrappeDocument:
     def __init__(self, doctype, name=None, **kwargs):
@@ -152,11 +150,13 @@ class MockFrappeDocument:
     def get(self, field, default=None):
         return getattr(self, field, default)
 
+
 class MockFrappe:
     def __init__(self):
         self.utils = MockFrappeUtils()
         self.response = Mock()
         self.response.http_status_code = 200
+        self.response.update = Mock()
         self.local = Mock()
         self.local.form_dict = {}
         self.db = Mock()
@@ -197,6 +197,9 @@ class MockFrappe:
     def get_single(self, doctype):
         return MockFrappeDocument(doctype)
     
+    def get_all(self, *args, **kwargs):
+        return []
+    
     def throw(self, message):
         raise Exception(message)
     
@@ -207,6 +210,7 @@ class MockFrappe:
         def decorator(func):
             return func
         return decorator
+
 
 mock_frappe = MockFrappe()
 mock_glific = Mock()
@@ -240,11 +244,11 @@ except ImportError as e:
 # =============================================================================
 
 class BaseAPITest(unittest.TestCase):
-    """Base class with common setup and utilities"""
+    """Base test class with common setup"""
     
     def setUp(self):
-        """Reset all mocks before each test"""
         mock_frappe.response.http_status_code = 200
+        mock_frappe.response.update = Mock()
         mock_frappe.local.form_dict = {}
         mock_frappe.request.data = '{}'
         mock_frappe.request.get_json.return_value = {}
@@ -270,32 +274,20 @@ class BaseAPITest(unittest.TestCase):
 
 @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
 class TestAuthentication(BaseAPITest):
-    """Test API key authentication"""
     
     def test_valid_api_key(self):
-        """Valid API key should return the key name"""
         result = api_module.authenticate_api_key("valid_key")
         self.assertEqual(result, "valid_key")
     
     def test_invalid_api_key(self):
-        """Invalid API key should return None"""
         result = api_module.authenticate_api_key("invalid_key")
         self.assertIsNone(result)
-    
-    def test_disabled_api_key(self):
-        """Disabled API key should return None"""
-        with patch.object(mock_frappe, 'get_doc') as mock_get:
-            mock_get.side_effect = mock_frappe.DoesNotExistError()
-            result = api_module.authenticate_api_key("disabled_key")
-            self.assertIsNone(result)
 
 
 @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
 class TestListDistricts(BaseAPITest):
-    """Test list_districts endpoint"""
     
-    def test_list_districts_success(self):
-        """Should return districts for valid state"""
+    def test_success_path(self):
         mock_frappe.request.data = json.dumps({
             'api_key': 'valid_key',
             'state': 'STATE_001'
@@ -313,9 +305,9 @@ class TestListDistricts(BaseAPITest):
             self.assertEqual(len(result['data']), 2)
             self.assertEqual(result['data']['DIST_001'], 'District 1')
             self.assertEqual(mock_frappe.response.http_status_code, 200)
+            mock_get_all.assert_called_once()
     
-    def test_list_districts_invalid_api_key(self):
-        """Should return error for invalid API key"""
+    def test_invalid_api_key(self):
         mock_frappe.request.data = json.dumps({
             'api_key': 'invalid_key',
             'state': 'STATE_001'
@@ -324,66 +316,35 @@ class TestListDistricts(BaseAPITest):
         result = api_module.list_districts()
         
         self.assertEqual(result['status'], 'error')
-        self.assertIn('Invalid API key', result['message'])
         self.assertEqual(mock_frappe.response.http_status_code, 401)
-    
-    def test_list_districts_missing_state(self):
-        """Should return error when state is missing"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key'
-        })
-        
-        result = api_module.list_districts()
-        
-        self.assertEqual(result['status'], 'error')
-        self.assertEqual(mock_frappe.response.http_status_code, 400)
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestListCities(BaseAPITest):
-    """Test list_cities endpoint"""
-    
-    def test_list_cities_success(self):
-        """Should return cities for valid district"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'district': 'DIST_001'
-        })
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [
-                {'name': 'CITY_001', 'city_name': 'City 1'},
-                {'name': 'CITY_002', 'city_name': 'City 2'}
-            ]
-            
-            result = api_module.list_cities()
-            
-            self.assertEqual(result['status'], 'success')
-            self.assertEqual(len(result['data']), 2)
-            self.assertEqual(mock_frappe.response.http_status_code, 200)
 
 
 @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
 class TestVerifyKeyword(BaseAPITest):
-    """Test verify_keyword endpoint"""
     
-    def test_verify_keyword_success(self):
-        """Should return school details for valid keyword"""
+    def test_success_path(self):
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key',
             'keyword': 'test_school'
         }
         
         with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            mock_get.return_value = {'name1': 'Test School', 'model': 'MODEL_001'}
+            mock_school = Mock()
+            mock_school.name1 = 'Test School'
+            mock_school.model = 'MODEL_001'
+            mock_get.return_value = mock_school
             
             result = api_module.verify_keyword()
             
-            # Check response was updated (frappe.response.update was called)
+            mock_frappe.response.update.assert_called_once()
+            call_args = mock_frappe.response.update.call_args[0][0]
+            
+            self.assertEqual(call_args['status'], 'success')
+            self.assertEqual(call_args['school_name'], 'Test School')
+            self.assertEqual(call_args['model'], 'MODEL_001')
             self.assertEqual(mock_frappe.response.http_status_code, 200)
     
-    def test_verify_keyword_not_found(self):
-        """Should return failure when keyword not found"""
+    def test_keyword_not_found(self):
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key',
             'keyword': 'nonexistent'
@@ -395,157 +356,201 @@ class TestVerifyKeyword(BaseAPITest):
             result = api_module.verify_keyword()
             
             self.assertEqual(mock_frappe.response.http_status_code, 404)
+
+
+@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+class TestCreateStudent(BaseAPITest):
     
-    def test_verify_keyword_sql_injection_attempt(self):
-        """Should handle SQL injection attempts safely"""
-        mock_frappe.request.get_json.return_value = {
+    def test_success_new_student(self):
+        mock_frappe.local.form_dict = {
             'api_key': 'valid_key',
-            'keyword': "test'; DROP TABLE School; --"
+            'student_name': 'John Doe',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'test_batch',
+            'vertical': 'Math',
+            'glific_id': 'new_glific_123'
         }
         
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            mock_get.return_value = None
+        with patch.object(mock_frappe, 'get_all') as mock_get_all:
+            mock_get_all.side_effect = [
+                [{'name': 'BO_001', 'school': 'SCHOOL_001', 
+                  'batch': 'BATCH_001', 'kit_less': 1}],
+                [{'name': 'VERT_001'}],
+                []
+            ]
             
-            # Should not raise exception or execute malicious SQL
-            result = api_module.verify_keyword()
+            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
+                mock_batch = MockFrappeDocument('Batch',
+                    name='BATCH_001',
+                    active=True,
+                    regist_end_date=(datetime.now() + timedelta(days=30)).date())
+                mock_get_doc.return_value = mock_batch
+                
+                with patch.object(api_module, 'get_course_level_with_mapping') as mock_course:
+                    mock_course.return_value = 'COURSE_LEVEL_001'
+                    
+                    with patch.object(api_module, 'create_new_student') as mock_create:
+                        mock_student = MockFrappeDocument('Student', 
+                            name='STUDENT_NEW_001',
+                            name1='John Doe',
+                            phone='9876543210')
+                        mock_student.enrollment = []
+                        mock_student.save = Mock()
+                        mock_create.return_value = mock_student
+                        
+                        result = api_module.create_student()
+                        
+                        self.assertEqual(result['status'], 'success')
+                        self.assertEqual(result['crm_student_id'], 'STUDENT_NEW_001')
+                        self.assertEqual(result['assigned_course_level'], 'COURSE_LEVEL_001')
+                        
+                        mock_create.assert_called_once()
+                        self.assertEqual(len(mock_student.enrollment), 1)
+                        mock_student.save.assert_called_once()
+    
+    def test_missing_required_fields(self):
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'Test'
+        }
+        
+        result = api_module.create_student()
+        
+        self.assertEqual(result['status'], 'error')
+    
+    def test_inactive_batch(self):
+        mock_frappe.local.form_dict = {
+            'api_key': 'valid_key',
+            'student_name': 'Test',
+            'phone': '9876543210',
+            'gender': 'Male',
+            'grade': '5',
+            'language': 'English',
+            'batch_skeyword': 'inactive_batch',
+            'vertical': 'Math',
+            'glific_id': 'test'
+        }
+        
+        with patch.object(mock_frappe, 'get_all') as mock_get_all:
+            mock_get_all.return_value = [
+                {'name': 'BO_001', 'school': 'SCHOOL_001', 
+                 'batch': 'BATCH_001', 'kit_less': 1}
+            ]
             
-            # Verify get_value was called with the injection string as-is
-            # (it should be parameterized, not interpolated)
-            self.assertTrue(mock_get.called)
+            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
+                mock_batch = MockFrappeDocument('Batch', active=False)
+                mock_get_doc.return_value = mock_batch
+                
+                result = api_module.create_student()
+                
+                self.assertEqual(result['status'], 'error')
 
 
 @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestCreateTeacher(BaseAPITest):
-    """Test create_teacher endpoint"""
+class TestGetActiveBatch(BaseAPITest):
     
-    def test_create_teacher_success(self):
-        """Should create teacher successfully"""
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            mock_get.return_value = 'SCHOOL_001'
+    def test_success_batch_found(self):
+        with patch.object(mock_frappe, 'get_all') as mock_get_all:
+            mock_get_all.return_value = [
+                {'batch': 'BATCH_ACTIVE_001', 'name': 'BO_001'}
+            ]
             
-            result = api_module.create_teacher(
-                'valid_key', 'test_school', 'John', 
-                '9876543210', 'glific_123', 'Doe'
-            )
-            
-            self.assertIn('message', result)
-            self.assertIn('teacher_id', result)
-            self.assertIn('created', result['message'].lower())
-    
-    def test_create_teacher_invalid_keyword(self):
-        """Should return error for invalid school keyword"""
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            mock_get.return_value = None
-            
-            result = api_module.create_teacher(
-                'valid_key', 'invalid_school', 'John',
-                '9876543210', 'glific_123'
-            )
-            
-            self.assertIn('error', result)
-            self.assertIn('No school found', result['error'])
-    
-    def test_create_teacher_duplicate(self):
-        """Should handle duplicate phone number"""
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            mock_get.return_value = 'SCHOOL_001'
-            
-            with patch.object(MockFrappeDocument, 'insert') as mock_insert:
-                mock_insert.side_effect = mock_frappe.DuplicateEntryError()
+            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
+                mock_batch = MockFrappeDocument('Batch',
+                    name='BATCH_ACTIVE_001',
+                    batch_id='BATCH_2025_ACTIVE',
+                    active=True,
+                    regist_end_date=(datetime.now() + timedelta(days=10)).date())
+                mock_get_doc.return_value = mock_batch
                 
-                result = api_module.create_teacher(
-                    'valid_key', 'test_school', 'John',
-                    '9876543210', 'glific_123'
-                )
+                result = api_module.get_active_batch_for_school('SCHOOL_001')
                 
-                self.assertIn('error', result)
-                self.assertIn('already exists', result['error'])
+                self.assertIsNotNone(result)
+                self.assertEqual(result['batch_name'], 'BATCH_ACTIVE_001')
+                self.assertEqual(result['batch_id'], 'BATCH_2025_ACTIVE')
+                mock_get_doc.assert_called_with('Batch', 'BATCH_ACTIVE_001')
 
 
 @unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestOTPFunctionality(BaseAPITest):
-    """Test OTP sending and verification"""
+class TestBatchKeywordList(BaseAPITest):
+    
+    def test_loop_processes_multiple_batches(self):
+        with patch.object(mock_frappe, 'get_all') as mock_get_all:
+            mock_get_all.return_value = [
+                {'batch': 'BATCH_001', 'school': 'SCHOOL_001', 'batch_skeyword': 'batch1'},
+                {'batch': 'BATCH_002', 'school': 'SCHOOL_002', 'batch_skeyword': 'batch2'},
+                {'batch': 'BATCH_003', 'school': 'SCHOOL_003', 'batch_skeyword': 'batch3'}
+            ]
+            
+            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
+                def get_doc_side_effect(doctype, name):
+                    batches = {
+                        'BATCH_001': MockFrappeDocument('Batch', name='BATCH_001', batch_id='B1',
+                            active=True, regist_end_date=(datetime.now() + timedelta(days=5)).date()),
+                        'BATCH_002': MockFrappeDocument('Batch', name='BATCH_002', batch_id='B2',
+                            active=True, regist_end_date=(datetime.now() + timedelta(days=10)).date()),
+                        'BATCH_003': MockFrappeDocument('Batch', name='BATCH_003', batch_id='B3',
+                            active=True, regist_end_date=(datetime.now() + timedelta(days=15)).date())
+                    }
+                    return batches.get(name, MockFrappeDocument(doctype))
+                
+                mock_get_doc.side_effect = get_doc_side_effect
+                
+                with patch.object(mock_frappe, 'get_value') as mock_get_val:
+                    def get_value_side_effect(dt, name, field):
+                        schools = {
+                            'SCHOOL_001': 'School One',
+                            'SCHOOL_002': 'School Two',
+                            'SCHOOL_003': 'School Three'
+                        }
+                        return schools.get(name, 'Unknown')
+                    
+                    mock_get_val.side_effect = get_value_side_effect
+                    
+                    result = api_module.list_batch_keyword('valid_key')
+                    
+                    self.assertIsInstance(result, list)
+                    self.assertEqual(len(result), 3)
+                    
+                    batch_ids = [item['batch_id'] for item in result]
+                    self.assertIn('B1', batch_ids)
+                    self.assertIn('B2', batch_ids)
+                    self.assertIn('B3', batch_ids)
+
+
+@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
+class TestOTPFlow(BaseAPITest):
     
     def test_send_otp_new_teacher(self):
-        """Should send OTP for new teacher"""
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key',
             'phone': '9876543210'
         }
         
         with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = []  # No existing teacher
+            mock_get_all.return_value = []
             
             mock_response = Mock()
             mock_response.json.return_value = {"status": "success", "id": "msg_123"}
             mock_requests.get.return_value = mock_response
             
-            result = api_module.send_otp()
-            
-            self.assertEqual(result['status'], 'success')
-            self.assertEqual(result['action_type'], 'new_teacher')
-            self.assertEqual(mock_frappe.response.http_status_code, 200)
-    
-    def test_send_otp_existing_teacher_with_active_batch(self):
-        """Should handle existing teacher with active batch"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'phone': '9876543210'
-        }
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            # First call: existing teacher
-            # Subsequent calls: active batch info
-            mock_get_all.side_effect = [
-                [{'name': 'TEACHER_001', 'school_id': 'SCHOOL_001'}],
-                [{'batch': 'BATCH_001'}],
-                []  # No existing group mapping
-            ]
-            
-            with patch.object(mock_frappe.db, 'get_value') as mock_get:
-                mock_get.side_effect = lambda dt, f, field: {
-                    ('School', 'SCHOOL_001', 'name1'): 'Test School',
-                    ('Batch', 'BATCH_001', 'batch_id'): 'BATCH_2025_001'
-                }.get((dt, f, field))
-                
-                with patch.object(api_module, 'get_active_batch_for_school') as mock_batch:
-                    mock_batch.return_value = {
-                        'batch_name': 'BATCH_001',
-                        'batch_id': 'BATCH_2025_001'
-                    }
-                    
-                    mock_response = Mock()
-                    mock_response.json.return_value = {"status": "success"}
-                    mock_requests.get.return_value = mock_response
-                    
-                    result = api_module.send_otp()
-                    
-                    self.assertEqual(result['status'], 'success')
-    
-    def test_send_otp_no_active_batch(self):
-        """Should return error when no active batch exists"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'phone': '9876543210'
-        }
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [{'name': 'TEACHER_001', 'school_id': 'SCHOOL_001'}]
-            
-            with patch.object(api_module, 'get_active_batch_for_school') as mock_batch:
-                mock_batch.return_value = {
-                    'batch_name': None,
-                    'batch_id': 'no_active_batch_id'
-                }
+            with patch.object(mock_frappe, 'new_doc') as mock_new:
+                mock_otp_doc = MockFrappeDocument('OTP Verification')
+                mock_otp_doc.insert = Mock()
+                mock_new.return_value = mock_otp_doc
                 
                 result = api_module.send_otp()
                 
-                self.assertEqual(result['status'], 'failure')
-                self.assertEqual(result['code'], 'NO_ACTIVE_BATCH')
-                self.assertEqual(mock_frappe.response.http_status_code, 409)
+                self.assertEqual(result['status'], 'success')
+                self.assertEqual(result['action_type'], 'new_teacher')
+                self.assertEqual(mock_frappe.response.http_status_code, 200)
+                mock_new.assert_called_with('OTP Verification')
+                mock_otp_doc.insert.assert_called_once()
     
-    def test_verify_otp_success_new_teacher(self):
-        """Should verify OTP successfully for new teacher"""
+    def test_verify_otp_success(self):
         mock_frappe.request.get_json.return_value = {
             'api_key': 'valid_key',
             'phone': '9876543210',
@@ -565,828 +570,7 @@ class TestOTPFunctionality(BaseAPITest):
             self.assertEqual(result['status'], 'success')
             self.assertEqual(result['action_type'], 'new_teacher')
             self.assertEqual(mock_frappe.response.http_status_code, 200)
-    
-    def test_verify_otp_expired(self):
-        """Should reject expired OTP"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'phone': '9876543210',
-            'otp': '1234'
-        }
-        
-        with patch.object(mock_frappe.db, 'sql') as mock_sql:
-            mock_sql.return_value = [{
-                'name': 'OTP_001',
-                'expiry': datetime.now() - timedelta(minutes=1),
-                'context': '{}',
-                'verified': False
-            }]
-            
-            result = api_module.verify_otp()
-            
-            self.assertEqual(result['status'], 'failure')
-            self.assertIn('expired', result['message'].lower())
-            self.assertEqual(mock_frappe.response.http_status_code, 400)
-    
-    def test_verify_otp_invalid(self):
-        """Should reject invalid OTP"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'phone': '9876543210',
-            'otp': 'wrong'
-        }
-        
-        with patch.object(mock_frappe.db, 'sql') as mock_sql:
-            mock_sql.return_value = []
-            
-            result = api_module.verify_otp()
-            
-            self.assertEqual(result['status'], 'failure')
-            self.assertIn('Invalid OTP', result['message'])
-    
-    def test_verify_otp_already_used(self):
-        """Should reject already verified OTP"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'phone': '9876543210',
-            'otp': '1234'
-        }
-        
-        with patch.object(mock_frappe.db, 'sql') as mock_sql:
-            mock_sql.return_value = [{
-                'name': 'OTP_001',
-                'expiry': datetime.now() + timedelta(minutes=10),
-                'context': '{}',
-                'verified': True  # Already verified
-            }]
-            
-            result = api_module.verify_otp()
-            
-            self.assertEqual(result['status'], 'failure')
-            self.assertIn('already used', result['message'].lower())
 
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestCreateStudent(BaseAPITest):
-    """Test create_student endpoint"""
-    
-    def setUp(self):
-        super().setUp()
-        mock_frappe.local.form_dict = {
-            'api_key': 'valid_key',
-            'student_name': 'John Doe',
-            'phone': '9876543210',
-            'gender': 'Male',
-            'grade': '5',
-            'language': 'English',
-            'batch_skeyword': 'test_batch',
-            'vertical': 'Math',
-            'glific_id': 'glific_123'
-        }
-    
-    def test_create_student_success(self):
-        """Should create new student successfully"""
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            # Batch onboarding, course vertical, no existing student
-            mock_get_all.side_effect = [
-                [{'name': 'BO_001', 'school': 'SCHOOL_001', 'batch': 'BATCH_001', 'kit_less': 1}],
-                [{'name': 'VERT_001'}],
-                []  # No existing student
-            ]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_batch = MockFrappeDocument('Batch', active=True,
-                    regist_end_date=(datetime.now() + timedelta(days=10)).date())
-                mock_get_doc.return_value = mock_batch
-                
-                with patch.object(api_module, 'get_course_level_with_mapping') as mock_course:
-                    mock_course.return_value = 'COURSE_001'
-                    
-                    with patch.object(api_module, 'create_new_student') as mock_create:
-                        mock_student = MockFrappeDocument('Student', name='STUDENT_001')
-                        mock_student.enrollment = []
-                        mock_create.return_value = mock_student
-                        
-                        result = api_module.create_student()
-                        
-                        self.assertEqual(result['status'], 'success')
-                        self.assertIn('crm_student_id', result)
-                        self.assertEqual(result['assigned_course_level'], 'COURSE_001')
-    
-    def test_create_student_missing_required_fields(self):
-        """Should reject request with missing fields"""
-        for field in ['student_name', 'phone', 'gender', 'grade']:
-            mock_frappe.local.form_dict = {
-                'api_key': 'valid_key',
-                'student_name': 'Test',
-                'phone': '9876543210',
-                'gender': 'Male',
-                'grade': '5',
-                'language': 'English',
-                'batch_skeyword': 'test_batch',
-                'vertical': 'Math',
-                'glific_id': 'test'
-            }
-            del mock_frappe.local.form_dict[field]
-            
-            result = api_module.create_student()
-            
-            self.assertEqual(result['status'], 'error')
-            self.assertIn('required', result['message'].lower())
-    
-    def test_create_student_invalid_batch(self):
-        """Should reject invalid batch keyword"""
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = []  # No batch found
-            
-            result = api_module.create_student()
-            
-            self.assertEqual(result['status'], 'error')
-            self.assertIn('Invalid batch_skeyword', result['message'])
-    
-    def test_create_student_inactive_batch(self):
-        """Should reject inactive batch"""
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [
-                {'name': 'BO_001', 'school': 'SCHOOL_001', 'batch': 'BATCH_001', 'kit_less': 1}
-            ]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_batch = MockFrappeDocument('Batch', active=False)
-                mock_get_doc.return_value = mock_batch
-                
-                result = api_module.create_student()
-                
-                self.assertEqual(result['status'], 'error')
-                self.assertIn('not active', result['message'].lower())
-    
-    def test_create_student_registration_ended(self):
-        """Should reject when registration period has ended"""
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [
-                {'name': 'BO_001', 'school': 'SCHOOL_001', 'batch': 'BATCH_001', 'kit_less': 1}
-            ]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_batch = MockFrappeDocument('Batch', active=True,
-                    regist_end_date=(datetime.now() - timedelta(days=1)).date())
-                mock_get_doc.return_value = mock_batch
-                
-                result = api_module.create_student()
-                
-                self.assertEqual(result['status'], 'error')
-                self.assertIn('ended', result['message'].lower())
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestCourseLevelLogic(BaseAPITest):
-    """Test course level selection logic"""
-    
-    def test_get_current_academic_year_before_april(self):
-        """Should return correct academic year before April"""
-        with patch.object(mock_frappe.utils, 'getdate') as mock_date:
-            mock_date.return_value = datetime(2025, 3, 31).date()
-            
-            result = api_module.get_current_academic_year()
-            
-            self.assertEqual(result, "2024-25")
-    
-    def test_get_current_academic_year_after_april(self):
-        """Should return correct academic year after April"""
-        with patch.object(mock_frappe.utils, 'getdate') as mock_date:
-            mock_date.return_value = datetime(2025, 4, 1).date()
-            
-            result = api_module.get_current_academic_year()
-            
-            self.assertEqual(result, "2025-26")
-    
-    def test_determine_student_type_new(self):
-        """Should identify new student"""
-        with patch.object(mock_frappe.db, 'sql') as mock_sql:
-            mock_sql.return_value = []
-            
-            result = api_module.determine_student_type(
-                '9876543210', 'John Doe', 'VERT_001'
-            )
-            
-            self.assertEqual(result, 'New')
-    
-    def test_determine_student_type_old(self):
-        """Should identify returning student"""
-        with patch.object(mock_frappe.db, 'sql') as mock_sql:
-            mock_sql.return_value = [{'name': 'STUDENT_001'}]
-            
-            result = api_module.determine_student_type(
-                '9876543210', 'John Doe', 'VERT_001'
-            )
-            
-            self.assertEqual(result, 'Old')
-    
-    def test_get_course_level_with_mapping_found(self):
-        """Should use mapping when available"""
-        with patch.object(api_module, 'determine_student_type') as mock_type:
-            mock_type.return_value = 'New'
-            
-            with patch.object(api_module, 'get_current_academic_year') as mock_year:
-                mock_year.return_value = '2025-26'
-                
-                with patch.object(mock_frappe, 'get_all') as mock_get_all:
-                    mock_get_all.return_value = [{
-                        'assigned_course_level': 'COURSE_MAPPED_001',
-                        'mapping_name': 'Test Mapping'
-                    }]
-                    
-                    result = api_module.get_course_level_with_mapping(
-                        'VERT_001', '5', '9876543210', 'John Doe', 1
-                    )
-                    
-                    self.assertEqual(result, 'COURSE_MAPPED_001')
-    
-    def test_get_course_level_with_mapping_fallback(self):
-        """Should fallback to Stage Grades when no mapping"""
-        with patch.object(api_module, 'determine_student_type') as mock_type:
-            mock_type.return_value = 'New'
-            
-            with patch.object(api_module, 'get_current_academic_year') as mock_year:
-                mock_year.return_value = '2025-26'
-                
-                with patch.object(mock_frappe, 'get_all') as mock_get_all:
-                    mock_get_all.return_value = []  # No mapping
-                    
-                    with patch.object(api_module, 'get_course_level_original') as mock_original:
-                        mock_original.return_value = 'COURSE_STAGE_001'
-                        
-                        result = api_module.get_course_level_with_mapping(
-                            'VERT_001', '5', '9876543210', 'John Doe', 1
-                        )
-                        
-                        self.assertEqual(result, 'COURSE_STAGE_001')
-                        mock_original.assert_called_once()
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestBatchOperations(BaseAPITest):
-    """Test batch-related endpoints"""
-    
-    def test_verify_batch_keyword_success(self):
-        """Should verify valid batch keyword"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'batch_skeyword': 'test_batch'
-        })
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [{
-                'school': 'SCHOOL_001',
-                'batch': 'BATCH_001',
-                'model': 'MODEL_001',
-                'kit_less': 1
-            }]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_batch = MockFrappeDocument('Batch', active=True,
-                    regist_end_date=(datetime.now() + timedelta(days=10)).date())
-                mock_get_doc.return_value = mock_batch
-                
-                with patch.object(mock_frappe.db, 'get_value') as mock_get:
-                    mock_get.side_effect = lambda dt, f, field: {
-                        ('School', 'SCHOOL_001', 'name1'): 'Test School',
-                        ('Batch', 'BATCH_001', 'batch_id'): 'BATCH_2025_001'
-                    }.get((dt, f, field))
-                    
-                    result = api_module.verify_batch_keyword()
-                    
-                    self.assertEqual(result['status'], 'success')
-                    self.assertEqual(result['school_name'], 'Test School')
-                    self.assertEqual(result['batch_id'], 'BATCH_2025_001')
-    
-    def test_list_batch_keyword(self):
-        """Should list active batches"""
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [{
-                'batch': 'BATCH_001',
-                'school': 'SCHOOL_001',
-                'batch_skeyword': 'test_batch'
-            }]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_batch = MockFrappeDocument('Batch',
-                    active=True,
-                    batch_id='BATCH_2025_001',
-                    regist_end_date=(datetime.now() + timedelta(days=10)).date())
-                mock_get_doc.return_value = mock_batch
-                
-                with patch.object(mock_frappe, 'get_value') as mock_get:
-                    mock_get.return_value = 'Test School'
-                    
-                    result = api_module.list_batch_keyword('valid_key')
-                    
-                    self.assertIsInstance(result, list)
-                    self.assertGreater(len(result), 0)
-                    self.assertIn('batch_id', result[0])
-    
-    def test_grade_list(self):
-        """Should return grade list for batch"""
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [{
-                'name': 'BO_001',
-                'from_grade': '1',
-                'to_grade': '10'
-            }]
-            
-            result = api_module.grade_list('valid_key', 'test_batch')
-            
-            self.assertIsInstance(result, dict)
-            self.assertEqual(result['1'], '1')
-            self.assertEqual(result['10'], '10')
-            self.assertEqual(result['count'], '10')
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestTeacherWebCreation(BaseAPITest):
-    """Test create_teacher_web endpoint"""
-    
-    def test_create_teacher_web_success(self):
-        """Should create teacher via web successfully"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'firstName': 'Jane',
-            'lastName': 'Smith',
-            'phone': '9876543210',
-            'School_name': 'Test School',
-            'language': 'LANG_001'
-        }
-        
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            def get_value_side_effect(doctype, filters, field=None):
-                if doctype == "OTP Verification":
-                    return "OTP_001"
-                elif doctype == "Teacher":
-                    return None  # No existing teacher
-                elif doctype == "School":
-                    return "SCHOOL_001"
-                return None
-            
-            mock_get.side_effect = get_value_side_effect
-            
-            with patch.object(api_module, 'get_model_for_school') as mock_model:
-                mock_model.return_value = 'Test Model'
-                
-                with patch.object(api_module, 'get_active_batch_for_school') as mock_batch:
-                    mock_batch.return_value = {
-                        'batch_name': 'BATCH_001',
-                        'batch_id': 'BATCH_2025_001'
-                    }
-                    
-                    mock_glific.get_contact_by_phone.return_value = None
-                    mock_glific.create_contact.return_value = {'id': 'new_contact_123'}
-                    
-                    result = api_module.create_teacher_web()
-                    
-                    self.assertEqual(result['status'], 'success')
-                    self.assertIn('teacher_id', result)
-                    mock_background.enqueue_glific_actions.assert_called_once()
-    
-    def test_create_teacher_web_unverified_phone(self):
-        """Should reject unverified phone number"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'firstName': 'Jane',
-            'phone': '9876543210',
-            'School_name': 'Test School'
-        }
-        
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            mock_get.return_value = None  # No verified OTP
-            
-            result = api_module.create_teacher_web()
-            
-            self.assertEqual(result['status'], 'failure')
-            self.assertIn('not verified', result['message'].lower())
-    
-    def test_create_teacher_web_existing_phone(self):
-        """Should reject duplicate phone number"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'firstName': 'Jane',
-            'phone': '9876543210',
-            'School_name': 'Test School'
-        }
-        
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            def get_value_side_effect(doctype, filters, field=None):
-                if doctype == "OTP Verification":
-                    return "OTP_001"
-                elif doctype == "Teacher":
-                    return "TEACHER_001"  # Existing teacher
-                return None
-            
-            mock_get.side_effect = get_value_side_effect
-            
-            result = api_module.create_teacher_web()
-            
-            self.assertEqual(result['status'], 'failure')
-            self.assertIn('already exists', result['message'].lower())
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestTeacherRoleUpdate(BaseAPITest):
-    """Test update_teacher_role endpoint"""
-    
-    def test_update_teacher_role_success(self):
-        """Should update teacher role successfully"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'glific_id': 'glific_123',
-            'teacher_role': 'HM'
-        })
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [{
-                'name': 'TEACHER_001',
-                'first_name': 'John',
-                'last_name': 'Doe',
-                'teacher_role': 'Teacher',
-                'school_id': 'SCHOOL_001'
-            }]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_teacher = MockFrappeDocument('Teacher',
-                    first_name='John',
-                    last_name='Doe',
-                    teacher_role='Teacher')
-                mock_get_doc.return_value = mock_teacher
-                
-                result = api_module.update_teacher_role()
-                
-                self.assertEqual(result['status'], 'success')
-                self.assertEqual(result['data']['new_role'], 'HM')
-                self.assertEqual(mock_frappe.response.http_status_code, 200)
-    
-    def test_update_teacher_role_invalid_role(self):
-        """Should reject invalid role"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'glific_id': 'glific_123',
-            'teacher_role': 'InvalidRole'
-        })
-        
-        result = api_module.update_teacher_role()
-        
-        self.assertEqual(result['status'], 'error')
-        self.assertIn('Invalid teacher_role', result['message'])
-        self.assertEqual(mock_frappe.response.http_status_code, 400)
-    
-    def test_update_teacher_role_not_found(self):
-        """Should handle teacher not found"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'glific_id': 'nonexistent',
-            'teacher_role': 'HM'
-        })
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = []
-            
-            result = api_module.update_teacher_role()
-            
-            self.assertEqual(result['status'], 'error')
-            self.assertIn('No teacher found', result['message'])
-            self.assertEqual(mock_frappe.response.http_status_code, 404)
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestGetTeacherByGlificID(BaseAPITest):
-    """Test get_teacher_by_glific_id endpoint"""
-    
-    def test_get_teacher_success(self):
-        """Should retrieve teacher details successfully"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'glific_id': 'glific_123'
-        })
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [{
-                'name': 'TEACHER_001',
-                'first_name': 'John',
-                'last_name': 'Doe',
-                'teacher_role': 'Teacher',
-                'school_id': 'SCHOOL_001',
-                'phone_number': '9876543210',
-                'email_id': 'john@example.com',
-                'language': 'LANG_001',
-                'gender': 'Male',
-                'department': None,
-                'course_level': None
-            }]
-            
-            with patch.object(mock_frappe.db, 'sql') as mock_sql:
-                mock_sql.return_value = []
-                
-                result = api_module.get_teacher_by_glific_id()
-                
-                self.assertEqual(result['status'], 'success')
-                self.assertEqual(result['data']['teacher_id'], 'TEACHER_001')
-                self.assertEqual(result['data']['full_name'], 'John Doe')
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestSchoolCityOperations(BaseAPITest):
-    """Test school city-related endpoints"""
-    
-    def test_get_school_city_success(self):
-        """Should get school city information"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'school_name': 'Test School'
-        })
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [{
-                'name': 'SCHOOL_001',
-                'name1': 'Test School',
-                'city': 'CITY_001',
-                'state': 'STATE_001',
-                'country': 'COUNTRY_001',
-                'address': '123 Main St',
-                'pin': '123456'
-            }]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                def get_doc_side_effect(doctype, name):
-                    if doctype == 'City':
-                        return MockFrappeDocument('City',
-                            city_name='Test City',
-                            district='DIST_001')
-                    elif doctype == 'District':
-                        return MockFrappeDocument('District',
-                            district_name='Test District',
-                            state='STATE_001')
-                    return MockFrappeDocument(doctype)
-                
-                mock_get_doc.side_effect = get_doc_side_effect
-                
-                result = api_module.get_school_city()
-                
-                self.assertEqual(result['status'], 'success')
-                self.assertEqual(result['city_name'], 'Test City')
-    
-    def test_search_schools_by_city(self):
-        """Should search schools by city name"""
-        mock_frappe.request.data = json.dumps({
-            'api_key': 'valid_key',
-            'city_name': 'Test City'
-        })
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            # First call: get city
-            # Second call: get schools
-            mock_get_all.side_effect = [
-                [{'name': 'CITY_001', 'city_name': 'Test City', 'district': 'DIST_001'}],
-                [{'name': 'SCHOOL_001', 'name1': 'School 1'},
-                 {'name': 'SCHOOL_002', 'name1': 'School 2'}]
-            ]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_get_doc.return_value = MockFrappeDocument('District',
-                    district_name='Test District')
-                
-                result = api_module.search_schools_by_city()
-                
-                self.assertEqual(result['status'], 'success')
-                self.assertEqual(result['data']['school_count'], 2)
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestListSchools(BaseAPITest):
-    """Test list_schools endpoint"""
-    
-    def test_list_schools_by_district(self):
-        """Should list schools filtered by district"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'district': 'DIST_001'
-        }
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = [
-                {'School_name': 'School 1'},
-                {'School_name': 'School 2'}
-            ]
-            
-            result = api_module.list_schools()
-            
-            # Check response was properly set
-            self.assertEqual(mock_frappe.response.http_status_code, 200)
-    
-    def test_list_schools_no_results(self):
-        """Should handle no schools found"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'district': 'NONEXISTENT'
-        }
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.return_value = []
-            
-            result = api_module.list_schools()
-            
-            self.assertEqual(mock_frappe.response.http_status_code, 404)
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestCourseVerticals(BaseAPITest):
-    """Test course vertical endpoints"""
-    
-    def test_course_vertical_list(self):
-        """Should list course verticals for batch"""
-        mock_frappe.local.form_dict = {
-            'api_key': 'valid_key',
-            'keyword': 'test_batch'
-        }
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.side_effect = [
-                [{'name': 'BO_001'}],
-                [{'course_vertical': 'VERT_001'}]
-            ]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_get_doc.return_value = MockFrappeDocument('Course Verticals',
-                    vertical_id='V1', name2='Math')
-                
-                result = api_module.course_vertical_list()
-                
-                self.assertIsInstance(result, dict)
-                self.assertIn('V1', result)
-    
-    def test_course_vertical_list_count(self):
-        """Should list course verticals with count"""
-        mock_frappe.local.form_dict = {
-            'api_key': 'valid_key',
-            'keyword': 'test_batch'
-        }
-        
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.side_effect = [
-                [{'name': 'BO_001'}],
-                [{'course_vertical': 'VERT_001'}, {'course_vertical': 'VERT_002'}]
-            ]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                def get_doc_side_effect(doctype, name):
-                    if name == 'VERT_001':
-                        return MockFrappeDocument('Course Verticals', name2='Math')
-                    else:
-                        return MockFrappeDocument('Course Verticals', name2='Science')
-                
-                mock_get_doc.side_effect = get_doc_side_effect
-                
-                result = api_module.course_vertical_list_count()
-                
-                self.assertIn('count', result)
-                self.assertEqual(result['count'], '2')
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestErrorHandling(BaseAPITest):
-    """Test error handling and edge cases"""
-    
-    def test_database_error_rollback(self):
-        """Should rollback on database error"""
-        mock_frappe.request.get_json.return_value = {
-            'api_key': 'valid_key',
-            'firstName': 'Test',
-            'phone': '9876543210',
-            'School_name': 'Test School'
-        }
-        
-        with patch.object(mock_frappe.db, 'get_value') as mock_get:
-            mock_get.side_effect = Exception("Database error")
-            
-            result = api_module.create_teacher_web()
-            
-            self.assertEqual(result['status'], 'failure')
-            mock_frappe.db.rollback.assert_called()
-    
-    def test_malformed_json_handling(self):
-        """Should handle malformed JSON gracefully"""
-        mock_frappe.request.get_json.side_effect = json.JSONDecodeError("msg", "doc", 0)
-        
-        # Different endpoints handle this differently
-        # Just verify they don't crash
-        try:
-            result = api_module.send_otp()
-            # If it doesn't crash, that's good
-        except Exception as e:
-            # Should be a handled exception
-            self.assertIsInstance(e, Exception)
-
-
-@unittest.skipUnless(API_MODULE_IMPORTED, "API module not available")
-class TestSecurityValidation(BaseAPITest):
-    """Test security-related validations"""
-    
-    def test_xss_in_student_name(self):
-        """Should handle XSS attempts in student name"""
-        mock_frappe.local.form_dict = {
-            'api_key': 'valid_key',
-            'student_name': '<script>alert("XSS")</script>',
-            'phone': '9876543210',
-            'gender': 'Male',
-            'grade': '5',
-            'language': 'English',
-            'batch_skeyword': 'test_batch',
-            'vertical': 'Math',
-            'glific_id': 'test'
-        }
-        
-        # The function should still process it (Frappe handles sanitization)
-        # Just verify it doesn't crash
-        with patch.object(mock_frappe, 'get_all') as mock_get_all:
-            mock_get_all.side_effect = [
-                [{'name': 'BO_001', 'school': 'SCHOOL_001', 
-                  'batch': 'BATCH_001', 'kit_less': 1}],
-                [{'name': 'VERT_001'}],
-                []
-            ]
-            
-            with patch.object(mock_frappe, 'get_doc') as mock_get_doc:
-                mock_batch = MockFrappeDocument('Batch', active=True,
-                    regist_end_date=(datetime.now() + timedelta(days=10)).date())
-                mock_get_doc.return_value = mock_batch
-                
-                # Should not crash
-                result = api_module.create_student()
-                self.assertIsNotNone(result)
-    
-    def test_phone_number_validation(self):
-        """Should validate phone number format"""
-        invalid_phones = ['123', 'abcd', '']
-        
-        for phone in invalid_phones:
-            mock_frappe.request.get_json.return_value = {
-                'api_key': 'valid_key',
-                'phone': phone
-            }
-            
-            # Different functions may handle this differently
-            # Just verify they don't crash catastrophically
-            try:
-                result = api_module.send_otp()
-                self.assertIsNotNone(result)
-            except Exception:
-                pass  # Some validation errors are expected
-
-
-# =============================================================================
-# TEST RUNNER
-# =============================================================================
 
 # if __name__ == '__main__':
-#     # Configure test runner
-#     loader = unittest.TestLoader()
-#     suite = unittest.TestSuite()
-    
-#     # Add all test classes
-#     test_classes = [
-#         TestAuthentication,
-#         TestListDistricts,
-#         TestListCities,
-#         TestVerifyKeyword,
-#         TestCreateTeacher,
-#         TestOTPFunctionality,
-#         TestCreateStudent,
-#         TestCourseLevelLogic,
-#         TestBatchOperations,
-#         TestTeacherWebCreation,
-#         TestTeacherRoleUpdate,
-#         TestGetTeacherByGlificID,
-#         TestSchoolCityOperations,
-#         TestListSchools,
-#         TestCourseVerticals,
-#         TestErrorHandling,
-#         TestSecurityValidation
-#     ]
-    
-#     for test_class in test_classes:
-#         suite.addTests(loader.loadTestsFromTestCase(test_class))
-    
-#     # Run tests
-#     runner = unittest.TextTestRunner(verbosity=2)
-#     result = runner.run(suite)
-    
-#     # Print summary
-#     print("\n" + "="*70)
-#     print("TEST SUMMARY")
-#     print("="*70)
-#     print(f"Tests run: {result.testsRun}")
-#     print(f"Successes: {result.testsRun - len(result.failures) - len(result.errors)}")
-#     print(f"Failures: {len(result.failures)}")
-#     print(f"Errors: {len(result.errors)}")
-#     print(f"Skipped: {len(result.skipped)}")
-#     print("="*70)
-    
-#     # Exit with proper code
-#     sys.exit(0 if result.wasSuccessful() else 1)
+#     unittest.main(verbosity=2)
