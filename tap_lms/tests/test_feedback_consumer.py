@@ -2164,5 +2164,5 @@ class TestFeedbackConsumer(unittest.TestCase):
             self.assertTrue(hasattr(self.consumer, 'settings'))
 
 
-# if __name__ == '__main__':
-#     unittest.main()
+if __name__ == '__main__':
+    unittest.main()
