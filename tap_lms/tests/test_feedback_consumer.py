@@ -394,10 +394,10 @@ class TestFeedbackConsumer(unittest.TestCase):
 
     # ==================== _reconnect Tests ====================
     
-    @patch('pika.BlockingConnection')
-    @patch('pika.ConnectionParameters')
     @patch('pika.PlainCredentials')
-    def test_reconnect_success(self, mock_creds, mock_params, mock_connection):
+    @patch('pika.ConnectionParameters')
+    @patch('pika.BlockingConnection')
+    def test_reconnect_success(self, mock_connection, mock_params, mock_creds):
         """Test successful reconnection."""
         if not USING_REAL_CLASS:
             return
@@ -419,10 +419,10 @@ class TestFeedbackConsumer(unittest.TestCase):
         self.assertEqual(self.consumer.connection, mock_new_conn)
         self.assertEqual(self.consumer.channel, mock_new_channel)
 
-    @patch('pika.BlockingConnection')
-    @patch('pika.ConnectionParameters')
     @patch('pika.PlainCredentials')
-    def test_reconnect_with_closed_connection(self, mock_creds, mock_params, mock_connection):
+    @patch('pika.ConnectionParameters')
+    @patch('pika.BlockingConnection')
+    def test_reconnect_with_closed_connection(self, mock_connection, mock_params, mock_creds):
         """Test _reconnect with already closed connection."""
         if not USING_REAL_CLASS:
             return
@@ -443,10 +443,10 @@ class TestFeedbackConsumer(unittest.TestCase):
         # Should not try to close already closed connection
         mock_connection_obj.close.assert_not_called()
 
-    @patch('pika.BlockingConnection')
-    @patch('pika.ConnectionParameters')
     @patch('pika.PlainCredentials')
-    def test_reconnect_close_exception(self, mock_creds, mock_params, mock_connection):
+    @patch('pika.ConnectionParameters')
+    @patch('pika.BlockingConnection')
+    def test_reconnect_close_exception(self, mock_connection, mock_params, mock_creds):
         """Test _reconnect when closing old connection raises exception."""
         if not USING_REAL_CLASS:
             return
@@ -492,10 +492,10 @@ class TestFeedbackConsumer(unittest.TestCase):
                     # Should not raise exception
                     self.consumer._reconnect()
 
-    @patch('pika.BlockingConnection')
-    @patch('pika.ConnectionParameters')
     @patch('pika.PlainCredentials')
-    def test_reconnect_with_none_connection(self, mock_creds, mock_params, mock_connection):
+    @patch('pika.ConnectionParameters')
+    @patch('pika.BlockingConnection')
+    def test_reconnect_with_none_connection(self, mock_connection, mock_params, mock_creds):
         """Test _reconnect when connection is None."""
         if not USING_REAL_CLASS:
             return
