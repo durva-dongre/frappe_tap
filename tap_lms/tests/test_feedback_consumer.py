@@ -25,8 +25,16 @@ class MockPikaExceptions:
 
 # Mock all external dependencies before importing anything
 sys.modules['frappe'] = MagicMock()
-sys.modules['pika'] = MagicMock()
-sys.modules['pika.exceptions'] = MockPikaExceptions()
+
+# FIXED: Create a mock pika module with the exceptions
+mock_pika = MagicMock()
+mock_pika.exceptions = MockPikaExceptions  # Use the class, not an instance
+mock_pika.PlainCredentials = MagicMock()
+mock_pika.ConnectionParameters = MagicMock()
+mock_pika.BlockingConnection = MagicMock()
+mock_pika.BasicProperties = MagicMock()
+sys.modules['pika'] = mock_pika
+
 # FIXED: Mock glific_integration to prevent relative import error
 sys.modules['tap_lms.glific_integration'] = MagicMock()
 
@@ -1168,6 +1176,9 @@ class TestFeedbackConsumer(unittest.TestCase):
         
         call_args = mock_submission.update.call_args[0][0]
         self.assertEqual(call_args["generated_feedback"], "{}")
+        # Should still complete with default values
+        self.assertEqual(call_args["status"], "Completed")
+        self.assertEqual(call_args["grade"], 0.0)
 
     def test_update_submission_with_invalid_plagiarism_score(self):
         """Test update_submission with invalid plagiarism score."""
