@@ -32,7 +32,6 @@ mock_pika.exceptions = MockPikaExceptions  # Use the class, not an instance
 mock_pika.PlainCredentials = MagicMock()
 mock_pika.ConnectionParameters = MagicMock()
 mock_pika.BlockingConnection = MagicMock()
-mock_pika.BasicProperties = MagicMock()
 sys.modules['pika'] = mock_pika
 
 # FIXED: Mock glific_integration to prevent relative import error
@@ -123,10 +122,7 @@ class TestFeedbackConsumer(unittest.TestCase):
 
     # ==================== setup_rabbitmq Tests ====================
     
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_success(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_success(self):
         """Test successful RabbitMQ setup."""
         if not USING_REAL_CLASS:
             return
@@ -135,26 +131,23 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        frappe_mock.get_single.return_value = self.mock_settings
-        
-        # Mock successful queue declarations
-        mock_channel.exchange_declare = Mock()
-        mock_channel.queue_declare = Mock()
-        mock_channel.queue_bind = Mock()
-        
-        self.consumer.setup_rabbitmq()
-        
-        # Verify calls were made
-        mock_connection.assert_called_once()
-        self.assertEqual(self.consumer.connection, mock_conn)
-        self.assertEqual(self.consumer.channel, mock_channel)
+        # Mock pika objects from the module's sys.modules
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            frappe_mock.get_single.return_value = self.mock_settings
+            
+            # Mock successful queue declarations
+            mock_channel.exchange_declare = Mock()
+            mock_channel.queue_declare = Mock()
+            mock_channel.queue_bind = Mock()
+            
+            self.consumer.setup_rabbitmq()
+            
+            # Verify calls were made
+            self.assertEqual(self.consumer.connection, mock_conn)
+            self.assertEqual(self.consumer.channel, mock_channel)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_exchange_doesnt_exist(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_exchange_doesnt_exist(self):
         """Test setup when exchange doesn't exist and needs creation."""
         if not USING_REAL_CLASS:
             return
@@ -162,34 +155,29 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        frappe_mock.get_single.return_value = self.mock_settings
-        
-        # First call (passive check) fails, second call (creation) succeeds
-        mock_channel.exchange_declare.side_effect = [
-            MockChannelClosedByBroker(),
-            None
-        ]
-        mock_channel.queue_declare = Mock()
-        mock_channel.queue_bind = Mock()
-        
-        with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
-            mock_reconnect.return_value = None
-            # Need to reset channel after reconnect
-            def reconnect_side_effect():
-                self.consumer.connection = mock_conn
-                self.consumer.channel = mock_channel
-            mock_reconnect.side_effect = reconnect_side_effect
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            frappe_mock.get_single.return_value = self.mock_settings
             
-            self.consumer.setup_rabbitmq()
-        
-        self.assertGreaterEqual(mock_channel.exchange_declare.call_count, 2)
+            # First call (passive check) fails, second call (creation) succeeds
+            mock_channel.exchange_declare.side_effect = [
+                MockChannelClosedByBroker(),
+                None
+            ]
+            mock_channel.queue_declare = Mock()
+            mock_channel.queue_bind = Mock()
+            
+            with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
+                def reconnect_side_effect():
+                    self.consumer.connection = mock_conn
+                    self.consumer.channel = mock_channel
+                mock_reconnect.side_effect = reconnect_side_effect
+                
+                self.consumer.setup_rabbitmq()
+            
+            self.assertGreaterEqual(mock_channel.exchange_declare.call_count, 2)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_exchange_needs_durable(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_exchange_needs_durable(self):
         """Test setup when exchange needs durable=True."""
         if not USING_REAL_CLASS:
             return
@@ -197,33 +185,30 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        frappe_mock.get_single.return_value = self.mock_settings
-        
-        # Passive fails, durable=False fails, durable=True succeeds
-        mock_channel.exchange_declare.side_effect = [
-            MockChannelClosedByBroker(),
-            MockChannelClosedByBroker(),
-            None
-        ]
-        mock_channel.queue_declare = Mock()
-        mock_channel.queue_bind = Mock()
-        
-        with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
-            def reconnect_side_effect():
-                self.consumer.connection = mock_conn
-                self.consumer.channel = mock_channel
-            mock_reconnect.side_effect = reconnect_side_effect
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            frappe_mock.get_single.return_value = self.mock_settings
             
-            self.consumer.setup_rabbitmq()
-        
-        self.assertGreaterEqual(mock_channel.exchange_declare.call_count, 3)
+            # Passive fails, durable=False fails, durable=True succeeds
+            mock_channel.exchange_declare.side_effect = [
+                MockChannelClosedByBroker(),
+                MockChannelClosedByBroker(),
+                None
+            ]
+            mock_channel.queue_declare = Mock()
+            mock_channel.queue_bind = Mock()
+            
+            with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
+                def reconnect_side_effect():
+                    self.consumer.connection = mock_conn
+                    self.consumer.channel = mock_channel
+                mock_reconnect.side_effect = reconnect_side_effect
+                
+                self.consumer.setup_rabbitmq()
+            
+            self.assertGreaterEqual(mock_channel.exchange_declare.call_count, 3)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_main_queue_doesnt_exist(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_main_queue_doesnt_exist(self):
         """Test setup when main queue doesn't exist."""
         if not USING_REAL_CLASS:
             return
@@ -231,48 +216,42 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        frappe_mock.get_single.return_value = self.mock_settings
-        
-        mock_channel.exchange_declare = Mock()
-        mock_channel.queue_bind = Mock()
-        
-        # DL queue succeeds, main queue passive fails, then creation succeeds
-        mock_channel.queue_declare.side_effect = [
-            Mock(),
-            MockChannelClosedByBroker(),
-            Mock()
-        ]
-        
-        with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
-            def reconnect_side_effect():
-                self.consumer.connection = mock_conn
-                self.consumer.channel = mock_channel
-            mock_reconnect.side_effect = reconnect_side_effect
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            frappe_mock.get_single.return_value = self.mock_settings
             
-            self.consumer.setup_rabbitmq()
-        
-        self.assertGreaterEqual(mock_channel.queue_declare.call_count, 3)
+            mock_channel.exchange_declare = Mock()
+            mock_channel.queue_bind = Mock()
+            
+            # DL queue succeeds, main queue passive fails, then creation succeeds
+            mock_channel.queue_declare.side_effect = [
+                Mock(),
+                MockChannelClosedByBroker(),
+                Mock()
+            ]
+            
+            with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
+                def reconnect_side_effect():
+                    self.consumer.connection = mock_conn
+                    self.consumer.channel = mock_channel
+                mock_reconnect.side_effect = reconnect_side_effect
+                
+                self.consumer.setup_rabbitmq()
+            
+            self.assertGreaterEqual(mock_channel.queue_declare.call_count, 3)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_connection_failure(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_connection_failure(self):
         """Test setup_rabbitmq with connection failure."""
         if not USING_REAL_CLASS:
             return
         
         frappe_mock.get_single.return_value = self.mock_settings
-        mock_connection.side_effect = Exception("Connection failed")
         
-        with self.assertRaises(Exception):
-            self.consumer.setup_rabbitmq()
+        with patch.object(sys.modules['pika'], 'BlockingConnection', side_effect=Exception("Connection failed")):
+            with self.assertRaises(Exception):
+                self.consumer.setup_rabbitmq()
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_full_execution(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_full_execution(self):
         """Force full execution of setup_rabbitmq with all paths."""
         if not USING_REAL_CLASS:
             return
@@ -282,24 +261,21 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        # Mock all operations to succeed
-        mock_channel.exchange_declare = Mock()
-        mock_channel.queue_declare = Mock(return_value=Mock())
-        mock_channel.queue_bind = Mock()
-        
-        self.consumer.setup_rabbitmq()
-        
-        # Verify everything was set up
-        self.assertIsNotNone(self.consumer.connection)
-        self.assertIsNotNone(self.consumer.channel)
-        self.assertIsNotNone(self.consumer.settings)
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            # Mock all operations to succeed
+            mock_channel.exchange_declare = Mock()
+            mock_channel.queue_declare = Mock(return_value=Mock())
+            mock_channel.queue_bind = Mock()
+            
+            self.consumer.setup_rabbitmq()
+            
+            # Verify everything was set up
+            self.assertIsNotNone(self.consumer.connection)
+            self.assertIsNotNone(self.consumer.channel)
+            self.assertIsNotNone(self.consumer.settings)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_dl_queue_channel_error(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_dl_queue_channel_error(self):
         """Test setup when dead letter queue declaration fails."""
         if not USING_REAL_CLASS:
             return
@@ -307,33 +283,30 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        frappe_mock.get_single.return_value = self.mock_settings
-        
-        # Exchange succeeds, DL queue fails, then succeeds after reconnect
-        mock_channel.exchange_declare = Mock()
-        mock_channel.queue_declare.side_effect = [
-            MockChannelClosedByBroker(),  # DL queue fails
-            Mock(),  # DL queue succeeds after reconnect
-            Mock()   # Main queue succeeds
-        ]
-        mock_channel.queue_bind = Mock()
-        
-        with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
-            def reconnect_side_effect():
-                self.consumer.connection = mock_conn
-                self.consumer.channel = mock_channel
-            mock_reconnect.side_effect = reconnect_side_effect
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            frappe_mock.get_single.return_value = self.mock_settings
             
-            self.consumer.setup_rabbitmq()
-        
-        self.assertGreaterEqual(mock_channel.queue_declare.call_count, 2)
+            # Exchange succeeds, DL queue fails, then succeeds after reconnect
+            mock_channel.exchange_declare = Mock()
+            mock_channel.queue_declare.side_effect = [
+                MockChannelClosedByBroker(),  # DL queue fails
+                Mock(),  # DL queue succeeds after reconnect
+                Mock()   # Main queue succeeds
+            ]
+            mock_channel.queue_bind = Mock()
+            
+            with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
+                def reconnect_side_effect():
+                    self.consumer.connection = mock_conn
+                    self.consumer.channel = mock_channel
+                mock_reconnect.side_effect = reconnect_side_effect
+                
+                self.consumer.setup_rabbitmq()
+            
+            self.assertGreaterEqual(mock_channel.queue_declare.call_count, 2)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_queue_bind_exception(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_queue_bind_exception(self):
         """Test setup when queue bind fails (should be ignored)."""
         if not USING_REAL_CLASS:
             return
@@ -341,23 +314,20 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        frappe_mock.get_single.return_value = self.mock_settings
-        
-        mock_channel.exchange_declare = Mock()
-        mock_channel.queue_declare = Mock(return_value=Mock())
-        mock_channel.queue_bind.side_effect = Exception("Bind failed")
-        
-        # Should not raise exception - binding errors are ignored
-        self.consumer.setup_rabbitmq()
-        
-        self.assertIsNotNone(self.consumer.channel)
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            frappe_mock.get_single.return_value = self.mock_settings
+            
+            mock_channel.exchange_declare = Mock()
+            mock_channel.queue_declare = Mock(return_value=Mock())
+            mock_channel.queue_bind.side_effect = Exception("Bind failed")
+            
+            # Should not raise exception - binding errors are ignored
+            self.consumer.setup_rabbitmq()
+            
+            self.assertIsNotNone(self.consumer.channel)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_setup_rabbitmq_all_scenarios(self, mock_connection, mock_params, mock_creds):
+    def test_setup_rabbitmq_all_scenarios(self):
         """Test setup_rabbitmq with comprehensive scenario coverage."""
         if not USING_REAL_CLASS:
             return
@@ -367,37 +337,34 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_conn = Mock()
         mock_channel = Mock()
         mock_conn.channel.return_value = mock_channel
-        mock_connection.return_value = mock_conn
         
-        # Simulate: exchange exists, DL queue exists, main queue doesn't exist
-        mock_channel.exchange_declare = Mock()  # Succeeds (exchange exists)
-        
-        mock_channel.queue_declare.side_effect = [
-            Mock(),  # DL queue succeeds
-            MockChannelClosedByBroker(),  # Main queue passive check fails
-            Mock()   # Main queue creation succeeds
-        ]
-        
-        mock_channel.queue_bind = Mock()
-        
-        with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
-            def reconnect_side_effect():
-                self.consumer.connection = mock_conn
-                self.consumer.channel = mock_channel
-            mock_reconnect.side_effect = reconnect_side_effect
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_conn):
+            # Simulate: exchange exists, DL queue exists, main queue doesn't exist
+            mock_channel.exchange_declare = Mock()  # Succeeds (exchange exists)
             
-            self.consumer.setup_rabbitmq()
-        
-        # Verify setup completed
-        self.assertIsNotNone(self.consumer.connection)
-        self.assertIsNotNone(self.consumer.channel)
+            mock_channel.queue_declare.side_effect = [
+                Mock(),  # DL queue succeeds
+                MockChannelClosedByBroker(),  # Main queue passive check fails
+                Mock()   # Main queue creation succeeds
+            ]
+            
+            mock_channel.queue_bind = Mock()
+            
+            with patch.object(FeedbackConsumer, '_reconnect') as mock_reconnect:
+                def reconnect_side_effect():
+                    self.consumer.connection = mock_conn
+                    self.consumer.channel = mock_channel
+                mock_reconnect.side_effect = reconnect_side_effect
+                
+                self.consumer.setup_rabbitmq()
+            
+            # Verify setup completed
+            self.assertIsNotNone(self.consumer.connection)
+            self.assertIsNotNone(self.consumer.channel)
 
     # ==================== _reconnect Tests ====================
     
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_reconnect_success(self, mock_connection, mock_params, mock_creds):
+    def test_reconnect_success(self):
         """Test successful reconnection."""
         if not USING_REAL_CLASS:
             return
@@ -411,18 +378,15 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_new_conn = Mock()
         mock_new_channel = Mock()
         mock_new_conn.channel.return_value = mock_new_channel
-        mock_connection.return_value = mock_new_conn
         
-        self.consumer._reconnect()
-        
-        old_conn.close.assert_called_once()
-        self.assertEqual(self.consumer.connection, mock_new_conn)
-        self.assertEqual(self.consumer.channel, mock_new_channel)
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_new_conn):
+            self.consumer._reconnect()
+            
+            old_conn.close.assert_called_once()
+            self.assertEqual(self.consumer.connection, mock_new_conn)
+            self.assertEqual(self.consumer.channel, mock_new_channel)
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_reconnect_with_closed_connection(self, mock_connection, mock_params, mock_creds):
+    def test_reconnect_with_closed_connection(self):
         """Test _reconnect with already closed connection."""
         if not USING_REAL_CLASS:
             return
@@ -436,17 +400,14 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_new_conn = Mock()
         mock_new_channel = Mock()
         mock_new_conn.channel.return_value = mock_new_channel
-        mock_connection.return_value = mock_new_conn
         
-        self.consumer._reconnect()
-        
-        # Should not try to close already closed connection
-        mock_connection_obj.close.assert_not_called()
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_new_conn):
+            self.consumer._reconnect()
+            
+            # Should not try to close already closed connection
+            mock_connection_obj.close.assert_not_called()
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_reconnect_close_exception(self, mock_connection, mock_params, mock_creds):
+    def test_reconnect_close_exception(self):
         """Test _reconnect when closing old connection raises exception."""
         if not USING_REAL_CLASS:
             return
@@ -461,12 +422,12 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_new_conn = Mock()
         mock_new_channel = Mock()
         mock_new_conn.channel.return_value = mock_new_channel
-        mock_connection.return_value = mock_new_conn
         
-        # Should not raise exception
-        self.consumer._reconnect()
-        
-        self.assertEqual(self.consumer.connection, mock_new_conn)
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_new_conn):
+            # Should not raise exception
+            self.consumer._reconnect()
+            
+            self.assertEqual(self.consumer.connection, mock_new_conn)
 
     def test_reconnect_exception_during_close(self):
         """Test reconnection when closing old connection fails."""
@@ -481,21 +442,15 @@ class TestFeedbackConsumer(unittest.TestCase):
         old_conn.close.side_effect = Exception("Close failed")
         self.consumer.connection = old_conn
         
-        with patch('pika.PlainCredentials'):
-            with patch('pika.ConnectionParameters'):
-                with patch('pika.BlockingConnection') as mock_connection:
-                    mock_new_conn = Mock()
-                    mock_new_channel = Mock()
-                    mock_new_conn.channel.return_value = mock_new_channel
-                    mock_connection.return_value = mock_new_conn
-                    
-                    # Should not raise exception
-                    self.consumer._reconnect()
+        mock_new_conn = Mock()
+        mock_new_channel = Mock()
+        mock_new_conn.channel.return_value = mock_new_channel
+        
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_new_conn):
+            # Should not raise exception
+            self.consumer._reconnect()
 
-    @patch('pika.PlainCredentials')
-    @patch('pika.ConnectionParameters')
-    @patch('pika.BlockingConnection')
-    def test_reconnect_with_none_connection(self, mock_connection, mock_params, mock_creds):
+    def test_reconnect_with_none_connection(self):
         """Test _reconnect when connection is None."""
         if not USING_REAL_CLASS:
             return
@@ -506,12 +461,12 @@ class TestFeedbackConsumer(unittest.TestCase):
         mock_new_conn = Mock()
         mock_new_channel = Mock()
         mock_new_conn.channel.return_value = mock_new_channel
-        mock_connection.return_value = mock_new_conn
         
-        self.consumer._reconnect()
-        
-        self.assertEqual(self.consumer.connection, mock_new_conn)
-        self.assertEqual(self.consumer.channel, mock_new_channel)
+        with patch.object(sys.modules['pika'], 'BlockingConnection', return_value=mock_new_conn):
+            self.consumer._reconnect()
+            
+            self.assertEqual(self.consumer.connection, mock_new_conn)
+            self.assertEqual(self.consumer.channel, mock_new_channel)
 
     # ==================== start_consuming Tests ====================
     
@@ -2164,5 +2119,5 @@ class TestFeedbackConsumer(unittest.TestCase):
             self.assertTrue(hasattr(self.consumer, 'settings'))
 
 
-if __name__ == '__main__':
-    unittest.main()
+# if __name__ == '__main__':
+#     unittest.main()
