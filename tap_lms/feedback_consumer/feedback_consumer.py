@@ -274,6 +274,11 @@ class FeedbackConsumer:
             
             # Get submission document
             submission = frappe.get_doc("ImgSubmission", submission_id)
+
+            # Validate feedback_data is a dictionary
+            if not isinstance(feedback_data, dict):
+                frappe.logger().warning(f"Invalid feedback_data type for submission {submission_id}, expected dict but got {type(feedback_data)}")
+                feedback_data = {}
             
             # Extract grade from correct path: message_data["feedback"]["grade_recommendation"]
             grade_recommendation = feedback_data.get("grade_recommendation", "0")
