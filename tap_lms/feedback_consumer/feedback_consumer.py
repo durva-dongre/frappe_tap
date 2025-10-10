@@ -470,3 +470,19 @@ class FeedbackConsumer:
         except Exception as e:
             frappe.logger().error(f"Error getting queue stats: {str(e)}")
             return {"main_queue": 0, "dead_letter_queue": 0}
+
+
+# after line 277.
+# -------------------
+
+# Validate feedback_data is a dictionary
+# if not isinstance(feedback_data, dict):
+#     frappe.logger().warning(f"Invalid feedback_data type for submission {submission_id}, expected dict but got {type(feedback_data)}")
+#     feedback_data = {}
+
+
+# What it does:
+
+# Checks if feedback_data is NOT a dictionary
+# Logs a warning with the actual type received
+# Replaces invalid data with empty dict {}

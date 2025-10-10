@@ -528,55 +528,7 @@ class TestUpdateSpecificSetContactsHappyPath:
         assert result["total_processed"] == 1
         mock_logger().warning.assert_called()
     
-    # # @patch('tap_lms.glific_batch_id_update.frappe.get_doc')
-    # # @patch('tap_lms.glific_batch_id_update.frappe.get_all')
-    # # @patch('tap_lms.glific_batch_id_update.frappe.db.exists')
-    # # @patch('tap_lms.glific_batch_id_update.frappe.logger')
-    # # def test_skips_student_without_batch_id(
-    # #     self, mock_logger, mock_exists, mock_get_all, mock_get_doc,
-    # #     test_data, mock_onboarding_set, mock_student_doc
-    # # ):
-    # @patch('tap_lms.glific_batch_id_update.frappe.get_doc')
-    # @patch('tap_lms.glific_batch_id_update.frappe.get_all')
-    # @patch('tap_lms.glific_batch_id_update.frappe.db.exists')
-    # @patch('tap_lms.glific_batch_id_update.frappe.logger')
-    # def test_skips_student_without_batch_id(
-    #     self, mock_get_doc, mock_get_all, mock_exists, mock_logger,  # ✅ CORRECT ORDER
-    #     test_data, mock_onboarding_set, mock_student_doc
-    # ):
-    #     """Test skipping student that has no batch_id value"""
-    #     # Setup mocks
-    #     mock_exists.return_value = True
-        
-    #     def get_doc_side_effect(doctype, name):
-    #         if doctype == "Backend Student Onboarding":
-    #             return mock_onboarding_set
-    #         elif doctype == "Student":
-    #             return mock_student_doc
-    #         return MagicMock()
-        
-    #     mock_get_doc.side_effect = get_doc_side_effect
-        
-    #     # FIXED: batch should be None or empty string
-    #     mock_get_all.return_value = [{
-    #         "name": test_data["backend_student_name"],
-    #         "student_name": test_data["student_name"],
-    #         "phone": test_data["phone"],
-    #         "student_id": test_data["student_id"],
-    #         "batch": None,  # No batch_id
-    #         "batch_skeyword": "batch_key"
-    #     }]
-        
-    #     # Execute
-    #     result = glific_batch_id_update.update_specific_set_contacts_with_batch_id(
-    #         test_data["onboarding_set"], batch_size=50
-    #     )
-        
-    #     # Assertions
-    #     assert result["skipped"] == 1
-    #     assert result["updated"] == 0
-    #     assert result["total_processed"] == 1
-    #     mock_logger().warning.assert_called()
+    
 
 
 class TestUpdateSpecificSetContactsErrorHandling:
