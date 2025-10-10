@@ -153,15 +153,17 @@ class TestGlificSettings:
         mock_glific_settings.token_expiry_time = datetime.now(timezone.utc) - timedelta(hours=1)
         mock_frappe.get_single.return_value = mock_glific_settings
         
-        # Mock successful token refresh
-        new_token_data = {
+        # Mock successful token refresh - note the structure matches what code expects
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
             "data": {
                 "access_token": "new_test_token",
                 "renewal_token": "new_renewal_token",
                 "token_expiry_time": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
             }
         }
-        mock_requests.post.return_value = mock_api_response(200, new_token_data)
+        mock_requests.post.return_value = response
         
         from glific_integration import get_glific_auth_headers
         
@@ -178,14 +180,17 @@ class TestGlificSettings:
         mock_glific_settings.token_expiry_time = None
         mock_frappe.get_single.return_value = mock_glific_settings
         
-        new_token_data = {
+        # Mock successful token refresh - structure matches what code expects
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
             "data": {
                 "access_token": "new_test_token",
                 "renewal_token": "new_renewal_token",
                 "token_expiry_time": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
             }
         }
-        mock_requests.post.return_value = mock_api_response(200, new_token_data)
+        mock_requests.post.return_value = response
         
         from glific_integration import get_glific_auth_headers
         
@@ -380,39 +385,47 @@ class TestContactManagement:
     ):
         """Test successful contact field update"""
         # Mock fetch response
-        fetch_data = {
-            "contact": {
+        fetch_response = Mock()
+        fetch_response.status_code = 200
+        fetch_response.raise_for_status = Mock()
+        fetch_response.json.return_value = {
+            "data": {
                 "contact": {
-                    "id": "123",
-                    "name": "Test User",
-                    "fields": json.dumps({
-                        "existing_field": {
-                            "value": "existing_value",
-                            "type": "string"
-                        }
-                    })
+                    "contact": {
+                        "id": "123",
+                        "name": "Test User",
+                        "fields": json.dumps({
+                            "existing_field": {
+                                "value": "existing_value",
+                                "type": "string"
+                            }
+                        })
+                    }
                 }
             }
         }
         
         # Mock update response
-        update_data = {
-            "updateContact": {
-                "contact": {
-                    "id": "123",
-                    "name": "Test User",
-                    "fields": json.dumps({
-                        "existing_field": {"value": "existing_value"},
-                        "new_field": {"value": "new_value"}
-                    })
+        update_response = Mock()
+        update_response.status_code = 200
+        update_response.text = "success"
+        update_response.raise_for_status = Mock()
+        update_response.json.return_value = {
+            "data": {
+                "updateContact": {
+                    "contact": {
+                        "id": "123",
+                        "name": "Test User",
+                        "fields": json.dumps({
+                            "existing_field": {"value": "existing_value"},
+                            "new_field": {"value": "new_value"}
+                        })
+                    }
                 }
             }
         }
         
-        mock_requests.post.side_effect = [
-            mock_api_response(200, fetch_data),
-            mock_api_response(200, update_data)
-        ]
+        mock_requests.post.side_effect = [fetch_response, update_response]
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -430,29 +443,36 @@ class TestContactManagement:
         self, mock_frappe, mock_glific_settings, mock_requests, mock_api_response
     ):
         """Test update when existing fields have invalid JSON"""
-        fetch_data = {
-            "contact": {
+        fetch_response = Mock()
+        fetch_response.status_code = 200
+        fetch_response.raise_for_status = Mock()
+        fetch_response.json.return_value = {
+            "data": {
                 "contact": {
-                    "id": "123",
-                    "name": "Test User",
-                    "fields": "invalid json"
+                    "contact": {
+                        "id": "123",
+                        "name": "Test User",
+                        "fields": "invalid json"
+                    }
                 }
             }
         }
         
-        update_data = {
-            "updateContact": {
-                "contact": {
-                    "id": "123",
-                    "name": "Test User"
+        update_response = Mock()
+        update_response.status_code = 200
+        update_response.raise_for_status = Mock()
+        update_response.json.return_value = {
+            "data": {
+                "updateContact": {
+                    "contact": {
+                        "id": "123",
+                        "name": "Test User"
+                    }
                 }
             }
         }
         
-        mock_requests.post.side_effect = [
-            mock_api_response(200, fetch_data),
-            mock_api_response(200, update_data)
-        ]
+        mock_requests.post.side_effect = [fetch_response, update_response]
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers:
@@ -694,19 +714,11 @@ class TestPhoneNumberFormatting:
         self, mock_frappe, mock_glific_settings, mock_requests, mock_api_response
     ):
         """Test batch update of student Glific IDs"""
-        # Mock students
+        # Mock students - frappe.get_all returns list of dicts
         mock_frappe.get_all.return_value = [
             {"name": "student1", "phone": "1234567890"},
             {"name": "student2", "phone": "911234567891"}
         ]
-        
-        # Mock contact lookup
-        contact_data = {
-            "contactByPhone": {
-                "contact": {"id": "glific123", "phone": "911234567890"}
-            }
-        }
-        mock_requests.post.return_value = mock_api_response(200, contact_data)
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers, \
@@ -735,45 +747,64 @@ class TestOnboardingFlows:
         self, mock_frappe, mock_glific_settings, mock_requests, mock_api_response
     ):
         """Test adding new student to Glific"""
-        # Mock contact doesn't exist
-        contact_check = {"contactByPhone": {"contact": None}}
+        # Setup the sequence of API calls that will be made
+        # 1. Check if contact exists (returns None)
+        # 2. Create contact (returns new contact)
+        # 3. Opt-in contact (returns success)
+        # 4. Add to group (returns success)
         
         # Mock successful contact creation
-        create_data = {
-            "createContact": {
-                "contact": {
-                    "id": "123",
-                    "name": "New Student",
-                    "phone": "911234567890"
+        create_response = Mock()
+        create_response.status_code = 200
+        create_response.json.return_value = {
+            "data": {
+                "createContact": {
+                    "contact": {
+                        "id": "123",
+                        "name": "New Student",
+                        "phone": "911234567890"
+                    }
                 }
             }
         }
         
         # Mock successful opt-in
-        optin_data = {
-            "optinContact": {
-                "contact": {"id": "123", "bspStatus": "SESSION"}
+        optin_response = Mock()
+        optin_response.status_code = 200
+        optin_response.raise_for_status = Mock()
+        optin_response.json.return_value = {
+            "data": {
+                "optinContact": {
+                    "contact": {"id": "123", "bspStatus": "SESSION"}
+                }
+            }
+        }
+        
+        # Mock successful add to group
+        group_response = Mock()
+        group_response.status_code = 200
+        group_response.raise_for_status = Mock()
+        group_response.json.return_value = {
+            "data": {
+                "updateGroupContacts": {
+                    "groupContacts": [{"id": "1"}]
+                }
             }
         }
         
         mock_requests.post.side_effect = [
-            mock_api_response(200, contact_check),
-            mock_api_response(200, create_data),
-            mock_api_response(200, optin_data),
-            mock_api_response(200, {"updateGroupContacts": {"groupContacts": [{"id": "1"}]}})
+            create_response,  # create contact
+            optin_response,   # opt-in
+            group_response    # add to group
         ]
         
         with patch('glific_integration.get_glific_settings') as mock_get_settings, \
              patch('glific_integration.get_glific_auth_headers') as mock_get_headers, \
-             patch('glific_integration.get_contact_by_phone') as mock_get_contact, \
-             patch('glific_integration.optin_contact') as mock_optin, \
-             patch('glific_integration.add_contact_to_group') as mock_add_to_group:
+             patch('glific_integration.get_contact_by_phone') as mock_get_contact:
             
             mock_get_settings.return_value = mock_glific_settings
             mock_get_headers.return_value = {"authorization": "token"}
-            mock_get_contact.return_value = None
-            mock_optin.return_value = True
-            mock_add_to_group.return_value = True
+            mock_get_contact.return_value = None  # Contact doesn't exist
             
             from glific_integration import add_student_to_glific_for_onboarding
             
@@ -787,6 +818,7 @@ class TestOnboardingFlows:
             )
             
             assert result is not None
+            assert result["id"] == "123"
     
     def test_add_student_to_glific_existing_contact(
         self, mock_frappe, mock_glific_settings, mock_requests, mock_api_response
