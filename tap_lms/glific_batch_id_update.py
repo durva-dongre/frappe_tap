@@ -1,5 +1,5 @@
 # glific_batch_id_update.py
-# New file to handle updating existing Glific contacts with batch_id field for specific Backend Student Onboarding sets
+# file to handle updating existing Glific contacts with batch_id field for specific Backend Student Onboarding sets
 
 import frappe
 import requests
@@ -416,6 +416,7 @@ def get_backend_onboarding_sets_for_batch_id():
 # Key Changes Made:
 
 # 1. Lines 78-81 - Removed unnecessary database call:
+# -----------------------------------------------------------
 
 # REMOVED these lines (unnecessary):
 # backend_student = frappe.get_doc("Backend Students", backend_student_entry.name)
@@ -428,6 +429,7 @@ def get_backend_onboarding_sets_for_batch_id():
 
 
 # 2. Line 254 - Fixed exception handler:
+# ---------------------------------------------
 
 #Changed from:
 #backend_student_entry.name

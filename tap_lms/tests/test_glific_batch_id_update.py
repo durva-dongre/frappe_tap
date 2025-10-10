@@ -297,8 +297,6 @@ class TestUpdateSpecificSetContactsHappyPath:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -361,8 +359,6 @@ class TestUpdateSpecificSetContactsHappyPath:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -403,7 +399,7 @@ class TestUpdateSpecificSetContactsHappyPath:
     def test_refreshes_batch_id_with_same_value(
         self, mock_logger, mock_exists, mock_get_all, mock_get_doc,
         mock_settings, mock_headers, mock_post, test_data, mock_onboarding_set,
-        mock_backend_student, mock_student_doc, mock_glific_settings
+        mock_student_doc, mock_glific_settings
     ):
         """Test refreshing batch_id when value is already correct"""
         # Setup mocks
@@ -427,13 +423,28 @@ class TestUpdateSpecificSetContactsHappyPath:
             }
         }
         
+        # FIXED: Proper update response structure
+        update_response_data = {
+            "data": {
+                "updateContact": {
+                    "contact": {
+                        "id": test_data["glific_id"],
+                        "name": test_data["student_name"],
+                        "fields": json.dumps({
+                            "batch_id": {"value": test_data["batch_id"], "type": "string"}
+                        })
+                    }
+                }
+            }
+        }
+        
         fetch_response = MagicMock()
         fetch_response.status_code = 200
         fetch_response.json.return_value = contact_with_same_batch
         
         update_response = MagicMock()
         update_response.status_code = 200
-        update_response.json.return_value = contact_with_same_batch
+        update_response.json.return_value = update_response_data  # FIXED: Use correct structure
         
         mock_post.side_effect = [fetch_response, update_response]
         
@@ -441,8 +452,6 @@ class TestUpdateSpecificSetContactsHappyPath:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -493,8 +502,6 @@ class TestUpdateSpecificSetContactsHappyPath:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_no_glific
             return MagicMock()
@@ -533,29 +540,22 @@ class TestUpdateSpecificSetContactsHappyPath:
         # Setup mocks
         mock_exists.return_value = True
         
-        # Backend student with no batch
-        mock_backend_no_batch = MagicMock()
-        mock_backend_no_batch.student_id = test_data["student_id"]
-        mock_backend_no_batch.student_name = test_data["student_name"]
-        mock_backend_no_batch.batch = None  # No batch_id
-        
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_no_batch
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
         
         mock_get_doc.side_effect = get_doc_side_effect
         
+        # FIXED: batch should be None or empty string
         mock_get_all.return_value = [{
             "name": test_data["backend_student_name"],
             "student_name": test_data["student_name"],
             "phone": test_data["phone"],
             "student_id": test_data["student_id"],
-            "batch": None,
+            "batch": None,  # No batch_id
             "batch_skeyword": "batch_key"
         }]
         
@@ -567,6 +567,7 @@ class TestUpdateSpecificSetContactsHappyPath:
         # Assertions
         assert result["skipped"] == 1
         assert result["updated"] == 0
+        assert result["total_processed"] == 1
         mock_logger().warning.assert_called()
 
 
@@ -599,8 +600,6 @@ class TestUpdateSpecificSetContactsErrorHandling:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -655,8 +654,6 @@ class TestUpdateSpecificSetContactsErrorHandling:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -726,8 +723,6 @@ class TestUpdateSpecificSetContactsErrorHandling:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -771,24 +766,6 @@ class TestUpdateSpecificSetContactsErrorHandling:
         mock_headers.return_value = {"Authorization": "Bearer token"}
         
         # Three students: first succeeds, second fails, third succeeds
-        student1 = MagicMock()
-        student1.name = "STU001"
-        student1.student_id = "STU001"
-        student1.student_name = "Student 1"
-        student1.batch = "BATCH_1"
-        
-        student2 = MagicMock()
-        student2.name = "STU002"
-        student2.student_id = "STU002"
-        student2.student_name = "Student 2"
-        student2.batch = "BATCH_2"
-        
-        student3 = MagicMock()
-        student3.name = "STU003"
-        student3.student_id = "STU003"
-        student3.student_name = "Student 3"
-        student3.batch = "BATCH_3"
-        
         student_doc1 = MagicMock()
         student_doc1.glific_id = "GID001"
         
@@ -802,18 +779,11 @@ class TestUpdateSpecificSetContactsErrorHandling:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
+            elif doctype == "Student":
                 doc_counter[0] += 1
                 if doc_counter[0] == 1:
-                    return student1
-                elif doc_counter[0] == 2:
-                    return student2
-                else:
-                    return student3
-            elif doctype == "Student":
-                if name == "STU001":
                     return student_doc1
-                elif name == "STU002":
+                elif doc_counter[0] == 2:
                     return student_doc2
                 else:
                     return student_doc3
@@ -886,8 +856,6 @@ class TestGlificAPIInteraction:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -955,8 +923,6 @@ class TestGlificAPIInteraction:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
@@ -1045,8 +1011,6 @@ class TestGlificAPIInteraction:
         def get_doc_side_effect(doctype, name):
             if doctype == "Backend Student Onboarding":
                 return mock_onboarding_set
-            elif doctype == "Backend Students":
-                return mock_backend_student
             elif doctype == "Student":
                 return mock_student_doc
             return MagicMock()
