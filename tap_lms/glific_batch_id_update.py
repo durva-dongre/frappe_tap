@@ -78,13 +78,12 @@ def update_specific_set_contacts_with_batch_id(onboarding_set_name, batch_size=5
     # Process each backend student
     for backend_student_entry in backend_students:
         try:
-            # Get the full Backend Students document
-            backend_student = frappe.get_doc("Backend Students", backend_student_entry.name)
-            
-            student_id = backend_student.student_id
-            student_name = backend_student.student_name
-            phone = backend_student.phone
-            batch_id = backend_student.batch  # Get batch from backend student
+            # FIXED: Get data directly from backend_student_entry (no extra DB call needed)
+            # All the data we need is already in backend_student_entry from frappe.get_all()
+            student_id = backend_student_entry["student_id"]
+            student_name = backend_student_entry["student_name"]
+            phone = backend_student_entry["phone"]
+            batch_id = backend_student_entry["batch"]  # Get batch from backend student
             
             # Get the actual Student document to get glific_id
             try:
@@ -255,7 +254,8 @@ def update_specific_set_contacts_with_batch_id(onboarding_set_name, batch_size=5
             total_processed += 1
                 
         except Exception as e:
-            frappe.logger().error(f"Exception processing backend student {backend_student_entry.name}: {str(e)}")
+            # FIXED: Changed from backend_student_entry.name to backend_student_entry["name"]
+            frappe.logger().error(f"Exception processing backend student {backend_student_entry['name']}: {str(e)}")
             total_errors += 1
             total_processed += 1
             continue
@@ -410,3 +410,27 @@ def get_backend_onboarding_sets_for_batch_id():
         order_by="upload_date desc"
     )
     return sets
+
+
+
+# Key Changes Made:
+
+# 1. Lines 78-81 - Removed unnecessary database call:
+
+# REMOVED these lines (unnecessary):
+# backend_student = frappe.get_doc("Backend Students", backend_student_entry.name)
+
+# REPLACED with direct dictionary access:
+# student_id = backend_student_entry["student_id"]
+# student_name = backend_student_entry["student_name"]
+# phone = backend_student_entry["phone"]
+# batch_id = backend_student_entry["batch"]
+
+
+# 2. Line 254 - Fixed exception handler:
+
+#Changed from:
+#backend_student_entry.name
+
+#To:
+# backend_student_entry["name"]
