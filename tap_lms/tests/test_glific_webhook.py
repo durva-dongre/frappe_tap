@@ -3,6 +3,7 @@ from unittest.mock import Mock, patch, MagicMock
 import json
 import sys
 import os
+import builtins
 
 # Add parent directory to path
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,24 +18,24 @@ mock_glific_integration = MagicMock()
 mock_glific_integration.get_glific_auth_headers = MagicMock()
 mock_glific_integration.get_glific_settings = MagicMock()
 
-# Add it to sys.modules with the correct name (without the dot)
+# Add it to sys.modules
 sys.modules['glific_integration'] = mock_glific_integration
 
 # Monkey-patch the __import__ to handle relative imports
-_original_import = __builtins__.__import__
+_original_import = builtins.__import__
 
 def _custom_import(name, *args, **kwargs):
     if name == '.glific_integration':
         return mock_glific_integration
     return _original_import(name, *args, **kwargs)
 
-__builtins__.__import__ = _custom_import
+builtins.__import__ = _custom_import
 
 # Now we can import glific_webhook
 import glific_webhook
 
 # Restore original import
-__builtins__.__import__ = _original_import
+builtins.__import__ = _original_import
 
 
 class TestGlificWebhook(unittest.TestCase):
@@ -106,6 +107,22 @@ class TestGetGlificContact(TestGlificWebhook):
         result = glific_webhook.get_glific_contact("999")
         
         self.assertIsNone(result)
+    
+    @patch('glific_webhook.get_glific_auth_headers')
+    @patch('glific_webhook.get_glific_settings')
+    @patch('glific_webhook.requests.post')
+    def test_get_contact_non_200_status(self, mock_post, mock_settings, mock_headers):
+        """Test non-200 status code"""
+        mock_settings.return_value = self.mock_settings
+        mock_headers.return_value = self.mock_headers
+        
+        mock_response = Mock()
+        mock_response.status_code = 404
+        mock_post.return_value = mock_response
+        
+        result = glific_webhook.get_glific_contact("123")
+        
+        self.assertIsNone(result)
 
 
 class TestPrepareUpdatePayload(TestGlificWebhook):
@@ -136,6 +153,19 @@ class TestPrepareUpdatePayload(TestGlificWebhook):
         mock_frappe.get_all.return_value = [
             {"frappe_field": "first_name", "glific_field": "first_name"}
         ]
+        mock_frappe.db.get_value.return_value = "1"
+        
+        result = glific_webhook.prepare_update_payload(
+            self.mock_teacher_doc,
+            self.mock_glific_contact
+        )
+        
+        self.assertIsNone(result)
+    
+    @patch('glific_webhook.frappe')
+    def test_prepare_payload_empty_mappings(self, mock_frappe):
+        """Test with no field mappings"""
+        mock_frappe.get_all.return_value = []
         mock_frappe.db.get_value.return_value = "1"
         
         result = glific_webhook.prepare_update_payload(
@@ -187,6 +217,23 @@ class TestSendGlificUpdate(TestGlificWebhook):
         result = glific_webhook.send_glific_update("123", payload)
         
         self.assertFalse(result)
+    
+    @patch('glific_webhook.get_glific_auth_headers')
+    @patch('glific_webhook.get_glific_settings')
+    @patch('glific_webhook.requests.post')
+    def test_send_update_non_200_status(self, mock_post, mock_settings, mock_headers):
+        """Test with non-200 status"""
+        mock_settings.return_value = self.mock_settings
+        mock_headers.return_value = self.mock_headers
+        
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_post.return_value = mock_response
+        
+        payload = {"fields": json.dumps({"test": "data"})}
+        result = glific_webhook.send_glific_update("123", payload)
+        
+        self.assertFalse(result)
 
 
 class TestUpdateGlificContact(TestGlificWebhook):
@@ -217,6 +264,31 @@ class TestUpdateGlificContact(TestGlificWebhook):
         result = glific_webhook.update_glific_contact(student_doc, "on_update")
         
         self.assertIsNone(result)
+    
+    @patch('glific_webhook.get_glific_contact')
+    @patch('glific_webhook.frappe')
+    def test_update_contact_not_found(self, mock_frappe, mock_get):
+        """Test when contact not found"""
+        mock_get.return_value = None
+        
+        glific_webhook.update_glific_contact(self.mock_teacher_doc, "on_update")
+        
+        mock_get.assert_called_once_with("123")
+        mock_frappe.logger().error.assert_called()
+    
+    @patch('glific_webhook.prepare_update_payload')
+    @patch('glific_webhook.get_glific_contact')
+    @patch('glific_webhook.frappe')
+    def test_update_no_changes(self, mock_frappe, mock_get, mock_prepare):
+        """Test when no updates needed"""
+        mock_get.return_value = self.mock_glific_contact
+        mock_prepare.return_value = None
+        
+        glific_webhook.update_glific_contact(self.mock_teacher_doc, "on_update")
+        
+        mock_get.assert_called_once()
+        mock_prepare.assert_called_once()
+        mock_frappe.logger().info.assert_called()
 
 
 if __name__ == '__main__':
