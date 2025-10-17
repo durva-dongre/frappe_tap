@@ -10,7 +10,10 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
 # Mock frappe BEFORE any imports
-sys.modules['frappe'] = MagicMock()
+mock_frappe = MagicMock()
+# CRITICAL: Make whitelist a pass-through decorator
+mock_frappe.whitelist = lambda: lambda f: f
+sys.modules['frappe'] = mock_frappe
 sys.modules['frappe.utils'] = MagicMock()
 
 # Create a mock glific_integration module
@@ -252,15 +255,11 @@ class TestUpdateGlificContact(TestGlificWebhook):
     @patch('glific_webhook.frappe')
     def test_update_success_workflow(self, mock_frappe, mock_get, mock_prepare, mock_send):
         """Test complete update workflow"""
-        # Make whitelist decorator passthrough
-        mock_frappe.whitelist.return_value = lambda f: f
-        
         mock_get.return_value = self.mock_glific_contact
         mock_prepare.return_value = {"fields": json.dumps({"test": "data"})}
         mock_send.return_value = True
         
-        # Call the actual function (decorator should be bypassed)
-        result = glific_webhook.update_glific_contact.__wrapped__(self.mock_teacher_doc, "on_update")
+        glific_webhook.update_glific_contact(self.mock_teacher_doc, "on_update")
         
         mock_get.assert_called_once_with("123")
         mock_prepare.assert_called_once()
@@ -269,13 +268,10 @@ class TestUpdateGlificContact(TestGlificWebhook):
     @patch('glific_webhook.frappe')
     def test_update_wrong_doctype(self, mock_frappe):
         """Test with wrong doctype"""
-        # Make whitelist decorator passthrough
-        mock_frappe.whitelist.return_value = lambda f: f
-        
         student_doc = Mock()
         student_doc.doctype = "Student"
         
-        result = glific_webhook.update_glific_contact.__wrapped__(student_doc, "on_update")
+        result = glific_webhook.update_glific_contact(student_doc, "on_update")
         
         self.assertIsNone(result)
     
@@ -283,12 +279,9 @@ class TestUpdateGlificContact(TestGlificWebhook):
     @patch('glific_webhook.frappe')
     def test_update_contact_not_found(self, mock_frappe, mock_get):
         """Test when contact not found"""
-        # Make whitelist decorator passthrough
-        mock_frappe.whitelist.return_value = lambda f: f
-        
         mock_get.return_value = None
         
-        glific_webhook.update_glific_contact.__wrapped__(self.mock_teacher_doc, "on_update")
+        glific_webhook.update_glific_contact(self.mock_teacher_doc, "on_update")
         
         mock_get.assert_called_once_with("123")
         mock_frappe.logger().error.assert_called()
@@ -298,13 +291,10 @@ class TestUpdateGlificContact(TestGlificWebhook):
     @patch('glific_webhook.frappe')
     def test_update_no_changes(self, mock_frappe, mock_get, mock_prepare):
         """Test when no updates needed"""
-        # Make whitelist decorator passthrough
-        mock_frappe.whitelist.return_value = lambda f: f
-        
         mock_get.return_value = self.mock_glific_contact
         mock_prepare.return_value = None
         
-        glific_webhook.update_glific_contact.__wrapped__(self.mock_teacher_doc, "on_update")
+        glific_webhook.update_glific_contact(self.mock_teacher_doc, "on_update")
         
         mock_get.assert_called_once()
         mock_prepare.assert_called_once()
