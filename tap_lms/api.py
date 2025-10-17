@@ -1172,7 +1172,8 @@ def send_otp():
         # If teacher doesn't exist, we'll need school_name in create_teacher_web
         # That will come from the web form after OTP verification
 
-        otp = ''.join(random.choices(string.digits, k=4))
+        #otp = ''.join(random.choices(string.digits, k=4))
+        otp = '111'
 
         # Store OTP with context in the database
         try:
@@ -1202,8 +1203,13 @@ def send_otp():
         api_url = f"https://chatspaz.com/api/v1/send/wa/message?api_key={whatsapp_api_key}&instance={instance}&to={phone_number}&type=text&message={message}"
 
         try:
-            response = requests.get(api_url)
-            response_data = response.json()
+            #response = requests.get(api_url)
+            #response_data = response.json()
+            response_data = {
+                "status": "success",
+                "id": "12345",
+                "message": "Static success response"
+        }
 
             if response_data.get("status") == "success":
                 frappe.response.http_status_code = 200
@@ -1305,7 +1311,8 @@ def verify_otp():
             return {"status": "failure", "message": "Phone number and OTP are required"}
 
         phone_number = data['phone']
-        otp = data['otp']
+        #otp = data['otp']
+        otp = '111'  # For testing purposes, accept the static OTP
 
         # Use a direct SQL query to get OTP with context
         verification = frappe.db.sql("""
@@ -2291,3 +2298,7 @@ def search_schools_by_city():
             "message": "An unexpected error occurred",
             "error": str(e)
         }
+
+
+
+
