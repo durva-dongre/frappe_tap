@@ -839,6 +839,16 @@ class BackendOnboardingProcess {
                     </div>
                 </div> */
         console.log("Loading template directly...");
+                            /* <div class="row">
+                        <div class="col-md-6">
+                            <div class="checkbox">
+                                <label>
+                                    <input type="checkbox" name="background_job" checked>
+                                    Process as background job (recommended for large batches)
+                                </label>
+                            </div>
+                        </div>
+                    </div> */
         // Directly set HTML content with simplified UI
         this.wrapper.html(`
             <div class="backend-onboarding-container">
@@ -867,16 +877,7 @@ class BackendOnboardingProcess {
                         
                     </div>
                     
-                    <div class="row">
-                        <div class="col-md-6">
-                            <div class="checkbox">
-                                <label>
-                                    <input type="checkbox" name="background_job" checked>
-                                    Process as background job (recommended for large batches)
-                                </label>
-                            </div>
-                        </div>
-                    </div>
+
                     <button class="process-btn btn btn-primary">Start Processing</button>
                     <button class="cancel-btn btn btn-default">Cancel</button>
                 </div>
@@ -1004,7 +1005,8 @@ class BackendOnboardingProcess {
                     select.append($('<option value="">').text(__('Select a Set')));
                     console.log("Batches received:", r.message);
                     $.each(r.message, function(i, batch) {
-                        let option_text = `${batch.set_name} (${batch.student_count} students)`;
+                        //let option_text = `${batch.set_name} (${batch.student_count} students)`;
+                        let option_text = `${batch.set_name} `;
                         select.append($('<option>').val(batch.name).text(option_text));
                     });
                     console.log("Batches loaded:", r.message.length);
@@ -1030,8 +1032,13 @@ class BackendOnboardingProcess {
             callback: function(r) {
                 if (r.message) {
                     me.batch_data = r.message;
-                    me.render_batch_summary(r.message.batch);
+                    console.log("Batch details received:", r.message);
+                    me.render_batch_summary(r.message);
                     //me.render_student_list(r.message.students);
+                    if(r.message.on_queue){
+                        me.wrapper.find('.process-btn').addClass('hidden');
+                        me.wrapper.find('.cancel-btn').addClass('hidden');
+                    }
                     me.wrapper.find('.action-panel').removeClass('hidden');
                     
                     // Hide results panel if visible from previous batch
@@ -1061,24 +1068,24 @@ class BackendOnboardingProcess {
             'Failed': 'red'
         };
         
-        summary.find('.status-indicator').html(
+        /* summary.find('.status-indicator').html(
             `<span class="indicator ${status_class[batch.status] || 'gray'}">
                 ${__(batch.status)}
             </span>`
-        );
+        ); */
         
         // Metrics
         let metrics = summary.find('.metrics');
         metrics.empty();
         
-        metrics.append(`<div><strong>${__("Set Name")}:</strong> ${batch.set_name}</div>`);
-        metrics.append(`<div><strong>${__("Students")}:</strong> ${batch.student_count}</div>`);
-        metrics.append(`<div><strong>${__("Uploaded By")}:</strong> ${batch.uploaded_by}</div>`);
-        metrics.append(`<div><strong>${__("Upload Date")}:</strong> ${frappe.datetime.str_to_user(batch.upload_date)}</div>`);
+        metrics.append(`<div><strong>${__("Set Name")}:</strong> ${batch.batch}</div>`);
+        metrics.append(`<div><strong>${__("Students")}:</strong> ${batch.students}</div>`);
+        //metrics.append(`<div><strong>${__("Uploaded By")}:</strong> ${batch.uploaded_by}</div>`);
+        //metrics.append(`<div><strong>${__("Upload Date")}:</strong> ${frappe.datetime.str_to_user(batch.upload_date)}</div>`);
         
-        if (batch.processed_student_count) {
+        /* if (batch.processed_student_count) {
             metrics.append(`<div><strong>${__("Processed")}:</strong> ${batch.processed_student_count}/${batch.student_count}</div>`);
-        }
+        } */
         
         console.log("Batch summary rendered");
     }
@@ -1147,8 +1154,8 @@ class BackendOnboardingProcess {
         }
         
         // Get the value of background_job checkbox
-        let use_background_job = this.wrapper.find('input[name="background_job"]').prop('checked');
-        
+        //let use_background_job = this.wrapper.find('input[name="background_job"]').prop('checked');
+        let use_background_job = true; // Always use background job
         console.log("Processing batch, background job:", use_background_job);
         
         // Show confirmation dialog
@@ -1159,7 +1166,8 @@ class BackendOnboardingProcess {
                 if (use_background_job) {
                     me.start_background_job(batch_id);
                 } else {
-                    me.start_foreground_job(batch_id);
+                    me.start_background_job(batch_id);
+                    //me.start_foreground_job(batch_id);
                 }
             }
         );

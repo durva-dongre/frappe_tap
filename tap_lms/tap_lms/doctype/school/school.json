@@ -50,7 +50,7 @@
    "fieldname": "type",
    "fieldtype": "Select",
    "label": "Type",
-   "options": "APS\nGOVT\nNGO\nPPP\nPMC\nPVT, GOVT. aided\nORG",
+   "options": "APS\nGOVT\nNGO\nPPP\nPMC\nPVT,\nGOVT. Aided\nORG",
    "reqd": 1
   },
   {
@@ -193,7 +193,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-07-08 23:26:33.487842",
+ "modified": "2025-10-04 00:06:03.476988",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "School",

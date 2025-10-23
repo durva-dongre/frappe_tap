@@ -7,7 +7,6 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "quiz_id",
   "question_name",
   "question_type",
   "options",
@@ -60,17 +59,11 @@
    "fieldname": "question_name",
    "fieldtype": "Text Editor",
    "label": "Question"
-  },
-  {
-   "fieldname": "quiz_id",
-   "fieldtype": "Link",
-   "label": "Quiz",
-   "options": "Quiz"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-15 17:14:20.491383",
+ "modified": "2025-09-16 12:38:52.068135",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "QuizQuestion",
