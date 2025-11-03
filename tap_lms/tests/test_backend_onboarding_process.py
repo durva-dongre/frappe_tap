@@ -288,6 +288,7 @@ class TestBackendOnboardingProcess(unittest.TestCase):
         """Test get_initial_stage returns stage with order=0"""
         with patch.object(self.backend_module, 'frappe') as mock_frappe:
             mock_frappe.get_all.return_value = [{"name": "STAGE_INITIAL"}]
+            mock_frappe.log_error = MagicMock()
 
             result = self.backend_module.get_initial_stage()
 
@@ -301,6 +302,7 @@ class TestBackendOnboardingProcess(unittest.TestCase):
                 [],  # No stage with order=0
                 [{"name": "STAGE_MIN", "order": 1}]  # Stage with minimum order
             ]
+            mock_frappe.log_error = MagicMock()
 
             result = self.backend_module.get_initial_stage()
 
