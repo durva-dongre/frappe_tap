@@ -19,14 +19,14 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Name",
-   "options": "Visual Arts\nPerforming Arts\nSTEM - Coding\nSTEM - Science\nSTEM - Electronics\nFinancial Literacy",
+   "options": "Visual Arts\nPerforming Arts\nSTEM - Coding\nSTEM - Science\nSTEM - Electronics\nFinancial Literacy\nSTEM - Commerce",
    "reqd": 1
   },
   {
    "fieldname": "name2",
    "fieldtype": "Select",
    "label": "Label",
-   "options": "Arts\nDance\nCoding\nScience Lab\nElectronics\nFinancial Literacy",
+   "options": "Arts\nDance\nCoding\nScience Lab\nElectronics\nFinancial Literacy\ncommerce",
    "reqd": 1
   },
   {
@@ -39,7 +39,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-01 19:17:10.279010",
+ "modified": "2025-12-05 11:40:26.004248",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Course Verticals",

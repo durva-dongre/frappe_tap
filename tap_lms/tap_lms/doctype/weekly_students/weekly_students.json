@@ -1,0 +1,111 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-12-16 12:31:21.204947",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "student",
+  "student_name",
+  "phone_number",
+  "glific_id",
+  "column_break_sq2mu",
+  "batch",
+  "batch_keyword",
+  "date_of_joining",
+  "current_week_no",
+  "flow_trigger_details_section",
+  "flow_trigger_status",
+  "flow_triggered_at",
+  "error_log",
+  "regular_activity_start_date"
+ ],
+ "fields": [
+  {
+   "fieldname": "student",
+   "fieldtype": "Link",
+   "label": "Student",
+   "options": "Student"
+  },
+  {
+   "fieldname": "student_name",
+   "fieldtype": "Data",
+   "label": "Student Name"
+  },
+  {
+   "fieldname": "phone_number",
+   "fieldtype": "Data",
+   "label": "Phone Number"
+  },
+  {
+   "fieldname": "glific_id",
+   "fieldtype": "Data",
+   "label": "Glific ID"
+  },
+  {
+   "fieldname": "column_break_sq2mu",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "batch",
+   "fieldtype": "Link",
+   "label": "Batch",
+   "options": "Batch"
+  },
+  {
+   "fieldname": "batch_keyword",
+   "fieldtype": "Data",
+   "label": "Batch Keyword"
+  },
+  {
+   "fieldname": "date_of_joining",
+   "fieldtype": "Date",
+   "label": "Date of Joining"
+  },
+  {
+   "fieldname": "current_week_no",
+   "fieldtype": "Int",
+   "label": "Current Week No"
+  },
+  {
+   "fieldname": "flow_trigger_details_section",
+   "fieldtype": "Section Break",
+   "label": "Flow Trigger Details"
+  },
+  {
+   "fieldname": "flow_trigger_status",
+   "fieldtype": "Select",
+   "label": "Flow Trigger Status",
+   "options": "Pending\nSuccess\nFailed"
+  },
+  {
+   "fieldname": "flow_triggered_at",
+   "fieldtype": "Datetime",
+   "label": "Flow Triggered At"
+  },
+  {
+   "fieldname": "error_log",
+   "fieldtype": "Long Text",
+   "label": "Error Log"
+  },
+  {
+   "fieldname": "regular_activity_start_date",
+   "fieldtype": "Date",
+   "label": "Regular Activity Start Date"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-12-16 12:50:58.895926",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Weekly Students",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
