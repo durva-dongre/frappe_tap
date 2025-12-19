@@ -216,7 +216,9 @@ def enqueue_submission(submission_id):
         "submission_id": submission.name,
         "assign_id": submission.assign_id,
         "student_id": submission.student_id,
-        "img_url": submission.img_url  # This is now the GCS public URL
+        "img_url": submission.img_url,  # This is now the GCS public URL
+        # Optional: Add metadata for better detection
+        "created_at": str(submission.created_at)
     }
 
     # Get RabbitMQ settings from DocType
@@ -237,7 +239,13 @@ def enqueue_submission(submission_id):
     channel = connection.channel()
 
     # Declare the queue
-    channel.queue_declare(queue=rabbitmq_config['queue'])
+    try:
+        # First try passive declaration to check if queue exists
+        channel.queue_declare(queue=rabbitmq_config['queue'],durable=True,passive=True)
+    except Exception:
+        # If it doesn't exist, declare it
+        channel.queue_declare(queue=rabbitmq_config['queue'], durable=True)
+
 
     # Publish the message to the queue
     channel.basic_publish(
