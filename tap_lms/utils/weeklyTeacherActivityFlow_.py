@@ -108,24 +108,20 @@ def get_eligible_batch_for_teacher(teacher):
     Returns:
         dict: Batch onboarding info with batch details, or None if not found
     """
-    teacher_batch = teacher.get('teacher_batch') if isinstance(teacher, dict) else teacher.teacher_batch
     school_id = teacher.get('school_id') if isinstance(teacher, dict) else teacher.school_id
     #print(school_id)
     if not school_id:
         return None
     
-    if not teacher_batch:
-        return None
-    
     # Get all batch onboardings for this school
-    # batch_onboardings = frappe.get_all(
-    #     "Batch onboarding",
-    #     filters={"school": school_id},
-    #     fields=["name", "batch", "batch_skeyword", "school"]
-    # )
-    # #print(batch_onboardings)
-    # if not batch_onboardings:
-    #     return None
+    batch_onboardings = frappe.get_all(
+        "Batch onboarding",
+        filters={"school": school_id},
+        fields=["name", "batch", "batch_skeyword", "school"]
+    )
+    #print(batch_onboardings)
+    if not batch_onboardings:
+        return None
     
     # Get current week dates
     week_start_date, week_end_date = get_current_week_dates()
@@ -133,10 +129,9 @@ def get_eligible_batch_for_teacher(teacher):
     eligible_batch = None
     latest_activity_start = None
     
-    #for bo in batch_onboardings:
-    if teacher_batch:
+    for bo in batch_onboardings:
         # Get batch details
-        batch = frappe.get_doc("Batch", teacher_batch)
+        batch = frappe.get_doc("Batch", bo.batch)
         
         # Check if batch is active
         if not batch.active:
@@ -156,10 +151,10 @@ def get_eligible_batch_for_teacher(teacher):
         if latest_activity_start is None or activity_start > latest_activity_start:
             latest_activity_start = activity_start
             eligible_batch = {
-                #"batch_onboarding": bo.name,
-                "batch": teacher_batch,
-                #"batch_keyword": bo.batch_skeyword,
-                #"school": bo.school,
+                "batch_onboarding": bo.name,
+                "batch": bo.batch,
+                "batch_keyword": bo.batch_skeyword,
+                "school": bo.school,
                 "regular_activity_start_date": batch.regular_activity_start_date,
                 "batch_name": batch.name1
             }
@@ -213,7 +208,7 @@ def get_weekly_teachers():
             filters={
                 "school_id": ["is", "set"]  # school_id is not null
             },
-            fields=["name", "first_name", "last_name", "phone_number", "glific_id", "school_id", "teacher_batch"]
+            fields=["name", "first_name", "last_name", "phone_number", "glific_id", "school_id"]
         )
 
         #print(teachers)
@@ -266,8 +261,8 @@ def get_weekly_teachers():
                 "teacher_name": teacher_name,
                 "phone_number": teacher.phone_number,
                 "glific_id": teacher.glific_id,
-                #"batch_onboarding": eligible_batch["batch_onboarding"],
-                #"batch_keyword": eligible_batch["batch_keyword"],
+                "batch_onboarding": eligible_batch["batch_onboarding"],
+                "batch_keyword": eligible_batch["batch_keyword"],
                 "regular_activity_start_date": eligible_batch["regular_activity_start_date"],
                 "current_week_no": current_week_no,
                 "flow_trigger_status": "Pending"

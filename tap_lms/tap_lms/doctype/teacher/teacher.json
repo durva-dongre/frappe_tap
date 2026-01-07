@@ -12,6 +12,7 @@
   "first_name",
   "last_name",
   "school_id",
+  "teacher_batch",
   "gender",
   "language",
   "email_id",
@@ -81,11 +82,17 @@
    "fieldtype": "Select",
    "label": "Teacher Role",
    "options": "\nHM\nNodal_Officer_POC\nTeacher\nMaster_Trainers\nZonal_Coordinator"
+  },
+  {
+   "fieldname": "teacher_batch",
+   "fieldtype": "Link",
+   "label": "Teacher Batch",
+   "options": "Batch"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-09 23:33:55.387103",
+ "modified": "2025-12-26 12:31:45.528830",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "Teacher",
