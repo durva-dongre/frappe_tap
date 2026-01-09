@@ -195,10 +195,15 @@ class FeedbackConsumer:
                 return
             
             frappe.logger().info(f"Processing feedback for submission: {submission_id}")
+            frappe.db.commit()
             
             # Check if submission exists
             if not frappe.db.exists("ImgSubmission", submission_id):
                 frappe.logger().error(f"ImgSubmission {submission_id} not found")
+                # get a list of existing submission ids for logging
+                # existing_ids = frappe.db.get_all("ImgSubmission", fields=["name"], limit=5)
+                # existing_ids_list = [doc.name for doc in existing_ids]
+                # print(f"Existing ImgSubmission IDs (sample): {existing_ids_list}")
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
             
