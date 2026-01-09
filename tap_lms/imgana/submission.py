@@ -5,6 +5,8 @@ import requests
 from urllib.parse import urlparse
 from google.cloud import storage
 import os
+from frappe.utils.file_manager import get_file_path
+import base64
 
 
 def get_rabbitmq_settings():
@@ -309,7 +311,20 @@ def get_assignment_context(assignment_id, student_id=None):
     """Get complete assignment context for RAG service"""
     try:
         assignment = frappe.get_doc("Assignment", assignment_id)
-        
+        images = []
+        for row in assignment.reference_images:
+            file_url = row.image
+            file_doc = frappe.get_doc("File", {"file_url": file_url})
+
+            file_path = file_doc.get_full_path()
+            with open(file_path, 'rb') as f:
+                content = base64.b64encode(f.read()).decode('utf-8')
+            images.append({
+                'name': file_doc.file_name,
+                'content_type': 'image/jpeg',
+                'content': content  # base64 encoded
+            })
+
         context = {
             "assignment": {
                 "name": assignment.assignment_name,
@@ -317,7 +332,7 @@ def get_assignment_context(assignment_id, student_id=None):
                 "type": assignment.assignment_type,
                 "subject": assignment.subject,
                 "submission_guidelines": assignment.submission_guidelines,
-                "reference_image": assignment.reference_image,
+                "reference_images": images,
                 "max_score": assignment.max_score
             },
             "learning_objectives": [
