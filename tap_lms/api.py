@@ -4259,6 +4259,196 @@ def get_question_text(question_id, language):
         return None
 
 
+# @frappe.whitelist(allow_guest=True)
+# def get_quiz_question_details(question_id, language):
+#     """
+#     Get quiz question details with options and translations
+    
+#     Args:
+#         question_id (str): QuizQuestion ID
+#         language (str): Language (TAP Language) - required
+        
+#     Returns:
+#         dict: Question details with options and answer in specified language
+#     """
+#     try:
+#         # Validate inputs
+#         if not question_id or not language:
+#             return {
+#                 "success": False,
+#                 "error": "Both question_id and language are required"
+#             }
+        
+#         # Get QuizQuestion document
+#         try:
+#             question_doc = frappe.get_doc("QuizQuestion", question_id)
+#         except frappe.DoesNotExistError:
+#             return {
+#                 "success": False,
+#                 "error": f"Question '{question_id}' not found"
+#             }
+        
+#         # Get question text in requested language
+#         question_text = get_question_text_by_language(question_doc, language)
+        
+#         # Get options with translations for requested language
+#         options = get_options_by_language(question_doc, language)
+        
+#         # Get correct answer
+#         correct_option_number = question_doc.correct_option
+#         answer = get_correct_answer_by_language(options, correct_option_number)
+        
+#         # Build response with dynamic language
+#         response = {
+#             "success": True,
+#             "question_id": question_id,
+#             "question": question_text,  # Dynamic question based on language
+#             "question_type": question_doc.question_type,
+#             "points": question_doc.points if hasattr(question_doc, 'points') else 0,
+#             "language": language,
+#             "options": options,
+#             "answer": answer,
+#             "correct_option_number": correct_option_number
+#         }
+        
+#         return response
+        
+#     except Exception as e:
+#         frappe.log_error(
+#             f"Error in get_quiz_question_details: {str(e)}\n"
+#             f"question_id: {question_id}, language: {language}",
+#             "Quiz Question Details API Error"
+#         )
+#         return {
+#             "success": False,
+#             "error": f"Internal server error: {str(e)}"
+#         }
+
+
+# def get_question_text_by_language(question_doc, language):
+#     """
+#     Get question text in specified language
+    
+#     Args:
+#         question_doc: QuizQuestion document
+#         language: Language name (e.g., "English", "Hindi")
+        
+#     Returns:
+#         str: Question text in requested language
+#     """
+#     # Try to find translation for the specified language
+#     if hasattr(question_doc, 'question_translations') and question_doc.question_translations:
+#         for translation in question_doc.question_translations:
+#             if translation.language == language and translation.translated_question:
+#                 return translation.translated_question
+    
+#     # Fallback to original question if translation not found
+#     return question_doc.question
+
+
+# def get_options_by_language(question_doc, language):
+#     """
+#     Get all options in specified language
+    
+#     Args:
+#         question_doc: QuizQuestion document
+#         language: Language name
+        
+#     Returns:
+#         list: List of option objects with translations for specified language
+#     """
+#     options_list = []
+    
+#     # Check if question has options child table
+#     if not hasattr(question_doc, 'options') or not question_doc.options:
+#         return options_list
+    
+#     # Get options from child table
+#     for option_row in question_doc.options:
+#         option_id = option_row.options  # Link to QuizOption
+#         order_number = option_row.order_number
+        
+#         if not option_id:
+#             continue
+        
+#         try:
+#             # Get QuizOption document
+#             option_doc = frappe.get_doc("QuizOption", option_id)
+            
+#             # Get translated option text
+#             option_text = get_option_translation(option_doc, language)
+#             if not option_text:
+#                 option_text = option_doc.option_text  # Fallback to original
+            
+#             option_data = {
+#                 "option_id": option_id,
+#                 "option_number": order_number if order_number else option_doc.option_number,
+#                 "option_text": option_text
+#             }
+            
+#             options_list.append(option_data)
+            
+#         except Exception as e:
+#             frappe.log_error(
+#                 f"Error getting option details: {str(e)}",
+#                 "Quiz Question Details API"
+#             )
+#             continue
+    
+#     # Sort by option_number
+#     options_list.sort(key=lambda x: x["option_number"])
+    
+#     return options_list
+
+
+# def get_option_translation(option_doc, language):
+#     """
+#     Get option translation for specific language
+    
+#     Args:
+#         option_doc: QuizOption document
+#         language: Language name
+        
+#     Returns:
+#         str: Translated option text or None
+#     """
+#     if not hasattr(option_doc, 'option_translations') or not option_doc.option_translations:
+#         return None
+    
+#     for translation in option_doc.option_translations:
+#         if translation.language == language and translation.translated_option:
+#             return translation.translated_option
+    
+#     return None
+
+
+# def get_correct_answer_by_language(options, correct_option_number):
+#     """
+#     Get the correct answer details from options
+    
+#     Args:
+#         options: List of option objects
+#         correct_option_number: Correct option number
+        
+#     Returns:
+#         dict: Correct answer details
+#     """
+#     if not correct_option_number or not options:
+#         return None
+    
+#     for option in options:
+#         if option["option_number"] == correct_option_number:
+#             return {
+#                 "correct_option_number": correct_option_number,
+#                 "option_id": option["option_id"],
+#                 "option_text": option["option_text"]
+#             }
+    
+#     return {
+#         "correct_option_number": correct_option_number,
+#         "message": "Correct option details not found in options list"
+#     }
+
 @frappe.whitelist(allow_guest=True)
 def get_quiz_question_details(question_id, language):
     """
@@ -4275,8 +4465,10 @@ def get_quiz_question_details(question_id, language):
         # Validate inputs
         if not question_id or not language:
             return {
-                "success": False,
-                "error": "Both question_id and language are required"
+                "message": {
+                    "success": False,
+                    "error": "Both question_id and language are required"
+                }
             }
         
         # Get QuizQuestion document
@@ -4284,8 +4476,10 @@ def get_quiz_question_details(question_id, language):
             question_doc = frappe.get_doc("QuizQuestion", question_id)
         except frappe.DoesNotExistError:
             return {
-                "success": False,
-                "error": f"Question '{question_id}' not found"
+                "message": {
+                    "success": False,
+                    "error": f"Question '{question_id}' not found"
+                }
             }
         
         # Get question text in requested language
@@ -4296,22 +4490,37 @@ def get_quiz_question_details(question_id, language):
         
         # Get correct answer
         correct_option_number = question_doc.correct_option
-        answer = get_correct_answer_by_language(options, correct_option_number)
         
         # Build response with dynamic language
-        response = {
+        response_data = {
             "success": True,
             "question_id": question_id,
-            "question": question_text,  # Dynamic question based on language
+            "question": question_text,
             "question_type": question_doc.question_type,
-            "points": question_doc.points if hasattr(question_doc, 'points') else 0,
-            "language": language,
-            "options": options,
-            "answer": answer,
-            "correct_option_number": correct_option_number
+            "language": language
         }
         
-        return response
+        # Add options as option_a, option_b, option_c, etc.
+        option_letters = ['a', 'b', 'c', 'd', 'e', 'f']  # Support up to 6 options
+        correct_option_text = None
+        correct_option_letter = None
+        
+        for idx, option in enumerate(options):
+            if idx < len(option_letters):
+                option_key = f"option_{option_letters[idx]}"
+                response_data[option_key] = option["option_text"]
+                
+                # Check if this is the correct option
+                if option["option_number"] == correct_option_number:
+                    correct_option_text = option["option_text"]
+                    correct_option_letter = option_letters[idx].upper()
+        
+        # Add correct option details
+        if correct_option_letter:
+            response_data["correct_option"] = correct_option_letter
+            response_data["correct_option_text"] = correct_option_text
+        
+        return {"message": response_data}
         
     except Exception as e:
         frappe.log_error(
@@ -4320,8 +4529,10 @@ def get_quiz_question_details(question_id, language):
             "Quiz Question Details API Error"
         )
         return {
-            "success": False,
-            "error": f"Internal server error: {str(e)}"
+            "message": {
+                "success": False,
+                "error": f"Internal server error: {str(e)}"
+            }
         }
 
 
@@ -4420,35 +4631,6 @@ def get_option_translation(option_doc, language):
             return translation.translated_option
     
     return None
-
-
-def get_correct_answer_by_language(options, correct_option_number):
-    """
-    Get the correct answer details from options
-    
-    Args:
-        options: List of option objects
-        correct_option_number: Correct option number
-        
-    Returns:
-        dict: Correct answer details
-    """
-    if not correct_option_number or not options:
-        return None
-    
-    for option in options:
-        if option["option_number"] == correct_option_number:
-            return {
-                "correct_option_number": correct_option_number,
-                "option_id": option["option_id"],
-                "option_text": option["option_text"]
-            }
-    
-    return {
-        "correct_option_number": correct_option_number,
-        "message": "Correct option details not found in options list"
-    }
-
 
 @frappe.whitelist(allow_guest=False)
 def get_multiple_questions(question_ids, language):
