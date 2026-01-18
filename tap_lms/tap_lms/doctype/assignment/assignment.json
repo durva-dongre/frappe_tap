@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_import": 1,
  "allow_rename": 1,
  "autoname": "format:{assignment_name}-{difficulty_tier}",
  "creation": "2024-10-17 16:47:42.975464",
