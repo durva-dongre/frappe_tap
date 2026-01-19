@@ -8,31 +8,33 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "assign_id",
-  "student_id",
-  "img_url",
-  "status",
-  "result_status",
-  "created_at",
-  "grade",
-  "plagiarism_section",
-  "plagiarism_status",
-  "is_plagiarized",
-  "match_type",
-  "plagiarism_source",
-  "similarity_score",
-  "similar_sources",
-  "ai_detection_section",
-  "is_ai_generated",
-  "ai_detection_source",
-  "ai_confidence",
-  "feedback_section",
-  "rubric_evaluations", 
-  "plagiarism_result",
-  "generated_feedback",
-  "feedback_summary",
-  "overall_feedback",
-  "completed_at"
+    "assign_id",
+    "student_id",
+    "img_url",
+    "status",
+    "result_status",
+    "created_at",
+    "grade",
+    "plagiarism_section",
+    "plagiarism_status",
+    "is_plagiarized",
+    "match_type",
+    "plagiarism_source",
+    "similarity_score",
+    "similar_sources",
+    "ai_detection_section",
+    "is_ai_generated",
+    "ai_detection_source",
+    "ai_confidence",
+    "feedback_section",
+    "rubric_evaluations", 
+    "plagiarism_result",
+    "strengths",
+    "areas_for_improvement",
+    "encouragement",
+    "overall_feedback",
+    "completed_at",
+    "generated_feedback"
  ],
  "fields": [
   {
@@ -170,14 +172,24 @@
    "label": "Generated Feedback"
   },
   {
-   "fieldname": "feedback_summary",
-   "fieldtype": "Text",
-   "label": "Feedback Summary"
-  },
-  {
    "fieldname": "overall_feedback",
    "fieldtype": "Text",
    "label": "Overall Feedback"
+  },
+    {
+   "fieldname": "strengths",
+   "fieldtype": "Text",
+   "label": "Strengths"
+  },
+    {
+   "fieldname": "areas_for_improvement",
+   "fieldtype": "Text",
+   "label": "Areas for Improvement"
+  },
+{
+   "fieldname": "encouragement",
+   "fieldtype": "Text",
+   "label": "Encouragement"
   },
   {
    "fieldname": "completed_at",

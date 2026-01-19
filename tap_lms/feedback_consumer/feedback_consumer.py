@@ -270,71 +270,6 @@ class FeedbackConsumer:
         # All other errors are considered retryable (database locks, network issues, etc.)
         return True
 
-    def update_submission_old(self, message_data: Dict):
-        """Update ImgSubmission with feedback data - FIXED to handle correct grade path"""
-        try:
-            submission_id = message_data["submission_id"]
-            feedback_data = message_data["feedback"]
-            
-            # Get submission document
-            submission = frappe.get_doc("ImgSubmission", submission_id)
-            
-            # Extract grade from correct path: message_data["feedback"]["grade_recommendation"]
-            grade_recommendation = feedback_data.get("grade_recommendation", "0")
-            
-            # Handle grade conversion safely
-            try:
-                if isinstance(grade_recommendation, str):
-                    # Remove any non-numeric characters except decimal point
-                    grade_clean = ''.join(c for c in grade_recommendation if c.isdigit() or c == '.')
-                    grade = float(grade_clean) if grade_clean else 0.0
-                else:
-                    grade = float(grade_recommendation)
-            except (ValueError, TypeError):
-                grade = 0.0
-                frappe.logger().warning(f"Could not parse grade '{grade_recommendation}' for submission {submission_id}, using 0.0")
-            
-            # Handle plagiarism score
-            plagiarism_score = message_data.get("plagiarism_score", 0)
-            try:
-                plagiarism_score = float(plagiarism_score)
-            except (ValueError, TypeError):
-                plagiarism_score = 0.0
-            
-            # Prepare update data with safe defaults
-            update_data = {
-                "status": "Completed",
-                "grade": grade,
-                "plagiarism_result": plagiarism_score,
-                "feedback_summary": message_data.get("summary", ""),
-                "overall_feedback": feedback_data.get("overall_feedback", ""),
-                "completed_at": datetime.now()
-            }
-            
-            # Handle JSON fields safely
-            similar_sources = message_data.get("similar_sources", [])
-            if isinstance(similar_sources, list):
-                update_data["similar_sources"] = json.dumps(similar_sources)
-            else:
-                update_data["similar_sources"] = json.dumps([])
-            
-            # Store complete feedback as JSON
-            if isinstance(feedback_data, dict):
-                update_data["generated_feedback"] = json.dumps(feedback_data)
-            else:
-                update_data["generated_feedback"] = json.dumps({})
-            
-            # Update the document
-            submission.update(update_data)
-            submission.save(ignore_permissions=True)
-            
-            frappe.logger().info(f"Updated ImgSubmission {submission_id}: grade={grade}, status=Completed")
-            
-        except Exception as e:
-            frappe.logger().error(f"Error updating ImgSubmission {submission_id}: {str(e)}")
-            raise
-
-
     def update_submission(self, message_data: Dict):
         """Update ImgSubmission with comprehensive plagiarism data"""
         try:
@@ -410,7 +345,7 @@ class FeedbackConsumer:
                 "grade": grade,
                 "overall_feedback": feedback_data.get("overall_feedback", ""),
                 "generated_feedback": json.dumps(feedback_data),
-                "feedback_summary": message_data.get("summary", ""),
+                # "feedback_summary": message_data.get("summary", ""),
                 "learning_objectives_feedback": learning_objectives_feedback_message,
                 "strengths": strengths_message,
                 "areas_for_improvement": areas_for_improvement_message,
