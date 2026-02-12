@@ -226,7 +226,7 @@ def submit_artwork_internal(api_key, assign_id, name1, glific_id, img_url):
     # Switch to the user associated with the API key
     frappe.set_user(api_key_doc.user)
     
-    student_id = "ST00000182"
+    student_id = "ST00000206"
 
     try:
         # Create a new submission first (to get the submission name)
