@@ -1,8 +1,68 @@
 import json
+import os
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 import frappe
 from tap_lms.feedback_handler.audio_creation import generate_feedback_audio
+
+_STOCK_FEEDBACK_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_stock_feedback_data() -> Dict[str, Any]:
+    global _STOCK_FEEDBACK_CACHE
+    if _STOCK_FEEDBACK_CACHE is not None:
+        return _STOCK_FEEDBACK_CACHE
+
+    data_path = os.path.join(os.path.dirname(__file__), "stock_feedback_and_audio.json")
+    try:
+        with open(data_path, "r", encoding="utf-8") as file:
+            _STOCK_FEEDBACK_CACHE = json.load(file)
+    except FileNotFoundError:
+        frappe.logger().error(f"Stock feedback file not found at {data_path}")
+        _STOCK_FEEDBACK_CACHE = {}
+    except json.JSONDecodeError as exc:
+        frappe.logger().error(f"Invalid JSON in stock feedback file: {exc}")
+        _STOCK_FEEDBACK_CACHE = {}
+
+    return _STOCK_FEEDBACK_CACHE
+
+
+def get_stock_feedback_and_audio(plagiarism_status: str, translation_language: str) -> Dict[str, Optional[str]]:
+    status_to_message_type = {
+        "Flagged - AI Generated": "invalid_submission_ai",
+        "Flagged - Peer Plagiarism": "invalid_submission_peer_plagiarism",
+        "Flagged - Self Plagiarism": "invalid_submission_self_plagiarism",
+        "Flagged - Exact Match": "invalid_submission_peer_plagiarism",
+        "Flagged - Near Duplicate": "invalid_submission_peer_plagiarism",
+        "Flagged - Semantic Match": "invalid_submission_peer_plagiarism",
+        "Flagged - Reference Plagiarism" : "invalid_submission_reference_plagiarism",
+        "system_error": "resend_technical_issue",
+        "requirements_mismatch": "invalid_submission_wrong_work",
+    }
+
+    message_type = status_to_message_type.get(plagiarism_status)
+    if not message_type or not translation_language:
+        return {"translated_feedback": None, "audio_feedback_url": None}
+
+    stock_data = _load_stock_feedback_data()
+    language_entries = None
+
+    for language_name, entries in stock_data.items():
+        if language_name.lower() == translation_language.lower():
+            language_entries = entries
+            break
+
+    if not language_entries:
+        return {"translated_feedback": None, "audio_feedback_url": None}
+
+    for entry in language_entries:
+        if entry.get("message_type") == message_type:
+            return {
+                "translated_feedback": entry.get("translated_feedback"),
+                "audio_feedback_url": entry.get("audio_feedback_url"),
+            }
+
+    return {"translated_feedback": None, "audio_feedback_url": None}
 
 
 class FeedbackProcessor:
@@ -129,7 +189,27 @@ class FeedbackProcessor:
         # Generate audio feedback if translated text and language are provided
         audio_feedback_url = ""
         if overall_feedback_translated and translation_language:
+            if "Flagged" in plagiarism_status:
+                frappe.logger().info(
+                    f"Using stock audio feedback for submission {submission_id} due to plagiarism status: {plagiarism_status}."
+                )
+                stock_feedback = get_stock_feedback_and_audio(plagiarism_status, translation_language)
+            elif "system error" in overall_feedback_translated.lower():
+                frappe.logger().info(
+                    f"Using stock audio feedback for submission {submission_id} due to system error in feedback."
+                )
+                stock_feedback = get_stock_feedback_and_audio("system_error", translation_language)
+            elif "Submission does not match assignment requirements" in overall_feedback_translated.lower():
+                frappe.logger().info(
+                    f"Using stock audio feedback for submission {submission_id} due to requirements mismatch in feedback."
+                )
+                stock_feedback = get_stock_feedback_and_audio("requirements_mismatch", translation_language)
+
+            overall_feedback_translated = stock_feedback.get("translated_feedback")
+            audio_feedback_url = stock_feedback.get("audio_feedback_url", "")
+        else:
             try:
+                overall_feedback_translated = feedback_data.get("overall_feedback_translated", "")
                 frappe.logger().info(
                     f"Generating audio feedback for submission {submission_id} "
                     f"in language {translation_language}"
@@ -170,8 +250,8 @@ class FeedbackProcessor:
             # Feedback fields
             "grade": grade,
             "overall_feedback": feedback_data.get("overall_feedback", ""),
-            "overall_feedback_translated": feedback_data.get("overall_feedback_translated", ""),
-            "translation_language": feedback_data.get("translation_language", ""),
+            "overall_feedback_translated": overall_feedback_translated,
+            "translation_language": translation_language,
             "audio_feedback_url": audio_feedback_url,
             "generated_feedback": json.dumps(feedback_data, indent=2, ensure_ascii=False),
             "learning_objectives_feedback": learning_objectives_feedback_message,
@@ -218,6 +298,8 @@ class FeedbackProcessor:
             return "Flagged - Peer Plagiarism"
         if plagiarism_source in ["self_cross_assignment", "self_late_resubmission"]:
             return "Flagged - Self Plagiarism"
+        if plagiarism_source == "reference":
+            return "Flagged - Reference Plagiarism"
 
         return "Flagged - Exact Match"
 
@@ -241,3 +323,21 @@ class FeedbackProcessor:
         return grade
 
 
+
+
+# if plagiarism_source == "peer":
+#     stock_message = "invalid_submission_peer_plagiarism"
+# elif plagiarism_source == "self":
+#     stock_message = "invalid_submission_self_plagiarism"
+# elif plagiarism_source == "reference":
+#     stock_message = "invalid_submission_reference_plagiarism"
+
+# if match_type == "exact_duplicate":
+#     pass
+# elif match_type == "near_duplicate": semantic_match
+#     pass
+# elif match_type == "resubmission_allowed":
+#     pass
+# elif match_type == "original":
+#     pass
+# elif match_type == "stock_image": ## same as ai generated

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # EDIT THE PAYLOAD BELOW TO TEST DIFFERENT DATA
 # ============================================================================
 PAYLOAD = {
-  "submission_id": "IMSUB-2601300208",
+  "submission_id": "IMSUB-2601280188",
   "student_id": "ST00000206",
   "assignment_id": "VA_L1_CA1-Basic",
   "feedback": {
@@ -53,15 +53,15 @@ PAYLOAD = {
     "grade_recommendation": 0,
     "plagiarism_output": {
       "is_plagiarized": False,
-      "is_ai_generated": False,
-      "match_type": "original",
-      "plagiarism_source": "none",
+      "is_ai_generated": True,
+      "match_type": "exact_duplicate",
+      "plagiarism_source": "peer", #"self_cross_assignment", "self_late_resubmission"
       "similarity_score": 0.0,
       "ai_detection_source": "none",
       "ai_confidence": 0.0,
       "similar_sources": []
     },
-    "translation_language": "Hindi"
+    "translation_language": "Kannada"
   },
   "generated_at": "2026-01-30T11:15:32.212972"
 }

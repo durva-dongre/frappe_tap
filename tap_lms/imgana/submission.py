@@ -213,6 +213,68 @@ def upload_audio_to_gcs(local_audio_path: str, submission_id: str, original_file
 
 
 @frappe.whitelist(allow_guest=True)
+def submit_artwork_internal(api_key, assign_id, name1, glific_id, img_url):
+    """
+    API endpoint to submit artwork.
+    Downloads image, uploads to GCS, creates submission, and enqueues to RabbitMQ.
+    """
+    # Authenticate the API request using the provided api_key
+    api_key_doc = frappe.db.get_value("API Key", {"key": api_key, "enabled": 1}, ["user"], as_dict=True)
+    if not api_key_doc:
+        frappe.throw("Invalid API key")
+
+    # Switch to the user associated with the API key
+    frappe.set_user(api_key_doc.user)
+    
+    student_id = "ST00000182"
+
+    try:
+        # Create a new submission first (to get the submission name)
+        submission = frappe.new_doc("ImgSubmission")
+        submission.assign_id = assign_id
+        submission.student_id = student_id
+        submission.img_url = img_url  # Store original URL initially
+        submission.status = "Pending"
+        submission.insert()
+        
+        # Upload to GCS and get public URL
+        public_url = upload_image_to_gcs(img_url, submission.name)
+        
+        # Update the submission with the GCS URL
+        submission.img_url = public_url
+        submission.save()
+        
+        frappe.db.commit()
+
+        # Log for debugging
+        frappe.logger("submission").debug(
+            f"Inserted submission: assign_id={submission.assign_id}, "
+            f"student_id={submission.student_id}, "
+            f"original_url={img_url}, "
+            f"gcs_url={public_url}"
+        )
+
+        # Send the submission details to RabbitMQ with the GCS public URL
+        enqueue_submission(submission.name)
+
+        return {
+            "message": "Submission received",
+            "submission_id": submission.name,
+            "student_id": student_id,
+            "image_url": public_url
+        }
+
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.logger("submission").error(f"Error in submit_artwork: {str(e)}")
+        frappe.throw(f"Failed to process submission: {str(e)}")
+
+    finally:
+        # Switch back to the original user
+        frappe.set_user("Administrator")
+
+
+@frappe.whitelist(allow_guest=True)
 def submit_artwork(api_key, assign_id, name1, glific_id, img_url):
     """
     API endpoint to submit artwork.
