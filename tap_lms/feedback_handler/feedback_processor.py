@@ -39,6 +39,7 @@ def get_stock_feedback_and_audio(plagiarism_status: str, translation_language: s
         "system_error": "resend_technical_issue",
         "requirements_mismatch": "invalid_submission_wrong_work",
     }
+    print(f"Getting stock feedback for plagiarism status: {plagiarism_status} and language: {translation_language}")
 
     message_type = status_to_message_type.get(plagiarism_status)
     if not message_type or not translation_language:
@@ -200,7 +201,7 @@ class FeedbackProcessor:
         #ensure appropriate messaging and avoid repeated TTS generation 
 
         if "Flagged" in plagiarism_status:
-            overall_feedback_translated, audio_feedback_url = self._use_stock("plagiarism_status", f"plagiarism status: {plagiarism_status}", translation_language)
+            overall_feedback_translated, audio_feedback_url = self._use_stock(plagiarism_status, f"plagiarism status: {plagiarism_status}", translation_language)
         elif "system error" in overall_feedback_translated.lower():
             overall_feedback_translated, audio_feedback_url = self._use_stock("system_error", "system error in feedback", translation_language)
         elif "Submission does not match assignment requirements" in overall_feedback_translated.lower():
