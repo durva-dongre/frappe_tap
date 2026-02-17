@@ -282,27 +282,19 @@ class FeedbackProcessor:
         if is_ai_generated:
             return "Flagged - AI Generated"
 
+        if is_plagiarized:
+            if plagiarism_source in ["peer", "peer_collusion"]:
+                return "Flagged - Peer Plagiarism"
+            if plagiarism_source in ["self_cross_assignment", "self_late_resubmission"]:
+                return "Flagged - Self Plagiarism"
+            if plagiarism_source == "reference":
+                return "Flagged - Reference Plagiarism"
+
         if not is_plagiarized:
             if match_type == "resubmission_allowed":
                 return "Resubmission Allowed"
             return "Original"
 
-        status_map = {
-            "exact_duplicate": "Flagged - Exact Match",
-            "near_duplicate": "Flagged - Near Duplicate",
-            "semantic_match": "Flagged - Semantic Match",
-        }
-        if match_type in status_map:
-            return status_map[match_type]
-
-        if plagiarism_source in ["peer", "peer_collusion"]:
-            return "Flagged - Peer Plagiarism"
-        if plagiarism_source in ["self_cross_assignment", "self_late_resubmission"]:
-            return "Flagged - Self Plagiarism"
-        if plagiarism_source == "reference":
-            return "Flagged - Reference Plagiarism"
-
-        return "Flagged - Exact Match"
 
     def _extract_grade(self, feedback_data: Dict[str, Any], submission_id: str) -> float:
         grade_recommendation: Any = feedback_data.get("final_grade", "50")
