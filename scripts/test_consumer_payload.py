@@ -21,49 +21,42 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 PAYLOAD = {
   "submission_id": "IMSUB-2601280188",
   "student_id": "ST00000206",
-  "assignment_id": "VA_L1_CA1-Basic",
+  "assignment_id": "VA_L2_CA1-Basic",
   "feedback": {
+    "overall_feedback": "Hi Champ, I found you have sent work that closely matches existing content. Please submit your own original work. I'm excited to see your unique creation!",
+    "overall_feedback_translated": "Hi Champ, I found you have sent work that closely matches existing content. Please submit your own original work. I'm excited to see your unique creation!",
+    "strengths": [
+      "N/A - Submission flagged for similarity"
+    ],
+    "areas_for_improvement": [
+      "Create original artwork for this assignment",
+      "Review academic integrity guidelines"
+    ],
+    "learning_objectives_feedback": [
+      "N/A - Submission flagged for similarity"
+    ],
+    "grade_recommendation": 0,
+    "encouragement": "Every artist develops their unique style through practice!",
     "rubric_evaluations": [
       {
         "Skill": "Content Knowledge",
-        "grade_value": 2,
-        "observation": "The creature uses basic shapes like circles and ovals but lacks clear patterns and variety."
-      },
-      {
-        "Skill": "Creativity",
-        "grade_value": 2,
-        "observation": "The creature has simple features and lacks imaginative elements like magical details or unique patterns."
+        "grade_value": 0,
+        "observation": "N/A - Submission flagged for similarity."
       }
     ],
-    "strengths": [
-      "Neat arrangement of shapes",
-      "Good use of color contrast"
-    ],
-    "areas_for_improvement": [
-      "Incorporate more patterns into the design",
-      "Add unique features to enhance creativity"
-    ],
-    "encouragement": "Great start! Keep experimenting with shapes and patterns to make your creature even more magical.",
-    "overall_feedback": "Your creation is neat and well-colored. To make it more magical, try adding more patterns and unique features. Keep up the creativity!",
-    "overall_feedback_translated": "आपकी रचना साफ-सुथरी और अच्छी तरह से रंगी हुई है। इसे और जादुई बनाने के लिए और पैटर्न और अनोखी विशेषताएँ जोड़ें। रचनात्मकता बनाए रखें!",
-    "learning_objectives_feedback": [
-      "Enhance use of diverse shapes and patterns."
-    ],
-    "final_grade": "40",
-    "grade_recommendation": 0,
     "plagiarism_output": {
-      "is_plagiarized": False,
-      "is_ai_generated": True,
+      "stock_audio_file": "invalid_submission_ai",
+      "is_plagiarized": True,
+      "is_ai_generated": False,
       "match_type": "exact_duplicate",
-      "plagiarism_source": "peer", #"self_cross_assignment", "self_late_resubmission"
-      "similarity_score": 0.0,
+      "plagiarism_source": "self_late_resubmission",
+      "similarity_score": 1.0,
       "ai_detection_source": "none",
-      "ai_confidence": 0.0,
-      "similar_sources": []
+      "ai_confidence": 0.0
     },
-    "translation_language": "Kannada"
+    "translation_language": "Hindi"
   },
-  "generated_at": "2026-01-30T11:15:32.212972"
+  "generated_at": "2026-02-17T11:20:06.319848"
 }
 
 # ============================================================================
@@ -76,7 +69,7 @@ def get_rabbitmq_settings():
             "host": "rabbit-01.lmq.cloudamqp.com",
             "port": "5672",
             "username": "aoafhbrm",
-            "password": "****",
+            "password": "@@@@@",
             "virtual_host": "aoafhbrm",
             "queue": "feedback_q_local",
         }

@@ -65,6 +65,8 @@ def get_stock_feedback_and_audio(plagiarism_status: str, translation_language: s
     return {"translated_feedback": None, "audio_feedback_url": None}
 
 
+
+
 class FeedbackProcessor:
     """
     Handles message parsing/validation and all DB updates for feedback processing.
@@ -129,6 +131,11 @@ class FeedbackProcessor:
                 f"Error marking submission {submission_id} as failed: {str(e)}"
             )
 
+    def _use_stock(self, key, reason, translation_language):
+        frappe.logger().info(f"Using stock audio feedback for submission due to {reason}.")
+        fb = get_stock_feedback_and_audio(key, translation_language)
+        return fb.get("translated_feedback"), fb.get("audio_feedback_url", "")
+
     def update_submission(self, message_data: Dict[str, Any]) -> None:
         submission_id = message_data["submission_id"]
         feedback_data = message_data.get("feedback", {})
@@ -185,28 +192,21 @@ class FeedbackProcessor:
         # Extract translated feedback and language
         overall_feedback_translated = feedback_data.get("overall_feedback_translated", "")
         translation_language = feedback_data.get("translation_language", "")
-    
+        print("plag status:", plagiarism_status)    
         # Generate audio feedback if translated text and language are provided
         audio_feedback_url = ""
-        if overall_feedback_translated and translation_language:
-            if "Flagged" in plagiarism_status:
-                frappe.logger().info(
-                    f"Using stock audio feedback for submission {submission_id} due to plagiarism status: {plagiarism_status}."
-                )
-                stock_feedback = get_stock_feedback_and_audio(plagiarism_status, translation_language)
-            elif "system error" in overall_feedback_translated.lower():
-                frappe.logger().info(
-                    f"Using stock audio feedback for submission {submission_id} due to system error in feedback."
-                )
-                stock_feedback = get_stock_feedback_and_audio("system_error", translation_language)
-            elif "Submission does not match assignment requirements" in overall_feedback_translated.lower():
-                frappe.logger().info(
-                    f"Using stock audio feedback for submission {submission_id} due to requirements mismatch in feedback."
-                )
-                stock_feedback = get_stock_feedback_and_audio("requirements_mismatch", translation_language)
 
-            overall_feedback_translated = stock_feedback.get("translated_feedback")
-            audio_feedback_url = stock_feedback.get("audio_feedback_url", "")
+        #using stock feedback and audio for flagged submissions and certain error cases to 
+        #ensure appropriate messaging and avoid repeated TTS generation 
+
+        if "Flagged" in plagiarism_status:
+            overall_feedback_translated, audio_feedback_url = self._use_stock("plagiarism_status", f"plagiarism status: {plagiarism_status}", translation_language)
+        elif "system error" in overall_feedback_translated.lower():
+            overall_feedback_translated, audio_feedback_url = self._use_stock("system_error", "system error in feedback", translation_language)
+        elif "Submission does not match assignment requirements" in overall_feedback_translated.lower():
+            overall_feedback_translated, audio_feedback_url = self._use_stock("requirements_mismatch", "requirements mismatch in feedback", translation_language)
+
+        # Creating TTS for valid submissions and feedback.
         else:
             try:
                 overall_feedback_translated = feedback_data.get("overall_feedback_translated", "")
