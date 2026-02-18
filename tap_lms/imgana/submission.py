@@ -294,9 +294,8 @@ def upload_to_gcs(submission_url, submission_name):
     Returns the public URL.
     """
     # Supported image and video extensions
-    image_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg'}
-    video_exts = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.flv', '.wmv'}
-
+    image_exts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'}
+    video_exts = {'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv'}
 
     url_without_query = submission_url.split("?", 1)[0].lower()
     if "." in url_without_query:
