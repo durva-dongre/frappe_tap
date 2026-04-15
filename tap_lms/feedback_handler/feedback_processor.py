@@ -1,3 +1,4 @@
+##git
 import json
 import os
 from datetime import datetime
@@ -181,13 +182,15 @@ class FeedbackProcessor:
         rubric_evaluations = feedback_data.get("rubric_evaluations", [])
         rubric_evaluations_rows = []
         for rubric in rubric_evaluations:
-            rubric_evaluations_rows.append(
-                {
-                    "skill": rubric.get("Skill", ""),
-                    "grade_value": float(rubric.get("grade_value", 0)),
-                    "observation": rubric.get("observation", ""),
-                }
-            )
+            skill = rubric.get("Skill")
+            if skill == "Content Knowledge" or skill == "Creativity":
+                rubric_evaluations_rows.append(
+                    {
+                        "skill": rubric.get("Skill", ""),
+                        "grade_value": float(rubric.get("grade_value", 0)),
+                        "observation": rubric.get("observation", ""),
+                    }
+                )
 
 
         # Extract translated feedback and language
