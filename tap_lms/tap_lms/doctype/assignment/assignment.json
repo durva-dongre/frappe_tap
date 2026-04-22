@@ -48,9 +48,9 @@
    "options": "Written\nPractical\nPerformance\nCollaborative"
   },
   {
-   "fieldname": "subject",
+   "fieldname": "course_vertical",
    "fieldtype": "Link",
-   "label": "Subject",
+   "label": "Course Vertical",
    "options": "Course Verticals"
   },
   {

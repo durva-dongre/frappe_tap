@@ -590,8 +590,9 @@ def get_assignment_context(assignment_id, student_id=None):
             "assignment": {
                 "name": assignment.assignment_name,
                 "description": assignment.description,
-                "type": assignment.assignment_type, 
-                "subject": assignment.subject,
+                "assignment_type": assignment.assignment_type, 
+                "activity_type": assignment.activity_type,
+                "course_vertical": assignment.course_vertical,
                 "submission_guidelines": assignment.submission_guidelines,
                 "reference_images": images,
                 "max_score": assignment.max_score,
