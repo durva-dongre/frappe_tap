@@ -23,32 +23,54 @@ def get_gcs_client():
     return client, settings.bucket_name
 
 
-def get_content_type_from_response(response, filename):
+def get_content_type_from_response(response, filename, media_type):
     """
     Determine the correct content type from response headers or filename.
     Returns tuple of (content_type, file_extension)
     """
     content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
 
-    content_type_map = {
-        "image/jpeg": ".jpg",
-        "image/jpg": ".jpg",
-        "image/png": ".png",
-        "image/gif": ".gif",
-        "image/webp": ".webp",
-        "image/bmp": ".bmp",
-        "image/svg+xml": ".svg",
+    content_type_maps = {
+        "image": {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+            "image/bmp": ".bmp",
+            "image/svg+xml": ".svg",
+        },
+        "video": {
+            "video/mp4": ".mp4",
+            "video/quicktime": ".mov",
+            "video/x-msvideo": ".avi",
+            "video/x-matroska": ".mkv",
+            "video/webm": ".webm",
+            "video/x-flv": ".flv",
+            "video/x-ms-wmv": ".wmv",
+        },
+        "audio": {
+            "audio/mpeg": ".mp3",
+            "audio/mp3": ".mp3",
+            "audio/wav": ".wav",
+            "audio/x-wav": ".wav",
+            "audio/ogg": ".ogg",
+            "audio/mp4": ".m4a",
+            "audio/aac": ".aac",
+            "audio/webm": ".webm",
+        },
     }
 
-    ext_to_content_type = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".bmp": "image/bmp",
-        ".svg": "image/svg+xml",
+    default_content_types = {
+        "image": ("image/jpeg", ".jpg"),
+        "video": ("video/mp4", ".mp4"),
+        "audio": ("audio/mpeg", ".mp3"),
     }
+
+    content_type_map = content_type_maps.get(media_type, content_type_maps["image"])
+    ext_to_content_type = {v: k for k, v in content_type_map.items()}
+    if media_type == "image":
+        ext_to_content_type[".jpeg"] = "image/jpeg"
 
     if content_type in content_type_map:
         return content_type, content_type_map[content_type]
@@ -58,13 +80,13 @@ def get_content_type_from_response(response, filename):
         if ext in ext_to_content_type:
             return ext_to_content_type[ext], ext
 
-    return "image/jpeg", ".jpg"
+    return default_content_types.get(media_type, default_content_types["image"])
 
 
-def upload_image_to_gcs(img_url, submission_name):
+def upload_image_to_gcs(img_url, submission_id):
     """
     Download image from external URL and upload to GCS.
-    Returns the public URL.
+    Returns the URL.
     """
     try:
         result = get_gcs_client()
@@ -79,24 +101,24 @@ def upload_image_to_gcs(img_url, submission_name):
 
         parsed_url = urlparse(img_url)
         original_filename = os.path.basename(parsed_url.path)
-        content_type, ext = get_content_type_from_response(response, original_filename)
+        content_type, ext = get_content_type_from_response(response, original_filename, "image")
 
         if not original_filename or "." not in original_filename:
             original_filename = f"image{ext}"
 
-        gcs_filename = f"submissions/{submission_name}_{original_filename}"
+        gcs_filename = f"submissions/{submission_id}_{original_filename}"
 
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(gcs_filename)
         blob.upload_from_string(response.content, content_type=content_type)
 
-        public_url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
+        url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
 
         frappe.logger("submission").info(
-            f"Image uploaded to GCS: {img_url} -> {public_url} (content_type: {content_type})"
+            f"Image uploaded to GCS: {img_url} -> {url} (content_type: {content_type})"
         )
 
-        return public_url
+        return url
 
     except requests.exceptions.RequestException as e:
         frappe.logger("submission").error(f"Failed to download image from {img_url}: {str(e)}")
@@ -106,10 +128,10 @@ def upload_image_to_gcs(img_url, submission_name):
         raise frappe.ValidationError(f"Failed to upload to GCS: {str(e)}")
 
 
-def upload_audio_to_gcs(local_audio_path: str, submission_id: str, original_filename: str) -> str:
+def upload_audio_feedback_to_gcs(local_audio_path: str, submission_id: str, original_filename: str) -> str:
     """
     Upload audio file from local path to GCS.
-    Returns the public URL.
+    Returns the URL.
     """
     try:
         result = get_gcs_client()
@@ -140,13 +162,13 @@ def upload_audio_to_gcs(local_audio_path: str, submission_id: str, original_file
         with open(local_audio_path, "rb") as f:
             blob.upload_from_file(f, content_type=content_type)
 
-        public_url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
+        url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
 
         frappe.logger("submission").info(
-            f"Audio uploaded to GCS: {local_audio_path} -> {public_url} (content_type: {content_type})"
+            f"Audio uploaded to GCS: {local_audio_path} -> {url} (content_type: {content_type})"
         )
 
-        return public_url
+        return url
 
     except FileNotFoundError as e:
         frappe.logger("submission").error(f"Audio file not found: {str(e)}")
@@ -156,10 +178,55 @@ def upload_audio_to_gcs(local_audio_path: str, submission_id: str, original_file
         raise frappe.ValidationError(f"Failed to upload audio to GCS: {str(e)}")
 
 
+def upload_audio_to_gcs(audio_url: str, submission_id: str) -> str:
+    """
+    Download audio from external URL and upload to GCS.
+    Returns the URL.
+    """
+    try:
+        result = get_gcs_client()
+
+        if result is None:
+            frappe.throw("GCS Storage is not enabled. Enable it in GCS Settings.")
+
+        client, bucket_name = result
+
+        response = requests.get(audio_url, timeout=60)
+        response.raise_for_status()
+
+        parsed_url = urlparse(audio_url)
+        original_filename = os.path.basename(parsed_url.path)
+        content_type, ext = get_content_type_from_response(response, original_filename, "audio")
+
+        if not original_filename or "." not in original_filename:
+            original_filename = f"audio{ext}"
+
+        gcs_filename = f"submissions/{submission_id}_{original_filename}"
+
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(gcs_filename)
+        blob.upload_from_string(response.content, content_type=content_type)
+
+        url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
+
+        frappe.logger("submission").info(
+            f"Audio uploaded to GCS: {audio_url} -> {url} (content_type: {content_type})"
+        )
+
+        return url
+
+    except requests.exceptions.RequestException as e:
+        frappe.logger("submission").error(f"Failed to download audio from {audio_url}: {str(e)}")
+        raise frappe.ValidationError(f"Failed to download audio: {str(e)}")
+    except Exception as e:
+        frappe.logger("submission").error(f"Failed to upload audio to GCS: {str(e)}")
+        raise frappe.ValidationError(f"Failed to upload audio to GCS: {str(e)}")
+
+
 def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
     """
     Download video from external URL and upload to GCS.
-    Returns the public URL.
+    Returns the URL.
     """
     try:
         result = get_gcs_client()
@@ -172,27 +239,7 @@ def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
 
         parsed_url = urlparse(video_url)
         original_filename = os.path.basename(parsed_url.path)
-
-        content_type_map = {
-            "video/mp4": ".mp4",
-            "video/quicktime": ".mov",
-            "video/x-msvideo": ".avi",
-            "video/x-matroska": ".mkv",
-            "video/webm": ".webm",
-            "video/x-flv": ".flv",
-            "video/x-ms-wmv": ".wmv",
-        }
-        ext_to_content_type = {v: k for k, v in content_type_map.items()}
-
-        content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
-        ext = content_type_map.get(content_type)
-
-        if not ext and original_filename:
-            ext = os.path.splitext(original_filename)[1].lower()
-            content_type = ext_to_content_type.get(ext, "video/mp4")
-        if not ext:
-            ext = ".mp4"
-            content_type = "video/mp4"
+        content_type, ext = get_content_type_from_response(response, original_filename, "video")
 
         if not original_filename or "." not in original_filename:
             original_filename = f"video{ext}"
@@ -203,13 +250,13 @@ def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
         blob = bucket.blob(gcs_filename)
         blob.upload_from_string(response.content, content_type=content_type)
 
-        public_url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
+        url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
 
         frappe.logger("submission").info(
-            f"Video uploaded to GCS: {video_url} -> {public_url} (content_type: {content_type})"
+            f"Video uploaded to GCS: {video_url} -> {url} (content_type: {content_type})"
         )
 
-        return public_url
+        return url
 
     except requests.exceptions.RequestException as e:
         frappe.logger("submission").error(f"Failed to download video from {video_url}: {str(e)}")
@@ -221,11 +268,12 @@ def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
 
 def upload_to_gcs(submission_url, submission_name):
     """
-    Detect media type (image or video) from the URL extension and upload to GCS.
-    Returns the public URL.
+    Detect media type from the URL extension and upload to GCS.
+    Returns the URL.
     """
     image_exts = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"}
     video_exts = {"mp4", "mov", "avi", "mkv", "webm", "flv", "wmv"}
+    audio_exts = {"mp3", "wav", "ogg", "m4a", "aac"}
 
     url_without_query = submission_url.split("?", 1)[0].lower()
     if "." in url_without_query:
@@ -234,5 +282,7 @@ def upload_to_gcs(submission_url, submission_name):
             return upload_image_to_gcs(submission_url, submission_name)
         if ext in video_exts:
             return upload_video_to_gcs(submission_url, submission_name)
+        if ext in audio_exts:
+            return upload_audio_to_gcs(submission_url, submission_name)
 
     return upload_image_to_gcs(submission_url, submission_name)

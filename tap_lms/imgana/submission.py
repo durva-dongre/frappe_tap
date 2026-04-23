@@ -27,9 +27,9 @@ def process_submission_async(submission_id, img_url):
     try:
         submission = frappe.get_doc("ImgSubmission", submission_id)
 
-        public_url = upload_to_gcs(img_url, submission.name)
+        url = upload_to_gcs(img_url, submission.name)
 
-        submission.img_url = public_url
+        submission.img_url = url
         submission.status = "Processing"
         submission.upload_error_log = None
         submission.save(ignore_permissions=True)
@@ -39,7 +39,7 @@ def process_submission_async(submission_id, img_url):
             f"Submission prepared for processing: assign_id={submission.assign_id}, "
             f"student_id={submission.student_id}, "
             f"original_url={img_url}, "
-            f"gcs_url={public_url}"
+            f"gcs_url={url}"
         )
 
         enqueue_submission(submission.name)
@@ -175,17 +175,17 @@ def submit_artwork(api_key, assign_id, name1, glific_id, img_url):
 def enqueue_submission(submission_id):
     """
     Send submission details to RabbitMQ queue.
-    The img_url now contains the GCS public URL.
+    The img_url now contains the GCS URL.
     """
     try:
         submission = frappe.get_doc("ImgSubmission", submission_id)
         
-        # Payload with GCS public URL
+        # Payload with GCS URL
         payload = {
             "submission_id": submission.name,
             "assign_id": submission.assign_id,
             "student_id": submission.student_id,
-            "img_url": submission.img_url,  # This is now the GCS public URL
+            "img_url": submission.img_url,  # This is now the GCS URL
             # Optional: Add metadata for better detection
             "created_at": str(submission.created_at)
         }
