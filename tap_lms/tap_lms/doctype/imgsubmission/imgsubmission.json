@@ -12,6 +12,7 @@
     "student_id",
     "img_url",
     "status",
+    "upload_error_log",
     "result_status",
     "created_at",
     "grade",
@@ -60,6 +61,12 @@
    "fieldtype": "Select",
    "label": "Status",
    "options": "Pending\nProcessing\nCompleted\nFailed"
+  },
+  {
+   "fieldname": "upload_error_log",
+   "fieldtype": "Small Text",
+   "label": "Upload Error Log",
+   "read_only": 1
   },
   {
    "fieldname": "result_status",
