@@ -183,8 +183,8 @@ def assignment_submission_internal(
     user = _authenticate_api_key(api_key)
     frappe.set_user(user)
 
-    student_id = "ST00000206"
     payload = _normalize_submission_payload(submission)
+    student_id = "ST00000206"
 
     try:
         submission = _create_submission(assign_id, student_id, payload)
@@ -251,7 +251,6 @@ def enqueue_submission(submission_id):
             "submission_type": submission.submission_type,
             "submission_text": submission.submission_text,
             "submission_url": submission.submission_url,
-            "img_url": submission.submission_url,
             "created_at": str(submission.created_at),
         }
 
@@ -287,6 +286,9 @@ def enqueue_submission(submission_id):
             routing_key=rabbitmq_config['queue'],
             body=json.dumps(payload)
         )
+        print("Submission payload:")
+        print(json.dumps(payload))
+        frappe.logger("submission").error(f"Enqueued submission {submission_id} with payload: {json.dumps(payload)}")
 
         # Close the connection
         connection.close()

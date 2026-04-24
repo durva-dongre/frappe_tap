@@ -83,7 +83,7 @@ def get_content_type_from_response(response, filename, media_type):
     return default_content_types.get(media_type, default_content_types["image"])
 
 
-def upload_image_to_gcs(img_url, submission_id):
+def upload_image_to_gcs(image_url, submission_id):
     """
     Download image from external URL and upload to GCS.
     Returns the URL.
@@ -96,10 +96,10 @@ def upload_image_to_gcs(img_url, submission_id):
 
         client, bucket_name = result
 
-        response = requests.get(img_url, timeout=30)
+        response = requests.get(image_url, timeout=30)
         response.raise_for_status()
 
-        parsed_url = urlparse(img_url)
+        parsed_url = urlparse(image_url)
         original_filename = os.path.basename(parsed_url.path)
         content_type, ext = get_content_type_from_response(response, original_filename, "image")
 
@@ -115,13 +115,13 @@ def upload_image_to_gcs(img_url, submission_id):
         url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
 
         frappe.logger("submission").info(
-            f"Image uploaded to GCS: {img_url} -> {url} (content_type: {content_type})"
+            f"Image uploaded to GCS: {image_url} -> {url} (content_type: {content_type})"
         )
 
         return url
 
     except requests.exceptions.RequestException as e:
-        frappe.logger("submission").error(f"Failed to download image from {img_url}: {str(e)}")
+        frappe.logger("submission").error(f"Failed to download image from {image_url}: {str(e)}")
         raise frappe.ValidationError(f"Failed to download image: {str(e)}")
     except Exception as e:
         frappe.logger("submission").error(f"Failed to upload to GCS: {str(e)}")
