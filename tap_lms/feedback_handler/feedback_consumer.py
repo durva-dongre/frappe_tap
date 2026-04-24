@@ -40,77 +40,48 @@ class FeedbackConsumer:
             main_queue = self.settings.feedback_results_queue
             dlx_exchange = f"{main_queue}_dlx"
             dl_queue = f"{main_queue}_dead_letter"
+            main_queue_arguments = {
+                "x-dead-letter-exchange": dlx_exchange,
+                "x-dead-letter-routing-key": main_queue,
+            }
             
-            # Handle dead letter exchange (use existing settings)
-            try:
-                # Try to declare with existing settings first
-                self.channel.exchange_declare(
-                    exchange=dlx_exchange,
-                    exchange_type='direct',
-                    passive=True  # Check if exists
-                )
-                frappe.logger().info(f"Using existing dead letter exchange: {dlx_exchange}")
-            except pika.exceptions.ChannelClosedByBroker:
-                # Exchange doesn't exist or needs to be created
-                self._reconnect()
-                try:
-                    # Try with durable=False (common default)
-                    self.channel.exchange_declare(
-                        exchange=dlx_exchange,
-                        exchange_type='direct',
-                        durable=False
-                    )
-                    frappe.logger().info(f"Created dead letter exchange: {dlx_exchange}")
-                except pika.exceptions.ChannelClosedByBroker:
-                    # Try with durable=True
-                    self._reconnect()
-                    self.channel.exchange_declare(
-                        exchange=dlx_exchange,
-                        exchange_type='direct',
-                        durable=True
-                    )
-                    frappe.logger().info(f"Created durable dead letter exchange: {dlx_exchange}")
+            self.channel.exchange_declare(
+                exchange=dlx_exchange,
+                exchange_type='direct',
+                durable=True
+            )
+            frappe.logger().info(f"Declared dead letter exchange: {dlx_exchange}")
             
-            # Handle dead letter queue
-            try:
-                self.channel.queue_declare(
-                    queue=dl_queue,
-                    durable=True
-                )
-                frappe.logger().info(f"Using/created dead letter queue: {dl_queue}")
-            except pika.exceptions.ChannelClosedByBroker:
-                self._reconnect()
-                self.channel.queue_declare(
-                    queue=dl_queue,
-                    durable=True
-                )
+            self.channel.queue_declare(
+                queue=dl_queue,
+                durable=True
+            )
+            frappe.logger().info(f"Declared dead letter queue: {dl_queue}")
             
-            # Bind dead letter queue to exchange (ignore if already bound)
-            try:
-                self.channel.queue_bind(
-                    exchange=dlx_exchange,
-                    queue=dl_queue,
-                    routing_key=main_queue
-                )
-            except:
-                pass  # Binding might already exist
+            self.channel.queue_bind(
+                exchange=dlx_exchange,
+                queue=dl_queue,
+                routing_key=main_queue
+            )
             
-            # Handle main queue (use existing configuration)
             try:
                 self.channel.queue_declare(
                     queue=main_queue,
                     durable=True,
-                    passive=True  # Use existing queue
+                    arguments=main_queue_arguments
                 )
-                frappe.logger().info(f"Using existing main queue: {main_queue}")
-            except pika.exceptions.ChannelClosedByBroker:
-                # Queue doesn't exist, create simple version
+                frappe.logger().info(
+                    f"Declared main queue with dead letter routing: {main_queue}"
+                )
+            except pika.exceptions.ChannelClosedByBroker as e:
                 self._reconnect()
-                self.channel.queue_declare(
-                    queue=main_queue,
-                    durable=True
+                frappe.logger().error(
+                    "Main queue declaration failed for "
+                    f"{main_queue}. RabbitMQ queues cannot change arguments in place. "
+                    "Recreate the queue or apply a broker policy so it includes "
+                    f"{main_queue_arguments}. Original error: {str(e)}"
                 )
-                frappe.logger().info(f"Created main queue: {main_queue}")
+                raise
             
             frappe.logger().info("RabbitMQ connection established successfully")
             
