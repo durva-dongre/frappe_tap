@@ -2,7 +2,10 @@ import frappe
 import json
 import pika
 import base64
+from urllib.parse import urlparse
 from tap_lms.imgana.gcs_client import upload_to_gcs
+
+URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 
 
 def get_rabbitmq_settings():
@@ -20,16 +23,16 @@ def get_rabbitmq_settings():
         'queue': settings.submission_queue
     }
 
-def process_submission_async(submission_id, img_url):
+def process_submission_async(submission_id, submission_url):
     """
-    Background job that uploads the submission to GCS and enqueues it for processing.
+    Background job that uploads URL-based submissions to GCS and enqueues them for processing.
     """
     try:
-        submission = frappe.get_doc("ImgSubmission", submission_id)
+        submission = frappe.get_doc("Submission", submission_id)
 
-        url = upload_to_gcs(img_url, submission.name)
+        url = upload_to_gcs(submission_url, submission.name)
 
-        submission.img_url = url
+        submission.submission_url = url
         submission.status = "Processing"
         submission.upload_error_log = None
         submission.save(ignore_permissions=True)
@@ -38,7 +41,8 @@ def process_submission_async(submission_id, img_url):
         frappe.logger("submission").debug(
             f"Submission prepared for processing: assign_id={submission.assign_id}, "
             f"student_id={submission.student_id}, "
-            f"original_url={img_url}, "
+            f"submission_type={submission.submission_type}, "
+            f"original_url={submission_url}, "
             f"gcs_url={url}"
         )
 
@@ -52,7 +56,7 @@ def process_submission_async(submission_id, img_url):
         )
 
         try:
-            submission = frappe.get_doc("ImgSubmission", submission_id)
+            submission = frappe.get_doc("Submission", submission_id)
             submission.status = "Failed"
             submission.upload_error_log = frappe.get_traceback()[:5000]
             submission.save(ignore_permissions=True)
@@ -63,131 +67,192 @@ def process_submission_async(submission_id, img_url):
             )
 
 
-@frappe.whitelist(allow_guest=True)
-def submit_artwork_internal(api_key, assign_id, name1, glific_id, img_url):
-    """
-    API endpoint to submit artwork.
-    Downloads image, uploads to GCS, creates submission, and enqueues to RabbitMQ.
-    """
-    # Authenticate the API request using the provided api_key
-    api_key_doc = frappe.db.get_value("API Key", {"key": api_key, "enabled": 1}, ["user"], as_dict=True)
+def _authenticate_api_key(api_key):
+    api_key_doc = frappe.db.get_value(
+        "API Key",
+        {"key": api_key, "enabled": 1},
+        ["user"],
+        as_dict=True,
+    )
     if not api_key_doc:
         frappe.throw("Invalid API key")
+    return api_key_doc.user
 
-    # Switch to the user associated with the API key
-    frappe.set_user(api_key_doc.user)
-    
-    student_id = "ST00000206"
 
-    try:
-        # Create a new submission first (to get the submission name)
-        submission = frappe.new_doc("ImgSubmission")
-        submission.assign_id = assign_id
-        submission.student_id = student_id
-        submission.img_url = img_url  # Store original URL initially
-        submission.status = "Pending"
-        submission.insert()
-        frappe.db.commit()
+def _looks_like_url(submission):
+    parsed = urlparse(submission.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _infer_url_submission_type(submission):
+    path = urlparse(submission.strip()).path.lower()
+
+    audio_extensions = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".flac")
+    image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic")
+    video_extensions = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp", ".mpeg")
+
+    if path.endswith(audio_extensions):
+        return "audio"
+    if path.endswith(video_extensions):
+        return "video"
+    if path.endswith(image_extensions):
+        return "image"
+
+    return "image"
+
+
+def _contains_only_emoji(submission):
+    text = submission.strip()
+    if not text:
+        return False
+
+    return not any(char.isalnum() for char in text)
+
+
+def _normalize_submission_payload(submission):
+    if not isinstance(submission, str) or not submission.strip():
+        frappe.throw("Submission is required")
+
+    submission = submission.strip()
+
+    if _looks_like_url(submission):
+        return {
+            "submission_type": _infer_url_submission_type(submission),
+            "submission_text": None,
+            "submission_url": submission,
+        }
+
+    submission_type = "emoji" if _contains_only_emoji(submission) else "text"
+    return {
+        "submission_type": submission_type,
+        "submission_text": submission,
+        "submission_url": None,
+    }
+
+
+def _create_submission(assign_id, student_id, payload):
+    submission = frappe.new_doc("Submission")
+    submission.assign_id = assign_id
+    submission.student_id = student_id
+    submission.submission_type = payload["submission_type"]
+    submission.submission_text = payload["submission_text"]
+    submission.submission_url = payload["submission_url"]
+    submission.status = "Pending"
+    submission.insert()
+    frappe.db.commit()
+    return submission
+
+
+def _queue_submission_processing(submission, payload):
+    if submission.submission_type in URL_SUBMISSION_TYPES:
         frappe.enqueue(
             process_submission_async,
             queue="long",
             timeout=600,
             submission_id=submission.name,
-            img_url=img_url
+            submission_url=payload["submission_url"],
         )
+    else:
+        submission.status = "Processing"
+        submission.upload_error_log = None
+        submission.save(ignore_permissions=True)
+        frappe.db.commit()
+        enqueue_submission(submission.name)
 
-        return {
-            "message": "Submission received",
-            "submission_id": submission.name,
-            "student_id": student_id
-        }
 
+def _build_submission_response(submission):
+    return {
+        "message": "Submission received",
+        "submission_id": submission.name,
+        "student_id": submission.student_id,
+        "submission_type": submission.submission_type,
+    }
+
+
+@frappe.whitelist(allow_guest=True)
+def assignment_submission_internal(
+    api_key,
+    assign_id,
+    name1,
+    glific_id,
+    submission,
+):
+    """
+    Create an assignment submission for the internal fixed student.
+    """
+    user = _authenticate_api_key(api_key)
+    frappe.set_user(user)
+
+    student_id = "ST00000206"
+    payload = _normalize_submission_payload(submission)
+
+    try:
+        submission = _create_submission(assign_id, student_id, payload)
+        _queue_submission_processing(submission, payload)
+        return _build_submission_response(submission)
     except Exception as e:
         frappe.db.rollback()
-        frappe.logger("submission").error(f"Error in submit_artwork: {str(e)}")
+        frappe.logger("submission").error(f"Error in assignment_submission_internal: {str(e)}")
         frappe.throw(f"Failed to process submission: {str(e)}")
-
     finally:
-        # Switch back to the original user
         frappe.set_user("Administrator")
 
 
 @frappe.whitelist(allow_guest=True)
-def submit_artwork(api_key, assign_id, name1, glific_id, img_url):
+def assignment_submission(
+    api_key,
+    assign_id,
+    name1,
+    glific_id,
+    submission,
+):
     """
-    API endpoint to submit artwork.
-    Downloads image, uploads to GCS, creates submission, and enqueues to RabbitMQ.
+    Create an assignment submission and enqueue it for feedback processing.
     """
-    # Authenticate the API request using the provided api_key
-    api_key_doc = frappe.db.get_value("API Key", {"key": api_key, "enabled": 1}, ["user"], as_dict=True)
-    if not api_key_doc:
-        frappe.throw("Invalid API key")
+    user = _authenticate_api_key(api_key)
+    frappe.set_user(user)
 
-    # Switch to the user associated with the API key
-    frappe.set_user(api_key_doc.user)
-    
-    # Get student document
     student = frappe.get_doc(
-                    "Student",
-                    {
-                        "name1": name1,
-                        "glific_id": glific_id
-                    },
-                    limit=1
-                )
+        "Student",
+        {
+            "name1": name1,
+            "glific_id": glific_id,
+        },
+        limit=1,
+    )
     if not student:
         frappe.throw("Student not found with provided name and glific_id")
-    student_id = student.name
+
+    payload = _normalize_submission_payload(submission)
 
     try:
-        # Create a new submission first (to get the submission name)
-        submission = frappe.new_doc("ImgSubmission")
-        submission.assign_id = assign_id
-        submission.student_id = student_id
-        submission.img_url = img_url  # Store original URL initially
-        submission.status = "Pending"
-        submission.insert()
-        frappe.db.commit()
-        frappe.enqueue(
-            process_submission_async,
-            queue="long",
-            timeout=600,
-            submission_id=submission.name,
-            img_url=img_url
-        )
-
-        return {
-            "message": "Submission received",
-            "submission_id": submission.name,
-            "student_id": student_id
-        }
-
+        submission = _create_submission(assign_id, student.name, payload)
+        _queue_submission_processing(submission, payload)
+        return _build_submission_response(submission)
     except Exception as e:
         frappe.db.rollback()
-        frappe.logger("submission").error(f"Error in submit_artwork: {str(e)}")
+        frappe.logger("submission").error(f"Error in assignment_submission: {str(e)}")
         frappe.throw(f"Failed to process submission: {str(e)}")
-
     finally:
-        # Switch back to the original user
         frappe.set_user("Administrator")
 
 
 def enqueue_submission(submission_id):
     """
     Send submission details to RabbitMQ queue.
-    The img_url now contains the GCS URL.
     """
     try:
-        submission = frappe.get_doc("ImgSubmission", submission_id)
-        
-        # Payload with GCS URL
+        submission = frappe.get_doc("Submission", submission_id)
+
         payload = {
             "submission_id": submission.name,
             "assign_id": submission.assign_id,
             "student_id": submission.student_id,
-            "img_url": submission.img_url,  # This is now the GCS URL
-            # Optional: Add metadata for better detection
-            "created_at": str(submission.created_at)
+            "submission_type": submission.submission_type,
+            "submission_text": submission.submission_text,
+            "submission_url": submission.submission_url,
+            "img_url": submission.submission_url,
+            "created_at": str(submission.created_at),
         }
 
         # Get RabbitMQ settings from DocType
@@ -227,7 +292,7 @@ def enqueue_submission(submission_id):
         connection.close()
         
         frappe.logger("submission").info(
-            f"Enqueued submission {submission_id} with GCS URL: {submission.img_url}"
+            f"Enqueued submission {submission_id} with type {submission.submission_type}"
         )
     except Exception as e:
         frappe.logger("submission").error(f"Failed to enqueue submission {submission_id}: {str(e)}")
@@ -235,33 +300,28 @@ def enqueue_submission(submission_id):
 
 
 @frappe.whitelist(allow_guest=True)
-def img_feedback(api_key, submission_id):
+def assignment_feedback(api_key, submission_id):
     """
     API endpoint to get feedback for a submission.
     """
-    # Authenticate the API request using the provided api_key
-    api_key_doc = frappe.db.get_value("API Key", {"key": api_key, "enabled": 1}, ["user"], as_dict=True)
-    if not api_key_doc:
-        frappe.throw("Invalid API key")
-
-    # Switch to the user associated with the API key
-    frappe.set_user(api_key_doc.user)
+    user = _authenticate_api_key(api_key)
+    frappe.set_user(user)
 
     try:
-        # Get the submission document
-        submission = frappe.get_doc("ImgSubmission", submission_id)
+        submission = frappe.get_doc("Submission", submission_id)
         
-        # Prepare the response based on status
         if submission.status == "Completed":
             response = {
                 "status": submission.status,
+                "submission_type": submission.submission_type,
                 "overall_feedback": submission.overall_feedback,
-                "overall_feedback_translated" : submission.overall_feedback_translated,
+                "overall_feedback_translated": submission.overall_feedback_translated,
                 "audio_feedback_url": submission.audio_feedback_url,
             }
         else:
             response = {
-                "status": submission.status
+                "status": submission.status,
+                "submission_type": submission.submission_type,
             }
         
         return response
@@ -274,7 +334,6 @@ def img_feedback(api_key, submission_id):
         return {"error": "An error occurred while checking submission status"}
 
     finally:
-        # Switch back to the original user
         frappe.set_user("Administrator")
 
 
