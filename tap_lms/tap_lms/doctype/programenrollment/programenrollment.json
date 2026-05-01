@@ -1,0 +1,106 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-04-30 09:50:56.872402",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enrollment",
+  "student",
+  "batch",
+  "program_type",
+  "glific_id",
+  "course_level",
+  "language",
+  "experiment_arm"
+ ],
+ "fields": [
+  {
+   "fieldname": "enrollment",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Enrollment",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "student",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Student",
+   "options": "Student",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "batch",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Batch",
+   "options": "Batch",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "program_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Program Type",
+   "options": "Summer\nRegular",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "glific_id",
+   "fieldtype": "Data",
+   "label": "Glific ID",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "course_level",
+   "fieldtype": "Link",
+   "label": "Course Level",
+   "options": "Course Level"
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "label": "Language",
+   "options": "TAP Language"
+  },
+  {
+   "fieldname": "experiment_arm",
+   "fieldtype": "Select",
+   "label": "Experiment Arm",
+   "options": "default\narm_a\narm_b",
+   "search_index": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-04-30 10:07:37.354859",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "ProgramEnrollment",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
