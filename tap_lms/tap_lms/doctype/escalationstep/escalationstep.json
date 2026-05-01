@@ -1,0 +1,64 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-01 13:19:27.368049",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "escalation_order",
+  "message_type",
+  "points_awarded",
+  "hours_after_previous",
+  "is_active"
+ ],
+ "fields": [
+  {
+   "fieldname": "escalation_order",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Escalation Order",
+   "reqd": 1
+  },
+  {
+   "description": "Drives Glific template selection within SP_Escalation flow.",
+   "fieldname": "message_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Message Type",
+   "options": "help_note_a\nhelp_note_b\nreminder\nmotivational\nurgent",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "Points if student submits at THIS step. Higher for earlier steps.",
+   "fieldname": "points_awarded",
+   "fieldtype": "Int",
+   "label": "Points Awarded"
+  },
+  {
+   "default": "24",
+   "fieldname": "hours_after_previous",
+   "fieldtype": "Int",
+   "label": "Hours After Previous"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-01 13:19:27.368049",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "EscalationStep",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

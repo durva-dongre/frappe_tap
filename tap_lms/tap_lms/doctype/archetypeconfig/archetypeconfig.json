@@ -1,0 +1,101 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:{batch}-{experiment_arm}-{archetype}-{path}",
+ "creation": "2026-05-01 13:10:54.985833",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "batch",
+  "experiment_arm",
+  "archetype",
+  "path",
+  "is_active",
+  "escalation_steps",
+  "week_rules"
+ ],
+ "fields": [
+  {
+   "fieldname": "batch",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Batch",
+   "options": "Batch",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "default",
+   "fieldname": "experiment_arm",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Experiment Arm",
+   "options": "default\narm_a\narm_b",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "archetype",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Archetype",
+   "options": "Dormant\nFence Sitter\nIrregular Submitter\nSubmitter",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "path",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Path",
+   "options": "Core\nRemedial",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active"
+  },
+  {
+   "fieldname": "escalation_steps",
+   "fieldtype": "Table",
+   "label": "Escalation Steps",
+   "options": "EscalationStep"
+  },
+  {
+   "fieldname": "week_rules",
+   "fieldtype": "Table",
+   "label": "Week Rules",
+   "options": "WeekRule"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-01 13:30:41.504643",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "ArchetypeConfig",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

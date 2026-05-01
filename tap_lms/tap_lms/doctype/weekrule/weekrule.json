@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-01 13:25:57.750946",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "week",
+  "expected_submission_type",
+  "submission_validation_enabled"
+ ],
+ "fields": [
+  {
+   "description": "Which week/stage (Week=Stage)",
+   "fieldname": "week",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Week",
+   "reqd": 1
+  },
+  {
+   "fieldname": "expected_submission_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Expected Submission Type",
+   "options": "emoji\ntext_word\nvoice_note\nphoto\nvideo\nphoto_video_artefact\nvoice_note_text_summary",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "W1-2: OFF, W3-4: ON. Varies by archetype.",
+   "fieldname": "submission_validation_enabled",
+   "fieldtype": "Check",
+   "label": "Submission Validation Enabled"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-01 13:30:30.355558",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "WeekRule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
