@@ -14,7 +14,34 @@
   "glific_id",
   "course_level",
   "language",
-  "experiment_arm"
+  "experiment_arm",
+  "current_path",
+  "current_tier",
+  "archetype",
+  "journey_label",
+  "last_label_change_at",
+  "program_status",
+  "last_escalation_step",
+  "resolved_flow_state",
+  "current_expected_submission_type",
+  "current_week",
+  "max_allowed_week",
+  "total_points",
+  "current_streak",
+  "pause_count",
+  "last_submission_at",
+  "submission_count",
+  "quiz_completed",
+  "in_grace_window",
+  "grace_window_start",
+  "grace_window_end_at",
+  "pause_reason",
+  "next_action_at",
+  "next_action_type",
+  "delivery_failure_count",
+  "re_engagement_count",
+  "last_flow_triggered",
+  "last_flow_triggered_at"
  ],
  "fields": [
   {
@@ -77,11 +104,176 @@
    "label": "Experiment Arm",
    "options": "default\narm_a\narm_b",
    "search_index": 1
+  },
+  {
+   "fieldname": "current_path",
+   "fieldtype": "Select",
+   "label": "Current Path",
+   "options": "Core\nRemedial",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "Basic",
+   "fieldname": "current_tier",
+   "fieldtype": "Select",
+   "label": "Current Tier",
+   "options": "Basic\nIntermediate\nAdvanced"
+  },
+  {
+   "fieldname": "archetype",
+   "fieldtype": "Select",
+   "label": "Archetype",
+   "options": "Dormant\nFence Sitter\nIrregular Submitter\nSubmitter",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "default": "enrolled",
+   "fieldname": "journey_label",
+   "fieldtype": "Select",
+   "label": "Journey Label",
+   "options": "enrolled\ncontent_delivered\nsubmitted\nfeedback_delivered\nweek_summary_sent\ngrace_window\npaused\nresumed\ncompleted\ndropped\nweek_advanced",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "last_label_change_at",
+   "fieldtype": "Datetime",
+   "label": "Last Label Change At",
+   "search_index": 1
+  },
+  {
+   "default": "active",
+   "fieldname": "program_status",
+   "fieldtype": "Select",
+   "label": "Program Status",
+   "options": "active\npaused\ncompleted\ndropped",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "last_escalation_step",
+   "fieldtype": "Int",
+   "label": "Last Escalation Step"
+  },
+  {
+   "fieldname": "resolved_flow_state",
+   "fieldtype": "Select",
+   "label": "Resolved Flow State",
+   "options": "normal_content_delivery\nnormal_escalation\nremedial_content_delivery\nremedial_escalation\ngrace_waiting\npaused_no_activity\npaused_binge\nsubmitted_awaiting_feedback\nfeedback_ready\nweek_completed\nprogram_completed\nprogram_dropped",
+   "reqd": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "current_expected_submission_type",
+   "fieldtype": "Select",
+   "label": "Current Expected Submission Type",
+   "options": "\nemoji\ntext_word\nvoice_note\nphoto\nvideo\nphoto_video_artefact\nvoice_note_text_summary"
+  },
+  {
+   "description": "Which week/stage (Week=Stage)",
+   "fieldname": "current_week",
+   "fieldtype": "Int",
+   "label": "Current Week"
+  },
+  {
+   "default": "1",
+   "fieldname": "max_allowed_week",
+   "fieldtype": "Int",
+   "label": "Max Allowed Week"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_points",
+   "fieldtype": "Int",
+   "label": "Total Points"
+  },
+  {
+   "fieldname": "current_streak",
+   "fieldtype": "Int",
+   "label": "Current Streak"
+  },
+  {
+   "fieldname": "pause_count",
+   "fieldtype": "Int",
+   "label": "Pause Count"
+  },
+  {
+   "fieldname": "last_submission_at",
+   "fieldtype": "Datetime",
+   "label": "Last Submission At"
+  },
+  {
+   "fieldname": "submission_count",
+   "fieldtype": "Int",
+   "label": "Submission Count"
+  },
+  {
+   "default": "0",
+   "fieldname": "quiz_completed",
+   "fieldtype": "Check",
+   "label": "Quiz Completed"
+  },
+  {
+   "default": "0",
+   "fieldname": "in_grace_window",
+   "fieldtype": "Check",
+   "label": "In Grace Window"
+  },
+  {
+   "fieldname": "grace_window_start",
+   "fieldtype": "Datetime",
+   "label": "Grace Window Start"
+  },
+  {
+   "fieldname": "grace_window_end_at",
+   "fieldtype": "Datetime",
+   "label": "Grace Window End At"
+  },
+  {
+   "fieldname": "pause_reason",
+   "fieldtype": "Select",
+   "label": "Pause Reason",
+   "options": "no_activity\nbinge_limit"
+  },
+  {
+   "fieldname": "next_action_at",
+   "fieldtype": "Datetime",
+   "label": "Next Action At"
+  },
+  {
+   "fieldname": "next_action_type",
+   "fieldtype": "Select",
+   "label": "Next Action Type",
+   "options": "content_delivery\nescalation\nweek_advancement\nfeedback_notification\nre_engagement\ngrace_check\npause_check\nfeedback_timeout\ngrace_reminder"
+  },
+  {
+   "default": "0",
+   "fieldname": "delivery_failure_count",
+   "fieldtype": "Int",
+   "label": "Delivery Failure Count"
+  },
+  {
+   "default": "0",
+   "fieldname": "re_engagement_count",
+   "fieldtype": "Int",
+   "label": "Re-engagement Count"
+  },
+  {
+   "fieldname": "last_flow_triggered",
+   "fieldtype": "Data",
+   "label": "Last Flow Triggered"
+  },
+  {
+   "fieldname": "last_flow_triggered_at",
+   "fieldtype": "Datetime",
+   "label": "Last Flow Triggered At"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-04-30 10:07:37.354859",
+ "modified": "2026-05-01 12:50:36.656961",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEnrollment",
