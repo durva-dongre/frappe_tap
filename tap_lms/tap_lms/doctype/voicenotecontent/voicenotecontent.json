@@ -1,0 +1,94 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:{title}-{voice_note_type}",
+ "creation": "2026-05-01 14:30:47.270004",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "voice_note_type",
+  "audio_file",
+  "audio_url",
+  "language",
+  "duration",
+  "order",
+  "voice_translation"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "voice_note_type",
+   "fieldtype": "Select",
+   "label": "Voice Note Type",
+   "options": "nudge\ninstructions\nfeedback\ncustom"
+  },
+  {
+   "fieldname": "audio_file",
+   "fieldtype": "Attach",
+   "in_list_view": 1,
+   "label": "Audio File",
+   "reqd": 1
+  },
+  {
+   "fieldname": "audio_url",
+   "fieldtype": "Data",
+   "label": "Audio URL"
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "label": "Language",
+   "options": "TAP Language"
+  },
+  {
+   "fieldname": "duration",
+   "fieldtype": "Int",
+   "label": "Duration"
+  },
+  {
+   "fieldname": "order",
+   "fieldtype": "Int",
+   "label": "Order"
+  },
+  {
+   "fieldname": "voice_translation",
+   "fieldtype": "Table",
+   "label": "Voice Translation",
+   "options": "VoiceNoteTranslation"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-04 08:44:22.888417",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "VoiceNoteContent",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

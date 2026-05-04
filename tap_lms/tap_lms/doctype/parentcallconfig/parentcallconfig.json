@@ -1,0 +1,68 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-04 18:27:44.519252",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "title",
+  "prompt_template",
+  "language",
+  "call_params_json",
+  "max_duration"
+ ],
+ "fields": [
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title"
+  },
+  {
+   "fieldname": "prompt_template",
+   "fieldtype": "Long Text",
+   "label": "Prompt Template"
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "label": "Language",
+   "options": "TAP Language"
+  },
+  {
+   "fieldname": "call_params_json",
+   "fieldtype": "JSON",
+   "label": "Call Params JSON"
+  },
+  {
+   "fieldname": "max_duration",
+   "fieldtype": "Int",
+   "label": "Max Duration"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-04 18:27:44.519252",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "ParentCallConfig",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

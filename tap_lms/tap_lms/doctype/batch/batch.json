@@ -18,7 +18,10 @@
   "batch_id",
   "regist_end_date",
   "engagement_end_dae",
-  "regular_activity_start_date"
+  "regular_activity_start_date",
+  "program_type",
+  "total_weeks",
+  "grace_window_days"
  ],
  "fields": [
   {
@@ -77,11 +80,27 @@
    "fieldname": "regular_activity_start_date",
    "fieldtype": "Date",
    "label": "Regular Activity Start Date"
+  },
+  {
+   "fieldname": "program_type",
+   "fieldtype": "Select",
+   "label": "Program Type",
+   "options": "Summer\nRegular"
+  },
+  {
+   "fieldname": "total_weeks",
+   "fieldtype": "Int",
+   "label": "Total Weeks"
+  },
+  {
+   "fieldname": "grace_window_days",
+   "fieldtype": "Int",
+   "label": "Grace Window Days"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-11-20 13:37:33.097859",
+ "modified": "2026-05-04 08:52:13.506624",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Batch",

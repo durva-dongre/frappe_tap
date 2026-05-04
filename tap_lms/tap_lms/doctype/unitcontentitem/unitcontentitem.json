@@ -17,7 +17,7 @@
    "fieldname": "content_type",
    "fieldtype": "Select",
    "label": "Content Type",
-   "options": "VideoClass\nNoteContent\nQuiz\nAssignment\nCourseProject"
+   "options": "VideoClass\nNoteContent\nQuiz\nAssignment\nCourseProject\nTextMessageContent\nVoiceNoteContent\nParentCallConfig"
   },
   {
    "fieldname": "content",
@@ -40,7 +40,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-01-28 13:46:52.897720",
+ "modified": "2026-05-04 18:29:49.981098",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "UnitContentItem",

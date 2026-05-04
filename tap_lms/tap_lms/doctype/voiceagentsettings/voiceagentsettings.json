@@ -1,0 +1,74 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-04 18:16:05.050029",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "service_url",
+  "client_id",
+  "client_secret",
+  "default_contact_group_id",
+  "agent_mappings"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "fieldname": "service_url",
+   "fieldtype": "Data",
+   "label": "Service URL"
+  },
+  {
+   "fieldname": "client_id",
+   "fieldtype": "Data",
+   "label": "Client  ID"
+  },
+  {
+   "fieldname": "client_secret",
+   "fieldtype": "Data",
+   "label": "Client Secret"
+  },
+  {
+   "fieldname": "default_contact_group_id",
+   "fieldtype": "Data",
+   "label": "Default Contact Group ID"
+  },
+  {
+   "fieldname": "agent_mappings",
+   "fieldtype": "Table",
+   "label": "Agent Mapping",
+   "options": "VoiceAgentMapping"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-05-04 18:22:08.589604",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "VoiceAgentSettings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

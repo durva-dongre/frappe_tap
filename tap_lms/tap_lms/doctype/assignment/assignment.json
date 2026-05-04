@@ -28,7 +28,8 @@
   "estimated_duration",
   "difficulty_tier",
   "activity_type",
-  "rubric_grades"
+  "rubric_grades",
+  "points_per_item"
  ],
  "fields": [
   {
@@ -144,11 +145,17 @@
    "fieldtype": "Table",
    "label": "Assessment Rubrics",
    "options": "Rubric Grade"
+  },
+  {
+   "description": "PAL uses ArchetypeConfig escalation step points instead.",
+   "fieldname": "points_per_item",
+   "fieldtype": "Int",
+   "label": "Points Per Item"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-09 23:32:09.565540",
+ "modified": "2026-05-04 08:54:11.661733",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "Assignment",
