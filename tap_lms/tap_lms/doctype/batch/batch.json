@@ -21,7 +21,8 @@
   "regular_activity_start_date",
   "program_type",
   "total_weeks",
-  "grace_window_days"
+  "grace_window_days",
+  "current_calendar_week"
  ],
  "fields": [
   {
@@ -61,7 +62,7 @@
   {
    "fieldname": "batch_id",
    "fieldtype": "Data",
-   "label": "Batch ID ",
+   "label": "Batch ID",
    "reqd": 1,
    "unique": 1
   },
@@ -74,7 +75,7 @@
   {
    "fieldname": "engagement_end_dae",
    "fieldtype": "Date",
-   "label": "Engagement End Dae"
+   "label": "Engagement End Date"
   },
   {
    "fieldname": "regular_activity_start_date",
@@ -96,11 +97,18 @@
    "fieldname": "grace_window_days",
    "fieldtype": "Int",
    "label": "Grace Window Days"
+  },
+  {
+   "description": "Advances weekly via cron or admin action. Controls binge limit.",
+   "fieldname": "current_calendar_week",
+   "fieldtype": "Int",
+   "label": "Current Calendar Week",
+   "reqd": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 08:52:13.506624",
+ "modified": "2026-05-04 20:18:14.926501",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Batch",
