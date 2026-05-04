@@ -42,7 +42,7 @@
    "fieldname": "text_message_translations",
    "fieldtype": "Table",
    "label": "Text Message Translations",
-   "options": "TextMessageTranslations"
+   "options": "TextMessageTranslation"
   },
   {
    "default": "0",
@@ -53,7 +53,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 08:44:51.573098",
+ "modified": "2026-05-04 19:45:02.277130",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "TextMessageContent",

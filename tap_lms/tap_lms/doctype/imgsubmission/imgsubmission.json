@@ -47,13 +47,15 @@
  "fields": [
   {
    "fieldname": "assign_id",
-   "fieldtype": "Data",
-   "label": "Assignment ID"
+   "fieldtype": "Link",
+   "label": "Assignment ID",
+   "options": "Assignment"
   },
   {
    "fieldname": "student_id",
-   "fieldtype": "Data",
-   "label": "Student ID"
+   "fieldtype": "Link",
+   "label": "Student ID",
+   "options": "Student"
   },
   {
    "fieldname": "img_url",
@@ -251,7 +253,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 08:57:13.522371",
+ "modified": "2026-05-04 19:29:57.075227",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "ImgSubmission",

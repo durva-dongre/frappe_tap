@@ -7,6 +7,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "identity_section",
   "enrollment",
   "student",
   "batch",
@@ -15,15 +16,16 @@
   "course_level",
   "language",
   "experiment_arm",
+  "program_state_section",
   "current_path",
   "current_tier",
   "archetype",
   "journey_label",
   "last_label_change_at",
   "program_status",
-  "last_escalation_step",
   "resolved_flow_state",
   "current_expected_submission_type",
+  "week_progress_section",
   "current_week",
   "max_allowed_week",
   "total_points",
@@ -32,12 +34,16 @@
   "last_submission_at",
   "submission_count",
   "quiz_completed",
+  "grace_pause",
   "in_grace_window",
   "grace_window_start",
   "grace_window_end_at",
   "pause_reason",
+  "escalation_scheduling",
+  "last_escalation_step",
   "next_action_at",
   "next_action_type",
+  "delivery_monitoring_section",
   "delivery_failure_count",
   "re_engagement_count",
   "last_flow_triggered",
@@ -235,7 +241,7 @@
    "fieldname": "pause_reason",
    "fieldtype": "Select",
    "label": "Pause Reason",
-   "options": "no_activity\nbinge_limit"
+   "options": "\nno_activity\nbinge_limit"
   },
   {
    "fieldname": "next_action_at",
@@ -246,7 +252,7 @@
    "fieldname": "next_action_type",
    "fieldtype": "Select",
    "label": "Next Action Type",
-   "options": "content_delivery\nescalation\nweek_advancement\nfeedback_notification\nre_engagement\ngrace_check\npause_check\nfeedback_timeout\ngrace_reminder"
+   "options": "\ncontent_delivery\nescalation\nweek_advancement\nfeedback_notification\nre_engagement\ngrace_check\npause_check\nfeedback_timeout\ngrace_reminder"
   },
   {
    "default": "0",
@@ -269,11 +275,41 @@
    "fieldname": "last_flow_triggered_at",
    "fieldtype": "Datetime",
    "label": "Last Flow Triggered At"
+  },
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Identity"
+  },
+  {
+   "fieldname": "program_state_section",
+   "fieldtype": "Section Break",
+   "label": "Program State"
+  },
+  {
+   "fieldname": "week_progress_section",
+   "fieldtype": "Section Break",
+   "label": "Week Progress"
+  },
+  {
+   "fieldname": "grace_pause",
+   "fieldtype": "Section Break",
+   "label": "Grace & Pause"
+  },
+  {
+   "fieldname": "escalation_scheduling",
+   "fieldtype": "Section Break",
+   "label": "Escalation & Scheduling"
+  },
+  {
+   "fieldname": "delivery_monitoring_section",
+   "fieldtype": "Section Break",
+   "label": "Delivery Monitoring"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-01 12:50:36.656961",
+ "modified": "2026-05-04 19:59:10.722383",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEnrollment",

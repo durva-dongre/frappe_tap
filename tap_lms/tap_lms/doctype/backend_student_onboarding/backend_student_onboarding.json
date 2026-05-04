@@ -50,7 +50,7 @@
   },
   {
    "fieldname": "processing_notes",
-   "fieldtype": "Data",
+   "fieldtype": "Long Text",
    "label": "Processing Notes"
   },
   {
@@ -66,7 +66,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-06-11 11:57:11.356791",
+ "modified": "2026-05-04 19:36:48.279094",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Backend Student Onboarding",

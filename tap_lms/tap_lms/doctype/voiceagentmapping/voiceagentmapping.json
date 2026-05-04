@@ -14,13 +14,17 @@
   {
    "fieldname": "call_scenario",
    "fieldtype": "Select",
+   "in_list_view": 1,
    "label": "Call Scenario",
-   "options": "escalation\ngrace\nre_engagement"
+   "options": "escalation\ngrace\nre_engagement",
+   "reqd": 1
   },
   {
    "fieldname": "agent_id",
    "fieldtype": "Data",
-   "label": "Agent ID"
+   "in_list_view": 1,
+   "label": "Agent ID",
+   "reqd": 1
   },
   {
    "fieldname": "description",
@@ -31,7 +35,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-05-04 18:19:33.950166",
+ "modified": "2026-05-04 19:42:33.814695",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "VoiceAgentMapping",

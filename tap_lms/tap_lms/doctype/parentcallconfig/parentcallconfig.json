@@ -1,6 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "format:{title}",
  "creation": "2026-05-04 18:27:44.519252",
  "default_view": "List",
  "doctype": "DocType",
@@ -15,9 +16,12 @@
  ],
  "fields": [
   {
+   "description": "\"Supports variables: {student_name}, {week}, {archetype}, {status}\"",
    "fieldname": "title",
    "fieldtype": "Data",
-   "label": "Title"
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1
   },
   {
    "fieldname": "prompt_template",
@@ -36,6 +40,7 @@
    "label": "Call Params JSON"
   },
   {
+   "description": "Maximum call duration in seconds",
    "fieldname": "max_duration",
    "fieldtype": "Int",
    "label": "Max Duration"
@@ -43,10 +48,11 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 18:27:44.519252",
+ "modified": "2026-05-04 19:48:37.502220",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ParentCallConfig",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {

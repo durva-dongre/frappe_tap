@@ -8,7 +8,7 @@
  "field_order": [
   "language",
   "audio_file_translated",
-  "audio_urltranslated"
+  "audio_url_translated"
  ],
  "fields": [
   {
@@ -23,15 +23,15 @@
    "label": "Audio File Translated "
   },
   {
-   "fieldname": "audio_urltranslated",
+   "fieldname": "audio_url_translated",
    "fieldtype": "Data",
-   "label": "Audio URLTranslated"
+   "label": "Audio URL Translated"
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-05-01 14:32:14.006021",
+ "modified": "2026-05-04 19:46:37.248851",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "VoiceNoteTranslation",

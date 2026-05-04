@@ -29,11 +29,11 @@
   {
    "fieldname": "client_id",
    "fieldtype": "Data",
-   "label": "Client  ID"
+   "label": "Client ID"
   },
   {
    "fieldname": "client_secret",
-   "fieldtype": "Data",
+   "fieldtype": "Password",
    "label": "Client Secret"
   },
   {
@@ -51,7 +51,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-05-04 18:22:08.589604",
+ "modified": "2026-05-04 19:31:58.772513",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "VoiceAgentSettings",
@@ -70,5 +70,6 @@
  ],
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "track_changes": 1
 }
