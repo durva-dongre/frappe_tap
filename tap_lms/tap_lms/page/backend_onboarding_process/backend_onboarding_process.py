@@ -1208,6 +1208,12 @@ def process_student_record(student, glific_contact, batch_id, initial_stage, cou
                 old_gender = existing_student.gender or "Not Set"
                 existing_student.gender = student.gender
                 updated_fields.append(f"gender: {old_gender}→{student.gender}")
+
+            if student.archetype:
+                existing_student.archetype = student.archetype
+
+            if student.experiment_arm:
+                existing_student.experiment_arm = student.experiment_arm
             
             # Log all updates with shortened message
             if updated_fields:
@@ -1346,6 +1352,8 @@ def process_student_record(student, glific_contact, batch_id, initial_stage, cou
             student_doc.backend_onboarding = batch_id
             student_doc.joined_on = nowdate()
             student_doc.status = "active"
+            student_doc.archetype = student.archetype
+            student_doc.experiment_arm = student.experiment_arm
             
             # Add Glific ID if available
             if glific_contact and 'id' in glific_contact:
