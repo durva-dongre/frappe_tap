@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-05 22:06:09.787698",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "onboarding_set",
+  "glific_contact_group",
+  "student_count",
+  "processing_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "onboarding_set",
+   "fieldtype": "Link",
+   "label": "Onboarding Set",
+   "options": "Backend Student Onboarding"
+  },
+  {
+   "fieldname": "glific_contact_group",
+   "fieldtype": "Link",
+   "label": "Glific Contact Group",
+   "options": "GlificContactGroup"
+  },
+  {
+   "fieldname": "student_count",
+   "fieldtype": "Int",
+   "label": "Student Count"
+  },
+  {
+   "fieldname": "processing_status",
+   "fieldtype": "Select",
+   "label": "Processing Status",
+   "options": "Pending\nProcessed\nFailed"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-05 22:06:09.787698",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "PGOnboardingSet",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

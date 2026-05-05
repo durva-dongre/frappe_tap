@@ -1,0 +1,56 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-05 22:00:43.160167",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "collection_label",
+  "glific_group_id",
+  "archetype",
+  "experiment_arm",
+  "student_count"
+ ],
+ "fields": [
+  {
+   "fieldname": "collection_label",
+   "fieldtype": "Data",
+   "label": "Collection Label"
+  },
+  {
+   "fieldname": "glific_group_id",
+   "fieldtype": "Data",
+   "label": "Glific Group ID"
+  },
+  {
+   "fieldname": "archetype",
+   "fieldtype": "Select",
+   "label": "Archetype",
+   "options": "Dormant\nFence Sitter\nIrregular Submitter\nSubmitter"
+  },
+  {
+   "fieldname": "experiment_arm",
+   "fieldtype": "Select",
+   "label": "Experiment Arm",
+   "options": "default\narm_a\narm_b"
+  },
+  {
+   "fieldname": "student_count",
+   "fieldtype": "Int",
+   "label": "Student Count"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-05 22:00:43.160167",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "PGCollection",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

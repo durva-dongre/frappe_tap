@@ -1,0 +1,150 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-05-05 21:37:26.488673",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "batch",
+  "status",
+  "total_imported",
+  "total_enrolled",
+  "dormant_count",
+  "fence_sitter_count",
+  "irregular_submitter_count",
+  "submitter_count",
+  "arm_a_count",
+  "arm_b_count",
+  "pg_collections",
+  "pg_onboarding_sets",
+  "enrollment_started_at",
+  "enrollment_completed_at",
+  "collections_created_at",
+  "activated_at",
+  "validation_status",
+  "validation_report"
+ ],
+ "fields": [
+  {
+   "fieldname": "batch",
+   "fieldtype": "Link",
+   "label": "Batch",
+   "options": "Batch"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "draft\nimporting\nenrolling\ncollections_ready\nactive\ncompleted"
+  },
+  {
+   "fieldname": "total_imported",
+   "fieldtype": "Int",
+   "label": "Total Imported"
+  },
+  {
+   "fieldname": "total_enrolled",
+   "fieldtype": "Int",
+   "label": "Total Enrolled"
+  },
+  {
+   "fieldname": "dormant_count",
+   "fieldtype": "Int",
+   "label": "Dormant count"
+  },
+  {
+   "fieldname": "fence_sitter_count",
+   "fieldtype": "Int",
+   "label": "Fence Sitter Count"
+  },
+  {
+   "fieldname": "irregular_submitter_count",
+   "fieldtype": "Int",
+   "label": "Irregular Submitter Count"
+  },
+  {
+   "fieldname": "submitter_count",
+   "fieldtype": "Int",
+   "label": "Submitter Count"
+  },
+  {
+   "fieldname": "arm_a_count",
+   "fieldtype": "Int",
+   "label": "arm_a_count"
+  },
+  {
+   "fieldname": "arm_b_count",
+   "fieldtype": "Int",
+   "label": "arm_b_count"
+  },
+  {
+   "fieldname": "pg_collections",
+   "fieldtype": "Table",
+   "label": "PG Collections",
+   "options": "PGCollection"
+  },
+  {
+   "fieldname": "pg_onboarding_sets",
+   "fieldtype": "Table",
+   "label": "PG Onboarding Sets",
+   "options": "PGOnboardingSet"
+  },
+  {
+   "fieldname": "enrollment_started_at",
+   "fieldtype": "Datetime",
+   "label": "Enrollment Started At"
+  },
+  {
+   "fieldname": "enrollment_completed_at",
+   "fieldtype": "Datetime",
+   "label": "Enrollment Completed At"
+  },
+  {
+   "fieldname": "collections_created_at",
+   "fieldtype": "Datetime",
+   "label": "Collections Created At"
+  },
+  {
+   "fieldname": "activated_at",
+   "fieldtype": "Datetime",
+   "label": "Activated At"
+  },
+  {
+   "fieldname": "validation_status",
+   "fieldtype": "Select",
+   "label": "Validation Status",
+   "options": "not_run\npassed\nfailed"
+  },
+  {
+   "fieldname": "validation_report",
+   "fieldtype": "JSON",
+   "label": "Validation Report"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-05-05 22:06:35.477126",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "BatchProgramRun",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

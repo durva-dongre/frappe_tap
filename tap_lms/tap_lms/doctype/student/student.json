@@ -34,7 +34,9 @@
   "mentee_role",
   "preferred_time",
   "preferred_day",
-  "swiftchat_id"
+  "swiftchat_id",
+  "archetype",
+  "experiment_arm"
  ],
  "fields": [
   {
@@ -180,11 +182,23 @@
    "fieldname": "swiftchat_id",
    "fieldtype": "Data",
    "label": "SwiftChat ID"
+  },
+  {
+   "fieldname": "archetype",
+   "fieldtype": "Select",
+   "label": "Archetype",
+   "options": "Dormant\nFence Sitter\nIrregular Submitter\nSubmitter"
+  },
+  {
+   "fieldname": "experiment_arm",
+   "fieldtype": "Select",
+   "label": "Experiment Arm",
+   "options": "default\narm_a\narm_b"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-19 14:24:59.264586",
+ "modified": "2026-05-05 20:44:02.565129",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Student",
