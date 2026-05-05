@@ -8,6 +8,11 @@
  "engine": "InnoDB",
  "field_order": [
   "batch",
+  "content_delivery_flow",
+  "escalation_flow",
+  "reengagement_flow",
+  "grace_notification_flow",
+  "program_complete_flow",
   "status",
   "total_imported",
   "total_enrolled",
@@ -15,6 +20,7 @@
   "fence_sitter_count",
   "irregular_submitter_count",
   "submitter_count",
+  "arm_default_count",
   "arm_a_count",
   "arm_b_count",
   "pg_collections",
@@ -72,12 +78,12 @@
   {
    "fieldname": "arm_a_count",
    "fieldtype": "Int",
-   "label": "arm_a_count"
+   "label": "Arm A Count"
   },
   {
    "fieldname": "arm_b_count",
    "fieldtype": "Int",
-   "label": "arm_b_count"
+   "label": "Arm B Count"
   },
   {
    "fieldname": "pg_collections",
@@ -121,11 +127,41 @@
    "fieldname": "validation_report",
    "fieldtype": "JSON",
    "label": "Validation Report"
+  },
+  {
+   "fieldname": "content_delivery_flow",
+   "fieldtype": "Int",
+   "label": "Content Delivery_flow"
+  },
+  {
+   "fieldname": "escalation_flow",
+   "fieldtype": "Int",
+   "label": "Escalation Flow"
+  },
+  {
+   "fieldname": "reengagement_flow",
+   "fieldtype": "Int",
+   "label": "Reengagement_flow"
+  },
+  {
+   "fieldname": "grace_notification_flow",
+   "fieldtype": "Int",
+   "label": "Grace Notification Flow"
+  },
+  {
+   "fieldname": "program_complete_flow",
+   "fieldtype": "Int",
+   "label": "Program Complete Flow"
+  },
+  {
+   "fieldname": "arm_default_count",
+   "fieldtype": "Int",
+   "label": "Arm Default Count"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-05 22:06:35.477126",
+ "modified": "2026-05-05 22:25:22.022044",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "BatchProgramRun",
