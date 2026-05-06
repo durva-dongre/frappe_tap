@@ -17,6 +17,7 @@ from frappe import _
 from frappe.utils import (
     now_datetime, today, getdate, cint, flt,
     time_diff_in_hours, time_diff_in_seconds, date_diff, get_datetime,
+    add_days, add_to_date,
 )
 
 from tap_lms.summer_program.constants import (
@@ -46,6 +47,10 @@ REMEDIAL_TIER = "Remedial"
 VALID_CONTENT_TYPES = ["VideoClass", "Quiz", "Assignment", "NoteContent", "CourseProject",
                        "TextMessageContent", "VoiceNoteContent", "ParentCallConfig"]
 OPTION_LETTERS = ['A', 'B', 'C', 'D']
+
+# Grace time: hours into a new week during which a student can still submit
+# for the previous week without being blocked. Default 24 hours.
+SUBMISSION_GRACE_HOURS = 24
 
 
 # ============================================================
@@ -379,9 +384,31 @@ def get_next_content(student_id, course_level=None):
         if not course_level:
             return {"success": False, "error": "No course level found for student"}
 
-        current_week = _get_current_week(batch)
-        if current_week <= 0:
+        calendar_week = _get_current_week(batch)
+        if calendar_week <= 0:
             return {"success": False, "error": "Batch has not started yet"}
+
+        # Determine effective week: student may be ahead of or behind calendar
+        current_week = _get_effective_week(student, batch, calendar_week)
+
+        # Check content blocking: if student didn't submit previous week,
+        # they can't access current week content (escalation handles follow-up).
+        # Grace period: students get SUBMISSION_GRACE_HOURS into the new week
+        # to still submit for the previous week before being blocked.
+        if current_week > 1:
+            prev_submission = _get_submission_validity(student.name, current_week - 1)
+            if not prev_submission["submitted"]:
+                # Check if we're still within the grace period
+                if not _is_within_grace_period(batch, current_week):
+                    return {
+                        "success": True,
+                        "status": "content_blocked",
+                        "message": f"Please complete your Week {current_week - 1} submission first.",
+                        "student_id": student_id,
+                        "blocked_reason": "missing_previous_submission",
+                        "pending_week": current_week - 1,
+                        "calendar_week": calendar_week,
+                    }
 
         # Resolve path: Core or Remedial
         path = _resolve_path(student, batch, bpr, current_week)
@@ -556,15 +583,67 @@ def get_next_content(student_id, course_level=None):
                 "completed_week": current_week,
             }
 
-        # Week complete but more weeks remain — signal stage_complete
-        # Actual next-week content is served on the NEXT call after the
-        # batch's calendar week advances and _resolve_path re-evaluates.
+        # Week complete but more weeks remain.
+        # Student can advance if:
+        #   1. They have submitted this week's assignment
+        #   2. The next week doesn't exceed calendar_week + 1 (max 1 week ahead)
+        #   3. The next week doesn't exceed total_weeks
+        # If they already consumed the next calendar week's content early,
+        # they are PAUSED until the corresponding calendar week arrives.
+        this_week_submitted = _has_submitted_week(student.name, current_week)
+        next_week = current_week + 1
+        max_allowed_week = min(calendar_week + 1, total_weeks)
+
+        if this_week_submitted and next_week <= max_allowed_week:
+            # Student finished all content AND submitted — advance to next week
+            # Update progress to next week so _get_effective_week picks it up
+            frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+                "current_week": next_week,
+                "current_content_index": 0,
+                "active_content_type": None,
+                "active_content_id": None,
+                "content_started_at": None,
+                "last_activity_timestamp": now_datetime(),
+            })
+            frappe.db.commit()
+            return {
+                "success": True,
+                "status": "stage_complete",
+                "message": f"Week {current_week} complete! Moving to Week {next_week}.",
+                "student_id": student_id,
+                "completed_week": current_week,
+                "next_week": next_week,
+                "can_advance": True,
+                "total_weeks": total_weeks,
+                "course_level": course_level,
+            }
+
+        if this_week_submitted and next_week > max_allowed_week:
+            # Student is ahead of the calendar — paused until next calendar week
+            return {
+                "success": True,
+                "status": "stage_complete",
+                "message": f"Week {current_week} complete! New content will be available in Week {next_week}.",
+                "student_id": student_id,
+                "completed_week": current_week,
+                "can_advance": False,
+                "paused": True,
+                "paused_reason": "ahead_of_calendar",
+                "next_week": next_week,
+                "calendar_week": calendar_week,
+                "total_weeks": total_weeks,
+                "course_level": course_level,
+            }
+
+        # Student hasn't submitted yet
         return {
             "success": True,
             "status": "stage_complete",
-            "message": f"Week {current_week} complete!",
+            "message": f"Week {current_week} complete! Submit your assignment to continue.",
             "student_id": student_id,
             "completed_week": current_week,
+            "can_advance": False,
+            "needs_submission": True,
             "total_weeks": total_weeks,
             "course_level": course_level,
         }
@@ -1197,10 +1276,11 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
     """
     Complete quiz attempt and determine next action.
 
-    KEY DIFFERENCE from old system:
-      - Core quiz fail → advance to next content (NOT switch to remedial)
-      - Remedial quiz fail → restart/continue remedial LU
-      - Remedial quiz pass → advance (exit remedial)
+    Quiz behavior is the SAME on both Core and Remedial paths:
+      - Quiz pass or fail → advance to next content item
+      - If no more content → week_complete
+    Quiz results do NOT affect path routing. Only assignment submission
+    (valid vs invalid type) determines Core/Remedial for the next week.
     """
     correct_count = sum(1 for a in attempt.answers if a.is_correct)
     total = attempt.total_questions
@@ -1289,73 +1369,18 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
         },
     }
 
-    # Progression based on pass/fail
-    is_remedial = bool(progress_data.get("is_on_remedial"))
-
+    # Progression: same for both Core and Remedial paths
+    # Quiz pass/fail → advance to next content or week_complete
+    # Path routing (Core vs Remedial) is determined solely by assignment
+    # submission validity, not quiz results.
+    next_action = _advance_to_next_content(progress_data, course_level)
+    next_action.pop("success", None)
+    response["next_action"] = next_action.pop("action", "next_content")
     if passed:
-        if is_remedial:
-            # Remedial quiz pass → week complete (exit remedial)
-            response.update({
-                "next_action": "week_complete",
-                "message": "Great job! Week complete!",
-                "completed_week": progress_data["current_week"],
-            })
-        else:
-            # Core quiz pass → advance to next content
-            next_action = _advance_to_next_content(progress_data, course_level)
-            next_action.pop("success", None)
-            response["next_action"] = next_action.pop("action", "next_content")
-            response.update(next_action)
+        response["message"] = "Great job! Quiz passed!"
     else:
-        if is_remedial:
-            # Remedial quiz fail → restart or continue remedial LU
-            content_items = _get_content_items(progress_data["stage"])
-            current_index = cint(progress_data["current_content_index"])
-
-            if current_index < len(content_items) - 1:
-                new_index = current_index + 1
-                frappe.db.set_value("StudentStageProgress", progress_data["name"], {
-                    "current_content_index": new_index,
-                    "last_activity_timestamp": now_datetime(),
-                })
-                frappe.db.commit()
-                next_content = content_items[new_index]
-                response.update({
-                    "next_action": "continue_remedial",
-                    "message": "Keep practicing! Continue with next content.",
-                    "next_content": {
-                        "type": next_content["content_type"],
-                        "id": next_content["content_id"],
-                        "name": next_content["content_name"],
-                    },
-                })
-            else:
-                remedial_attempts = cint(progress_data.get("remedial_attempts", 0)) + 1
-                frappe.db.set_value("StudentStageProgress", progress_data["name"], {
-                    "current_content_index": 0,
-                    "remedial_attempts": remedial_attempts,
-                    "last_activity_timestamp": now_datetime(),
-                })
-                frappe.db.commit()
-                first_content = content_items[0] if content_items else None
-                response.update({
-                    "next_action": "restart_remedial",
-                    "message": "Let's review from the beginning.",
-                    "remedial_attempt": remedial_attempts,
-                    "next_content": {
-                        "type": first_content["content_type"],
-                        "id": first_content["content_id"],
-                        "name": first_content["content_name"],
-                    } if first_content else None,
-                })
-        else:
-            # Core quiz fail → advance to next content (NOT switch to remedial)
-            # Remedial routing is driven by assignment submission, not quiz score.
-            next_action = _advance_to_next_content(progress_data, course_level)
-            next_action.pop("success", None)
-            response["next_action"] = next_action.pop("action", "next_content")
-            response["message"] = "Quiz complete. Let's continue with the next content."
-            response.update(next_action)
+        response["message"] = "Quiz complete. Let's continue with the next content."
+    response.update(next_action)
 
     return response
 
@@ -1369,11 +1394,11 @@ def _resolve_path(student, batch, bpr, current_week):
     Determine whether a student should be on Core or Remedial path
     for the current week.
 
-    Logic:
-      1. Look up ArchetypeConfig for this student's batch + archetype + arm
-      2. Check the student's submission history for PREVIOUS weeks
-      3. If student missed submissions (per ArchetypeConfig rules) → Remedial
-      4. Otherwise → Core
+    Path resolution is based on SUBMISSION TYPE VALIDITY, not presence:
+      - No submission at all → Core path (escalation flow handles follow-up,
+        content is blocked via get_next_content until they submit)
+      - Submitted with VALID type → Core path
+      - Submitted with WRONG/INVALID type → Remedial path
 
     For week 1, everyone starts on Core (no prior history to evaluate).
     """
@@ -1383,21 +1408,25 @@ def _resolve_path(student, batch, bpr, current_week):
     archetype = student.archetype or "Submitter"
     arm = student.experiment_arm or "default"
 
-    # Check if student submitted LAST week
+    # Check previous week's submission status AND validity
     prev_week = current_week - 1
-    submitted_last_week = _has_submitted_week(student.name, prev_week)
+    submission = _get_submission_validity(student.name, prev_week)
 
-    if submitted_last_week:
+    if not submission["submitted"]:
+        # No submission → stay on Core (escalation flow + content blocking
+        # handle follow-up; Remedial is NOT triggered by missing submission)
         return PATH_CORE
 
-    # Student didn't submit last week — check ArchetypeConfig
-    # for whether this archetype goes to Remedial
+    if submission["is_valid"]:
+        # Valid submission type → Core
+        return PATH_CORE
+
+    # Invalid submission type (wrong type) → check if Remedial config exists
     config = _get_archetype_config(batch.name, arm, archetype, PATH_REMEDIAL)
     if config:
-        # Remedial config exists for this archetype → route to Remedial
         return PATH_REMEDIAL
 
-    # No Remedial config → stay on Core even without submission
+    # No Remedial config for this archetype → stay on Core
     return PATH_CORE
 
 
@@ -1525,6 +1554,42 @@ def _has_submitted_week(student_id, week):
         "content_type": "Assignment",
         "action": "completed",
     })
+
+
+def _get_submission_validity(student_id, week):
+    """
+    Check a student's submission status and validity for a specific week.
+
+    Returns:
+        dict with:
+          - submitted (bool): whether any submission exists
+          - is_valid (bool or None): True if valid, False if invalid, None if no submission
+    """
+    log = frappe.db.get_value(
+        "StudentContentLog",
+        {
+            "student": student_id,
+            "stage_no": week,
+            "content_type": "Assignment",
+            "action": "completed",
+        },
+        ["metadata"],
+        as_dict=True,
+    )
+
+    if not log:
+        return {"submitted": False, "is_valid": None}
+
+    # Parse metadata to get is_valid flag
+    is_valid = True  # default if metadata missing
+    if log.metadata:
+        try:
+            meta = json.loads(log.metadata)
+            is_valid = meta.get("is_valid", True)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    return {"submitted": True, "is_valid": is_valid}
 
 
 def _get_submission_history(student_id, total_weeks):
@@ -1988,14 +2053,79 @@ def _get_course_level_for_student(student, batch):
     return None
 
 
+def _is_within_grace_period(batch, current_week):
+    """
+    Check if we're still within the grace period at the start of a new week.
+
+    Grace period = SUBMISSION_GRACE_HOURS after the week boundary.
+    During this time, students who haven't submitted for the previous week
+    are NOT blocked yet — they still have time to submit.
+
+    Returns True if within grace period, False if grace has expired.
+    """
+    if not batch.start_date:
+        return False
+
+    # Calculate when the current week started
+    week_start_days = (current_week - 1) * 7
+    week_start_date = add_days(batch.start_date, week_start_days)
+
+    # Grace deadline = week_start + SUBMISSION_GRACE_HOURS
+    grace_deadline = add_to_date(
+        get_datetime(week_start_date),
+        hours=SUBMISSION_GRACE_HOURS,
+    )
+
+    return now_datetime() <= grace_deadline
+
+
 def _get_current_week(batch):
-    """Calculate current week from batch start_date."""
+    """Calculate current calendar week from batch start_date."""
     if not batch.start_date:
         return 0
     days = date_diff(today(), batch.start_date)
     if days < 0:
         return 0
     return (days // 7) + 1
+
+
+def _get_effective_week(student, batch, calendar_week):
+    """
+    Determine the student's effective week based on their progress.
+
+    Students can advance AT MOST one week ahead of the calendar week.
+    Example: during calendar week 1, a student can complete week 1 and
+    advance to week 2 content. But they CANNOT start week 3 — they are
+    paused until calendar week 3 arrives.
+
+    Rule: effective_week <= calendar_week + 1
+
+    Returns the week the student should be working on.
+    """
+    # Get student's progress record
+    progress = frappe.db.get_value(
+        "StudentStageProgress",
+        {
+            "student": student.name,
+            "stage_type": "LearningUnit",
+        },
+        ["current_week"],
+        as_dict=True,
+    )
+
+    if not progress or not progress.current_week:
+        return calendar_week
+
+    student_week = cint(progress.current_week)
+    total_weeks = cint(batch.total_weeks) or calendar_week
+
+    # Cap: student can be at most 1 week ahead of calendar
+    max_allowed = min(calendar_week + 1, total_weeks)
+
+    # Effective week is bounded by [1, max_allowed]
+    effective = min(max(student_week, 1), max_allowed)
+
+    return effective
 
 
 # ============================================================
