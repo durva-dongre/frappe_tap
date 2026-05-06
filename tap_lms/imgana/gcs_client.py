@@ -7,16 +7,29 @@ import requests
 from google.cloud import storage
 
 
-def get_gcs_client():
-    """
-    Get GCS client using credentials from GCS Settings DocType.
-    Returns tuple of (client, bucket_name) or None if disabled.
-    """
-    settings = frappe.get_single("GCS Settings")
+AUTHENTICATED_BUCKET_TYPE = "Authenticated"
+PUBLIC_BUCKET_TYPE = "Public"
 
-    if not settings.enabled:
+
+def get_gcs_client(bucket_type=AUTHENTICATED_BUCKET_TYPE):
+    """
+    Get GCS client using credentials from the enabled GCS Settings record
+    matching the requested bucket type.
+    Returns tuple of (client, bucket_name) or None if disabled or missing.
+    """
+    settings_name = frappe.db.get_value(
+        "GCS Settings",
+        {
+            "bucket_type": bucket_type,
+            "enabled": 1,
+        },
+        "name",
+    )
+
+    if not settings_name:
         return None
 
+    settings = frappe.get_doc("GCS Settings", settings_name)
     credentials_dict = json.loads(settings.credentials_json)
     client = storage.Client.from_service_account_info(credentials_dict)
 
@@ -89,7 +102,7 @@ def upload_image_to_gcs(image_url, submission_id):
     Returns the URL.
     """
     try:
-        result = get_gcs_client()
+        result = get_gcs_client(AUTHENTICATED_BUCKET_TYPE)
 
         if result is None:
             frappe.throw("GCS Storage is not enabled. Enable it in GCS Settings.")
@@ -131,13 +144,13 @@ def upload_image_to_gcs(image_url, submission_id):
 def upload_audio_feedback_to_gcs(local_audio_path: str, submission_id: str, original_filename: str) -> str:
     """
     Upload audio file from local path to GCS.
-    Returns the URL.
+    Returns the public URL.
     """
     try:
-        result = get_gcs_client()
+        result = get_gcs_client(PUBLIC_BUCKET_TYPE)
 
         if result is None:
-            frappe.throw("GCS Storage is not enabled. Enable it in GCS Settings.")
+            frappe.throw("Public GCS Storage is not enabled. Enable it in GCS Settings.")
 
         client, bucket_name = result
 
@@ -165,7 +178,7 @@ def upload_audio_feedback_to_gcs(local_audio_path: str, submission_id: str, orig
         url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
 
         frappe.logger("submission").info(
-            f"Audio uploaded to GCS: {local_audio_path} -> {url} (content_type: {content_type})"
+            f"Audio feedback uploaded to public GCS: {local_audio_path} -> {url} (content_type: {content_type})"
         )
 
         return url
@@ -184,7 +197,7 @@ def upload_audio_to_gcs(audio_url: str, submission_id: str) -> str:
     Returns the URL.
     """
     try:
-        result = get_gcs_client()
+        result = get_gcs_client(AUTHENTICATED_BUCKET_TYPE)
 
         if result is None:
             frappe.throw("GCS Storage is not enabled. Enable it in GCS Settings.")
@@ -229,7 +242,7 @@ def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
     Returns the URL.
     """
     try:
-        result = get_gcs_client()
+        result = get_gcs_client(AUTHENTICATED_BUCKET_TYPE)
         if result is None:
             frappe.throw("GCS Storage is not enabled. Enable it in GCS Settings.")
         client, bucket_name = result

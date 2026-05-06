@@ -140,10 +140,20 @@ class FeedbackConsumer:
             self.cleanup()
             raise
 
+    def _safe_ack(self, ch, delivery_tag) -> None:
+        ch.basic_ack(delivery_tag=delivery_tag)
+
+    def _safe_nack(self, ch, delivery_tag, requeue: bool) -> None:
+        ch.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
+
+    def _safe_reject(self, ch, delivery_tag, requeue: bool) -> None:
+        ch.basic_reject(delivery_tag=delivery_tag, requeue=requeue)
+
     def process_message(self, ch, method, properties, body):
         """Process incoming feedback message with improved error handling"""
         message_data = None
         submission_id = None
+        committed = False
         
         try:
             # Start new database transaction
@@ -154,7 +164,8 @@ class FeedbackConsumer:
                 message_data, submission_id = self.processor.parse_and_validate(body)
             except ValueError as e:
                 frappe.logger().error(f"Invalid message format: {str(e)}. Body: {body}")
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+                frappe.db.rollback()
+                self._safe_reject(ch, method.delivery_tag, requeue=False)
                 return
             
             frappe.logger().info(f"Processing feedback for submission: {submission_id}")
@@ -163,8 +174,17 @@ class FeedbackConsumer:
             try:
                 self.processor.ensure_submission_exists(submission_id)
             except ValueError as e:
-                frappe.logger().error(f"{str(e)}. Rejecting message.")
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+                frappe.db.rollback()
+                frappe.logger().warning(f"{str(e)}. Requeueing message for retry.")
+                self._safe_nack(ch, method.delivery_tag, requeue=True)
+                return
+
+            if self.processor.is_already_processed(message_data):
+                frappe.db.rollback()
+                frappe.logger().info(
+                    f"Duplicate delivery detected for submission {submission_id}; acknowledging without reprocessing"
+                )
+                self._safe_ack(ch, method.delivery_tag)
                 return
             
             # Process the message
@@ -179,24 +199,32 @@ class FeedbackConsumer:
             
             # Commit transaction
             frappe.db.commit()
+            committed = True
             
             # Acknowledge message only after successful processing
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            self._safe_ack(ch, method.delivery_tag)
             
             frappe.logger().info(f"Successfully processed feedback for submission: {submission_id}")
             print(f"Successfully processed feedback for submission: {submission_id}")
             
         except Exception as e:
             # Rollback database transaction
-            frappe.db.rollback()
+            if not committed:
+                frappe.db.rollback()
             
             error_msg = str(e)
             frappe.logger().error(f"Error processing submission {submission_id}: {error_msg}")
+
+            if committed:
+                frappe.logger().warning(
+                    f"Processing for submission {submission_id} committed before failure; allowing redelivery to be handled idempotently"
+                )
+                raise
             
             # Determine if error is retryable
             if self.processor.is_retryable_error(e):
                 frappe.logger().warning(f"Retryable error for submission {submission_id}, will retry")
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                self._safe_nack(ch, method.delivery_tag, requeue=True)
             else:
                 frappe.logger().error(f"Non-retryable error for submission {submission_id}, rejecting message")
                 # Mark submission as failed and reject message
@@ -207,7 +235,7 @@ class FeedbackConsumer:
                 except:
                     frappe.db.rollback()
                 
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+                self._safe_reject(ch, method.delivery_tag, requeue=False)
 
 
     def send_glific_notification(self, message_data: Dict):

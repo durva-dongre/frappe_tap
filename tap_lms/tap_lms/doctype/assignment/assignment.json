@@ -2,20 +2,23 @@
  "actions": [],
  "allow_import": 1,
  "allow_rename": 1,
- "autoname": "format:{assignment_name}-{difficulty_tier}",
+ "autoname": "format:{assignment_id}",
  "creation": "2024-10-17 16:47:42.975464",
  "default_view": "List",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "assignment_id",
   "assignment_name",
+  "program_name",
   "description",
   "assignment_type",
   "subject",
   "learning_objectives",
   "related_content",
   "submission_guidelines",
+  "submission_rules",
   "file_type_restrictions",
   "max_file_size",
   "max_score",
@@ -32,9 +35,17 @@
  ],
  "fields": [
   {
+   "fieldname": "assignment_id",
+   "fieldtype": "Data",
+   "label": "Assignment ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
    "fieldname": "assignment_name",
    "fieldtype": "Data",
-   "label": "Assignment Name"
+   "label": "Assignment Name",
+   "reqd": 1
   },
   {
    "fieldname": "description",
@@ -42,6 +53,12 @@
    "label": "Description"
   },
   {
+   "fieldname": "program_name",
+   "fieldtype": "Data",
+   "label": "Program Name"
+  },
+  {
+   "default": "Practical",
    "fieldname": "assignment_type",
    "fieldtype": "Select",
    "label": "Assignment Type",
@@ -69,6 +86,12 @@
    "fieldname": "submission_guidelines",
    "fieldtype": "Text Editor",
    "label": "submission_guidelines"
+  },
+  {
+   "fieldname": "submission_rules",
+   "fieldtype": "Table",
+   "label": "Submission Rules",
+   "options": "Assignment Submission Rule"
   },
   {
    "fieldname": "file_type_restrictions",
@@ -170,5 +193,6 @@
  ],
  "sort_field": "modified",
  "sort_order": "DESC",
+ "title_field": "assignment_name",
  "states": []
 }

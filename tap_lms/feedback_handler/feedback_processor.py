@@ -100,12 +100,11 @@ class FeedbackProcessor:
 
         if not frappe.db.exists("Submission", submission_id):
             raise ValueError(f"Submission {submission_id} not found")
+
     def is_retryable_error(self, error: Exception) -> bool:
         error_str = str(error).lower()
 
         non_retryable_patterns = [
-            "does not exist",
-            "not found",
             "invalid",
             "permission denied",
             "duplicate",
@@ -116,6 +115,19 @@ class FeedbackProcessor:
         ]
 
         return not any(pattern in error_str for pattern in non_retryable_patterns)
+
+    def is_already_processed(self, message_data: Dict[str, Any]) -> bool:
+        submission_id = message_data["submission_id"]
+        submission = frappe.get_doc("Submission", submission_id)
+
+        if submission.status != "Completed":
+            return False
+
+        stored_feedback = submission.generated_feedback or ""
+        incoming_feedback = json.dumps(
+            message_data.get("feedback", {}), indent=2, ensure_ascii=False
+        )
+        return stored_feedback == incoming_feedback
 
     def mark_submission_failed(self, submission_id: str, error_message: str) -> None:
         try:

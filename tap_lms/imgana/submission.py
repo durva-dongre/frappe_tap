@@ -2,6 +2,7 @@ import frappe
 import json
 import pika
 import base64
+import mimetypes
 from urllib.parse import urlparse
 from tap_lms.imgana.gcs_client import upload_to_gcs
 
@@ -345,61 +346,87 @@ def get_assignment_context(assignment_id, student_id=None):
     try:
         assignment = frappe.get_doc("Assignment", assignment_id)
         images = []
-        for row in assignment.reference_images:
-            file_url = row.image
-            file_doc = frappe.get_doc("File", {"file_url": file_url})
+        for row in assignment.get("reference_images") or []:
+            file_url = row.get("image")
+            if not file_url:
+                continue
 
-            file_path = file_doc.get_full_path()
-            with open(file_path, 'rb') as f:
-                content = base64.b64encode(f.read()).decode('utf-8')
-            images.append({
-                'name': file_doc.file_name,
-                'content_type': 'image/jpeg',
-                'content': content  # base64 encoded
-            })
+            try:
+                file_doc = frappe.get_doc("File", {"file_url": file_url})
+                file_path = file_doc.get_full_path()
+                with open(file_path, "rb") as image_file:
+                    content = base64.b64encode(image_file.read()).decode("utf-8")
+
+                content_type = mimetypes.guess_type(file_doc.file_name or file_url)[0] or "image/jpeg"
+                images.append({
+                    "name": row.get("image_name") or file_doc.file_name,
+                    "content_type": content_type,
+                    "content": content,
+                })
+            except Exception:
+                frappe.log_error(
+                    frappe.get_traceback(),
+                    f"Assignment Context Image Error - {assignment_id}",
+                )
 
         rubrics = {}
-        rubric_grades = assignment.get('rubric_grades', [])
+        for grade in assignment.get("rubric_grades") or []:
+            rubric_key = grade.get("rubric_name") or grade.get("skill_name") or "General"
+            rubrics.setdefault(rubric_key, []).append({
+                "grade_value": grade.get("grade_value"),
+                "grade_name": grade.get("grade_name"),
+                "grade_description": grade.get("grade_description"),
+                "skill_name": grade.get("skill_name"),
+            })
 
-        # Process each rubric grade entry
-        for grade in rubric_grades:
-            skill_name = grade.get('skill_name')
-            if skill_name not in rubrics:
-                rubrics[skill_name] = []
-            # Create the grade entry with only grade_value and grade_description
-            grade_entry = {
-                'grade_value': grade.get('grade_value'),
-                'grade_description': grade.get('grade_description')
-            }
-            rubrics[skill_name].append(grade_entry)
+        learning_objectives = []
+        for objective_row in assignment.get("learning_objectives") or []:
+            objective_name = objective_row.get("learning_objective")
+            if not objective_name:
+                continue
 
+            learning_objectives.append({
+                "objective": objective_name,
+                "description": frappe.db.get_value(
+                    "Learning Objective",
+                    objective_name,
+                    "description",
+                ),
+            })
+
+        submission_rules = []
+        for rule in assignment.get("submission_rules") or []:
+            submission_rules.append({
+                "submission_title": rule.get("submission_title"),
+                "allowed_submission_types": [
+                    item.strip()
+                    for item in (rule.get("allowed_submission_types") or "").split(",")
+                    if item.strip()
+                ],
+                "guided_text": rule.get("guided_text"),
+                "unguided_text": rule.get("unguided_text"),
+                "valid_criteria": rule.get("valid_criteria"),
+                "invalid_criteria": rule.get("invalid_criteria"),
+            })
 
         context = {
             "assignment": {
-                "name": assignment.assignment_name,
-                "description": assignment.description,
-                "assignment_type": assignment.assignment_type, 
-                "activity_type": assignment.activity_type,
-                "course_vertical": assignment.course_vertical,
-                "submission_guidelines": assignment.submission_guidelines,
+                "name": assignment.get("assignment_name"),
+                "program_name": assignment.get("program_name"),
+                "description": assignment.get("description"),
+                "assignment_type": assignment.get("assignment_type"),
+                "activity_type": assignment.get("activity_type"),
+                "course_vertical": assignment.get("course_vertical"),
+                "difficulty_tier": assignment.get("difficulty_tier"),
+                "submission_guidelines": assignment.get("submission_guidelines"),
+                "submission_rules": submission_rules,
                 "reference_images": images,
-                "max_score": assignment.max_score,
-                "rubrics": rubrics
+                "max_score": assignment.get("max_score"),
+                "rubrics": rubrics,
             },
-            "learning_objectives": [
-                {
-                    "objective": obj.learning_objective,
-                    "description": frappe.db.get_value(
-                        "Learning Objective",
-                        obj.learning_objective,
-                        "description"
-                    )
-                }
-                for obj in assignment.learning_objectives
-            ]
+            "learning_objectives": learning_objectives,
         }
-        
-        
+
         # Add custom feedback prompt if enabled
         if assignment.enable_auto_feedback and assignment.feedback_prompt:
             context["feedback_prompt"] = assignment.feedback_prompt
