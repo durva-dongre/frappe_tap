@@ -152,7 +152,7 @@
    "fieldname": "active_content_type",
    "fieldtype": "Select",
    "label": "Active Content Type",
-   "options": "VideoClass\nQuiz\nAssignment\nNoteContent\nCourseProject"
+   "options": "VideoClass\nQuiz\nAssignment\nNoteContent\nCourseProject\nTextMessageContent\nVoiceNoteContent\nParentCallConfig"
   },
   {
    "fieldname": "active_content_id",

@@ -1016,7 +1016,7 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
             "course_level": course_level,
             "student_progress": progress_data["name"],
             "quiz": quiz_id,
-            "quiz_name": getattr(quiz_doc, 'quiz_name', quiz_id),
+            "quizname": getattr(quiz_doc, 'quiz_name', quiz_id),
             "stage_no": progress_data["current_week"],
             "tier": progress_data["current_tier"],
             "attempt_number": prev_attempts + 1,
@@ -1051,7 +1051,7 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
             "status": "quiz_started",
             "message": "Quiz started! Good luck!",
             "quiz_attempt_id": attempt.name,
-            "quiz_name": attempt.quiz_name,
+            "quiz_name": attempt.quizname,
             "total_questions": len(questions),
             "passing_score": attempt.passing_score,
             "question": {
@@ -1103,7 +1103,7 @@ def _resume_quiz(attempt, progress_data, language=None):
         "status": "quiz_resumed",
         "message": f"Welcome back! Continuing from question {next_index}.",
         "quiz_attempt_id": attempt.name,
-        "quiz_name": attempt.quiz_name,
+        "quiz_name": attempt.quizname,
         "total_questions": attempt.total_questions,
         "questions_answered": len(attempt.answers),
         "correct_so_far": correct_so_far,
@@ -2027,28 +2027,17 @@ def _get_active_bpr_for_student(student):
 def _get_course_level_for_student(student, batch):
     """
     Get the course level for a student's enrollment in a batch.
+
+    Enrollment.course is a Link to Course Level, despite the field label being
+    "Course". Return it directly instead of querying non-existent Course Level
+    fields like course/grade.
     """
     if not student.enrollment:
         return None
 
     for enrollment in student.enrollment:
         if enrollment.batch == batch.name and enrollment.course:
-            # Get Course Level from Course + Grade
-            course_level = frappe.db.get_value(
-                "Course Level",
-                {"course": enrollment.course, "grade": student.grade},
-                "name",
-            )
-            if course_level:
-                return course_level
-
-            # Fallback: any course level for this course
-            course_level = frappe.db.get_value(
-                "Course Level",
-                {"course": enrollment.course},
-                "name",
-            )
-            return course_level
+            return enrollment.course
 
     return None
 
