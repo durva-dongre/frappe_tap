@@ -1,0 +1,170 @@
+"""
+Glific Integration Extensions for Summer Program
+tap_lms/summer_program/glific_extensions.py
+
+New Glific GraphQL functions needed by the Summer Program.
+These extend the existing tap_lms/glific_integration.py module.
+
+IMPORTANT: Add these functions to the EXISTING glific_integration.py file,
+or import the base helpers from there.
+"""
+import frappe
+import requests
+import json
+
+from tap_lms.glific_integration import (
+    get_glific_settings,
+    get_glific_auth_headers,
+    check_glific_group_exists,
+    create_glific_group,
+)
+
+
+def start_group_flow(flow_id, group_id, default_results=None):
+    """
+    Trigger a Glific flow on an entire collection (group).
+    One API call instead of N per-student calls.
+
+    Args:
+        flow_id: Glific flow ID (int or str)
+        group_id: Glific collection/group ID (int or str)
+        default_results: Optional dict of default results to pass to the flow
+
+    Returns:
+        True on success, False on failure
+    """
+    settings = get_glific_settings()
+    url = f"{settings.api_url}/api"
+    headers = get_glific_auth_headers()
+
+    variables = {
+        "flowId": str(flow_id),
+        "groupId": str(group_id),
+    }
+    if default_results:
+        variables["defaultResults"] = json.dumps(default_results)
+
+    payload = {
+        "query": """
+        mutation startGroupFlow($flowId: ID!, $groupId: ID!, $defaultResults: Json) {
+            startGroupFlow(flowId: $flowId, groupId: $groupId, defaultResults: $defaultResults) {
+                success
+                errors {
+                    key
+                    message
+                }
+            }
+        }
+        """,
+        "variables": variables,
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        if "errors" in data:
+            frappe.logger().error(f"Glific API error in start_group_flow: {data['errors']}")
+            return False
+
+        success = data.get("data", {}).get("startGroupFlow", {}).get("success")
+        if success:
+            frappe.logger().info(
+                f"Started group flow {flow_id} on collection {group_id}"
+            )
+            return True
+
+        frappe.logger().error(f"start_group_flow failed. Response: {data}")
+        return False
+
+    except Exception as e:
+        frappe.logger().error(f"Exception in start_group_flow: {str(e)}", exc_info=True)
+        return False
+
+
+def add_contacts_to_group_bulk(contact_ids, group_id):
+    """
+    Add multiple contacts to a Glific collection in one API call.
+    Wraps the same updateGroupContacts mutation used by add_contact_to_group
+    but accepts a list of IDs.
+
+    Args:
+        contact_ids: list of Glific contact ID strings
+        group_id: Glific group ID string
+
+    Returns:
+        True on success, False on failure
+    """
+    if not contact_ids or not group_id:
+        return False
+
+    settings = get_glific_settings()
+    url = f"{settings.api_url}/api"
+    headers = get_glific_auth_headers()
+
+    payload = {
+        "query": """
+        mutation updateGroupContacts($input: GroupContactsInput!) {
+          updateGroupContacts(input: $input) {
+            groupContacts {
+              id
+            }
+            numberDeleted
+          }
+        }
+        """,
+        "variables": {
+            "input": {
+                "groupId": str(group_id),
+                "addContactIds": [str(cid) for cid in contact_ids],
+                "deleteContactIds": [],
+            }
+        },
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        if "errors" in data:
+            frappe.logger().error(
+                f"Glific API error in add_contacts_to_group_bulk: {data['errors']}"
+            )
+            return False
+
+        result = data.get("data", {}).get("updateGroupContacts")
+        if result is not None:
+            frappe.logger().info(
+                f"Bulk-added {len(contact_ids)} contacts to group {group_id}"
+            )
+            return True
+
+        frappe.logger().error(f"add_contacts_to_group_bulk unexpected response: {data}")
+        return False
+
+    except Exception as e:
+        frappe.logger().error(
+            f"Exception in add_contacts_to_group_bulk: {str(e)}", exc_info=True
+        )
+        return False
+
+
+def create_or_get_collection(label, description=""):
+    """
+    Idempotent helper: return existing Glific group or create a new one.
+
+    Returns:
+        dict with {"id": ..., "label": ...} or None on failure
+    """
+    existing = check_glific_group_exists(label)
+    if existing:
+        return existing
+
+    new_group = create_glific_group(label, description)
+    if new_group:
+        return new_group
+
+    frappe.logger().error(f"Failed to create_or_get_collection: {label}")
+    return None
