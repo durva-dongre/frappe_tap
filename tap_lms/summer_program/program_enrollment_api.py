@@ -2,7 +2,7 @@
 Program Enrollment APIs
 tap_lms/summer_program/program_enrollment_api.py
 
-API A6: create_program_enrollment — creates PE + sets 13 Glific contact fields
+API A6: create_program_enrollment — creates PE + sets 14 Glific contact fields
 API A8: get_enrollment_summary — aggregated stats for admin dashboard
 API extra: get_student_state — fallback when contact fields may be stale (A1)
 """
@@ -20,6 +20,7 @@ from tap_lms.summer_program.constants import (
     CF_RESOLVED_FLOW_STATE, CF_CURRENT_WEEK, CF_CURRENT_PATH,
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
+    CF_EXPERIMENT_ARM,
     ALL_ARCHETYPES, TERMINAL_STATES,
 )
 from tap_lms.summer_program.event_log import log_event
@@ -32,7 +33,7 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
     """
     API A6: create_program_enrollment
 
-    Creates a ProgramEnrollment record, sets 13 Glific contact fields,
+    Creates a ProgramEnrollment record, sets 14 Glific contact fields,
     and optionally adds student to a Glific collection.
 
     Called during onboarding Step 3a for each student.
@@ -124,7 +125,7 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
 
     pe.insert(ignore_permissions=True)
 
-    # ── Set 13 Glific Contact Fields ────────────────────────
+    # ── Set 14 Glific Contact Fields ────────────────────────
     if glific_id:
         try:
             fields = {
@@ -141,6 +142,7 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
                 CF_CURRENT_STREAK: "0",
                 CF_GRACE_WINDOW_END: "",
                 CF_EXPECTED_SUBMISSION: expected_submission or "",
+                CF_EXPERIMENT_ARM: experiment_arm or "",
             }
             update_contact_fields(str(glific_id), fields)
         except Exception as e:

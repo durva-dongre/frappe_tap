@@ -174,7 +174,7 @@ VALIDATION_FAILED = "failed"
 
 
 # ── Glific Contact Field Keys ─────────────────────────────
-# These are the 13 contact field names set on Glific contacts
+# These are the 14 contact field names set on Glific contacts
 CF_STUDENT_ID = "student_id"
 CF_BATCH_ID = "batch_id"
 CF_ARCHETYPE = "archetype"
@@ -188,6 +188,7 @@ CF_TOTAL_POINTS = "total_points"
 CF_CURRENT_STREAK = "current_streak"
 CF_GRACE_WINDOW_END = "grace_window_end_at"
 CF_EXPECTED_SUBMISSION = "current_expected_submission_type"
+CF_EXPERIMENT_ARM = "experiment_arm"
 
 
 # ── Tier mapping ──────────────────────────────────────────

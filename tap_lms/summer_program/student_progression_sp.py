@@ -16,7 +16,7 @@ import json
 from frappe import _
 from frappe.utils import (
     now_datetime, today, getdate, cint, flt,
-    time_diff_in_hours, date_diff, get_datetime,
+    time_diff_in_hours, time_diff_in_seconds, date_diff, get_datetime,
 )
 
 from tap_lms.summer_program.constants import (
@@ -42,6 +42,10 @@ TIER_BY_WEEK = {
 }
 DEFAULT_TIER = "Advanced"
 REMEDIAL_TIER = "Remedial"
+
+VALID_CONTENT_TYPES = ["VideoClass", "Quiz", "Assignment", "NoteContent", "CourseProject",
+                       "TextMessageContent", "VoiceNoteContent", "ParentCallConfig"]
+OPTION_LETTERS = ['A', 'B', 'C', 'D']
 
 
 # ============================================================
@@ -329,6 +333,1031 @@ def get_student_sp_overview(student_id):
         "submissions": submissions,
         "engagement": engagement,
     }
+
+
+# ============================================================
+# API 5: GET NEXT CONTENT (Content Stepping)
+# ============================================================
+
+@frappe.whitelist(allow_guest=False)
+def get_next_content(student_id, course_level=None):
+    """
+    Get next content item for a Summer Program student.
+    Steps through LearningUnit items one at a time using
+    current_content_index in StudentStageProgress.
+
+    Handles:
+      - Active quiz detection (resume)
+      - Content stepping within a LearningUnit
+      - LU completion → next LU in same week/tier
+      - Week completion → next week (via _resolve_path for Core/Remedial)
+      - Course completion
+
+    Called by: Glific content delivery sub-flow (replaces flat get_weekly_content
+    for step-by-step delivery).
+
+    Args:
+        student_id: Student ID, Glific ID, or phone
+        course_level: Course Level name (resolved from enrollment if omitted)
+
+    Returns:
+        dict with content_available / quiz_in_progress / stage_complete /
+        course_complete status plus content details.
+    """
+    try:
+        student_id = _resolve_student_id(student_id)
+        if not student_id:
+            return {"success": False, "error": "Student not found"}
+
+        student = frappe.get_doc("Student", student_id)
+        batch, bpr = _get_active_bpr_for_student(student)
+        if not batch or not bpr:
+            return {"success": False, "error": "No active Summer Program batch found"}
+
+        if not course_level:
+            course_level = _get_course_level_for_student(student, batch)
+        if not course_level:
+            return {"success": False, "error": "No course level found for student"}
+
+        current_week = _get_current_week(batch)
+        if current_week <= 0:
+            return {"success": False, "error": "Batch has not started yet"}
+
+        # Resolve path: Core or Remedial
+        path = _resolve_path(student, batch, bpr, current_week)
+        if path == PATH_REMEDIAL:
+            tier = REMEDIAL_TIER
+        else:
+            tier = TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
+
+        # Get or create progress
+        learning_unit = _get_learning_unit(course_level, current_week, tier)
+        if not learning_unit and path == PATH_REMEDIAL:
+            tier = TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
+            learning_unit = _get_learning_unit(course_level, current_week, tier)
+            path = PATH_CORE
+
+        if not learning_unit:
+            return {"success": False, "error": f"No content found for week {current_week}"}
+
+        progress = _get_or_create_sp_progress(student_id, course_level, current_week, tier, learning_unit)
+        progress_data = frappe.db.get_value(
+            "StudentStageProgress", progress,
+            ["name", "student", "stage", "status", "current_week", "current_tier",
+             "current_content_index", "is_on_remedial", "remedial_attempts",
+             "active_content_type", "active_content_id", "content_started_at",
+             "active_quiz_attempt", "question_started_at", "course_context"],
+            as_dict=True,
+        )
+
+        # Check if course complete
+        if progress_data.get("status") == "completed":
+            return {
+                "success": True,
+                "status": "course_complete",
+                "message": "You have completed the program.",
+                "student_id": student_id,
+            }
+
+        # Check for active quiz
+        if progress_data.get("active_quiz_attempt"):
+            return {
+                "success": True,
+                "status": "quiz_in_progress",
+                "student_id": student_id,
+                "position": {
+                    "week": cint(progress_data["current_week"]),
+                    "tier": progress_data["current_tier"],
+                    "learning_unit": progress_data["stage"],
+                    "is_remedial": bool(progress_data.get("is_on_remedial")),
+                    "path": path,
+                },
+                "content": {
+                    "type": "Quiz",
+                    "id": progress_data.get("active_content_id"),
+                },
+                "has_active_quiz": True,
+                "quiz_attempt_id": progress_data["active_quiz_attempt"],
+            }
+
+        # Ensure progress points to correct LU for current week/path
+        if progress_data["stage"] != learning_unit:
+            frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+                "stage": learning_unit,
+                "current_tier": tier,
+                "is_on_remedial": 1 if tier == REMEDIAL_TIER else 0,
+                "current_content_index": 0,
+                "last_activity_timestamp": now_datetime(),
+            })
+            frappe.db.commit()
+            progress_data["stage"] = learning_unit
+            progress_data["current_content_index"] = 0
+
+        # Get content items for current LU
+        content_items = _get_content_items(progress_data["stage"])
+        current_index = cint(progress_data["current_content_index"])
+
+        if current_index < len(content_items):
+            item = content_items[current_index]
+            lu_info = _get_learning_unit_info(progress_data["stage"])
+
+            # Mark content as started
+            frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+                "active_content_type": item["content_type"],
+                "active_content_id": item["content_id"],
+                "content_started_at": now_datetime(),
+                "status": "in_progress",
+                "last_activity_timestamp": now_datetime(),
+            })
+            frappe.db.commit()
+
+            return {
+                "success": True,
+                "status": "content_available",
+                "student_id": student_id,
+                "position": {
+                    "week": cint(progress_data["current_week"]),
+                    "tier": progress_data["current_tier"],
+                    "learning_unit": progress_data["stage"],
+                    "learning_unit_name": lu_info["name"] if lu_info else None,
+                    "content_index": current_index,
+                    "is_remedial": bool(progress_data.get("is_on_remedial")),
+                    "path": path,
+                },
+                "content": {
+                    "type": item["content_type"],
+                    "id": item["content_id"],
+                    "name": item["content_name"],
+                    "order": current_index + 1,
+                    "total_in_unit": len(content_items),
+                    "is_optional": item.get("is_optional"),
+                },
+                "has_active_quiz": False,
+                "course_level": course_level,
+            }
+
+        # Current LU exhausted — try next LU in same week/tier
+        next_lu = _get_next_learning_unit(course_level, current_week, tier, progress_data["stage"])
+        if next_lu:
+            frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+                "stage": next_lu,
+                "current_content_index": 0,
+                "status": "in_progress",
+                "active_content_type": None,
+                "active_content_id": None,
+                "content_started_at": None,
+                "last_activity_timestamp": now_datetime(),
+            })
+            frappe.db.commit()
+
+            content_items = _get_content_items(next_lu)
+            if content_items:
+                item = content_items[0]
+                lu_info = _get_learning_unit_info(next_lu)
+                return {
+                    "success": True,
+                    "status": "content_available",
+                    "student_id": student_id,
+                    "position": {
+                        "week": current_week,
+                        "tier": tier,
+                        "learning_unit": next_lu,
+                        "learning_unit_name": lu_info["name"] if lu_info else None,
+                        "content_index": 0,
+                        "is_remedial": tier == REMEDIAL_TIER,
+                        "path": path,
+                    },
+                    "content": {
+                        "type": item["content_type"],
+                        "id": item["content_id"],
+                        "name": item["content_name"],
+                        "order": 1,
+                        "total_in_unit": len(content_items),
+                        "is_optional": item.get("is_optional"),
+                    },
+                    "has_active_quiz": False,
+                    "new_learning_unit": True,
+                    "course_level": course_level,
+                }
+
+        # Week complete — check if programme finished
+        total_weeks = batch.total_weeks or 0
+        if current_week >= total_weeks:
+            frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+                "status": "completed",
+                "last_activity_timestamp": now_datetime(),
+            })
+            frappe.db.commit()
+            return {
+                "success": True,
+                "status": "course_complete",
+                "message": "Congratulations! You have completed the program.",
+                "student_id": student_id,
+                "completed_week": current_week,
+            }
+
+        # Week complete but more weeks remain — signal stage_complete
+        # Actual next-week content is served on the NEXT call after the
+        # batch's calendar week advances and _resolve_path re-evaluates.
+        return {
+            "success": True,
+            "status": "stage_complete",
+            "message": f"Week {current_week} complete!",
+            "student_id": student_id,
+            "completed_week": current_week,
+            "total_weeks": total_weeks,
+            "course_level": course_level,
+        }
+
+    except Exception as e:
+        frappe.log_error(f"get_next_content error: {str(e)}", "SP Progression API")
+        return {"success": False, "error": str(e)}
+
+
+# ============================================================
+# API 6: GET CONTENT DETAILS
+# ============================================================
+
+@frappe.whitelist(allow_guest=False)
+def get_content_details(content_type, content_id, language=None):
+    """
+    Get detailed information about a specific content item.
+    Returns type-specific payload:
+      - VideoClass: youtube_url, plio_url, video_file + translations
+      - Quiz: question_count, passing_score, time_limit
+      - NoteContent: content text
+      - Assignment: description, assignment_type
+      - CourseProject: description
+
+    Called by: Glific after get_next_content returns a content item,
+    to fetch the actual media URL or quiz config.
+
+    Args:
+        content_type: DocType name (VideoClass, Quiz, etc.)
+        content_id: Document name
+        language: Optional language code for translation lookup
+
+    Returns:
+        dict with type-specific content details
+    """
+    try:
+        if not content_type or not content_id:
+            return {"success": False, "error": "content_type and content_id are required"}
+
+        if content_type not in VALID_CONTENT_TYPES:
+            return {"success": False, "error": f"Invalid content_type: {content_type}"}
+
+        if not frappe.db.exists(content_type, content_id):
+            return {"success": False, "error": f"{content_type} not found: {content_id}"}
+
+        doc = frappe.get_doc(content_type, content_id)
+
+        if content_type == "VideoClass":
+            result = {
+                "success": True,
+                "content_type": "VideoClass",
+                "content_id": content_id,
+                "name": doc.video_name,
+                "youtube_url": doc.video_youtube_url,
+                "plio_url": doc.video_plio_url,
+                "video_file": doc.video_file,
+                "url": doc.video_youtube_url or doc.video_plio_url or doc.video_file,
+                "duration": str(doc.duration) if doc.duration else None,
+                "description": doc.description,
+                "translated": False,
+            }
+            if language and hasattr(doc, 'video_translations'):
+                for trans in doc.video_translations:
+                    if trans.language == language:
+                        if trans.translated_name:
+                            result["name"] = trans.translated_name
+                        if trans.video_youtube_url:
+                            result["youtube_url"] = trans.video_youtube_url
+                            result["url"] = trans.video_youtube_url
+                        result["translated"] = True
+                        result["language"] = language
+                        break
+            return result
+
+        elif content_type == "Quiz":
+            question_count = len(doc.questions) if hasattr(doc, 'questions') else 0
+            return {
+                "success": True,
+                "content_type": "Quiz",
+                "content_id": content_id,
+                "name": getattr(doc, 'quiz_name', content_id),
+                "total_questions": question_count,
+                "passing_score": flt(getattr(doc, 'passing_score', 60)),
+                "time_limit": getattr(doc, 'time_limit', None),
+            }
+
+        elif content_type == "NoteContent":
+            return {
+                "success": True,
+                "content_type": "NoteContent",
+                "content_id": content_id,
+                "name": getattr(doc, 'note_name', content_id),
+                "content": getattr(doc, 'content', None),
+            }
+
+        elif content_type == "Assignment":
+            return {
+                "success": True,
+                "content_type": "Assignment",
+                "content_id": content_id,
+                "name": getattr(doc, 'assignment_name', content_id),
+                "description": getattr(doc, 'description', None),
+                "assignment_type": getattr(doc, 'assignment_type', None),
+            }
+
+        elif content_type == "CourseProject":
+            return {
+                "success": True,
+                "content_type": "CourseProject",
+                "content_id": content_id,
+                "name": getattr(doc, 'project_name', content_id),
+                "description": getattr(doc, 'description', None),
+            }
+
+        # TextMessageContent, VoiceNoteContent, ParentCallConfig — minimal
+        return {
+            "success": True,
+            "content_type": content_type,
+            "content_id": content_id,
+            "name": _get_content_display_name(content_type, content_id),
+        }
+
+    except Exception as e:
+        frappe.log_error(f"get_content_details error: {str(e)}", "SP Progression API")
+        return {"success": False, "error": str(e)}
+
+
+# ============================================================
+# API 7: COMPLETE CONTENT (Non-Quiz)
+# ============================================================
+
+@frappe.whitelist(allow_guest=False)
+def complete_content(student_id, course_level, content_type, content_id):
+    """
+    Mark non-quiz content as complete and advance to next item.
+    For Quiz content, use start_quiz / submit_answer instead.
+
+    Called by: Glific after student views a video, reads a note, etc.
+
+    Args:
+        student_id: Student ID, Glific ID, or phone
+        course_level: Course Level document name
+        content_type: Content DocType (VideoClass, NoteContent, etc.)
+        content_id: Content document name
+
+    Returns:
+        dict with next_content / next_learning_unit / week_complete /
+        course_complete action and next content details.
+    """
+    try:
+        if not all([student_id, course_level, content_type, content_id]):
+            return {"success": False, "error": "All parameters required"}
+
+        if content_type == "Quiz":
+            return {"success": False, "error": "Use start_quiz and submit_answer for Quiz content"}
+
+        student_id = _resolve_student_id(student_id)
+        if not student_id:
+            return {"success": False, "error": "Student not found"}
+
+        progress_data = frappe.db.get_value(
+            "StudentStageProgress",
+            {"student": student_id, "course_context": course_level, "stage_type": "LearningUnit"},
+            ["name", "student", "stage", "current_week", "current_tier",
+             "current_content_index", "is_on_remedial", "remedial_attempts",
+             "content_started_at", "course_context"],
+            as_dict=True,
+        )
+
+        if not progress_data:
+            return {"success": False, "error": "No progress record found. Call get_next_content first."}
+
+        # Validate content matches current position
+        content_items = _get_content_items(progress_data["stage"])
+        current_index = cint(progress_data["current_content_index"])
+
+        if current_index >= len(content_items):
+            return {"success": False, "error": "No content at current position"}
+
+        current_item = content_items[current_index]
+        if current_item["content_id"] != content_id:
+            return {
+                "success": False,
+                "error": f"Content mismatch. Expected: {current_item['content_id']}, Got: {content_id}",
+            }
+
+        # Calculate time spent
+        time_spent = 0
+        if progress_data.get("content_started_at"):
+            time_spent = cint(time_diff_in_seconds(now_datetime(), progress_data["content_started_at"]))
+
+        # Log content completion via background job
+        frappe.enqueue(
+            "tap_lms.journey.background_jobs.job_log_content_completion",
+            queue="short",
+            timeout=60,
+            student_id=student_id,
+            course_level=course_level,
+            progress_name=progress_data["name"],
+            content_type=content_type,
+            content_id=content_id,
+            action="completed",
+            time_spent_seconds=time_spent,
+            stage_no=progress_data["current_week"],
+            tier=progress_data["current_tier"],
+            learning_unit=progress_data["stage"],
+        )
+
+        # Update statistics
+        frappe.enqueue(
+            "tap_lms.journey.background_jobs.job_update_statistics",
+            queue="short",
+            timeout=30,
+            progress_name=progress_data["name"],
+            content_completed=1,
+            time_spent=time_spent,
+        )
+
+        # Advance to next content
+        return _advance_to_next_content(progress_data, course_level)
+
+    except Exception as e:
+        frappe.log_error(f"complete_content error: {str(e)}", "SP Progression API")
+        return {"success": False, "error": str(e)}
+
+
+def _advance_to_next_content(progress_data, course_level):
+    """Move to next content item within LU, or next LU, or signal week complete."""
+    current_index = cint(progress_data["current_content_index"])
+    new_index = current_index + 1
+    content_items = _get_content_items(progress_data["stage"])
+
+    if new_index < len(content_items):
+        # More content in current LU
+        frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+            "current_content_index": new_index,
+            "status": "in_progress",
+            "active_content_type": None,
+            "active_content_id": None,
+            "content_started_at": None,
+            "last_activity_timestamp": now_datetime(),
+        })
+        frappe.db.commit()
+
+        next_item = content_items[new_index]
+        return {
+            "success": True,
+            "action": "next_content",
+            "message": "Content completed!",
+            "next_content": {
+                "type": next_item["content_type"],
+                "id": next_item["content_id"],
+                "name": next_item["content_name"],
+                "order": new_index + 1,
+            },
+            "progress": {
+                "completed": new_index,
+                "total": len(content_items),
+                "percentage": round((new_index / len(content_items)) * 100, 1),
+            },
+        }
+
+    # Current LU exhausted — try next LU in same week/tier
+    current_week = cint(progress_data["current_week"])
+    tier = progress_data["current_tier"]
+
+    next_lu = _get_next_learning_unit(course_level, current_week, tier, progress_data["stage"])
+    if next_lu:
+        frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+            "stage": next_lu,
+            "current_content_index": 0,
+            "active_content_type": None,
+            "active_content_id": None,
+            "content_started_at": None,
+            "last_activity_timestamp": now_datetime(),
+        })
+        frappe.db.commit()
+
+        content_items = _get_content_items(next_lu)
+        first_content = content_items[0] if content_items else None
+        lu_info = _get_learning_unit_info(next_lu)
+
+        return {
+            "success": True,
+            "action": "next_learning_unit",
+            "message": "Learning Unit completed!",
+            "new_learning_unit": next_lu,
+            "new_learning_unit_name": lu_info["name"] if lu_info else None,
+            "next_content": {
+                "type": first_content["content_type"],
+                "id": first_content["content_id"],
+                "name": first_content["content_name"],
+                "order": 1,
+            } if first_content else None,
+        }
+
+    # Week complete
+    return {
+        "success": True,
+        "action": "week_complete",
+        "message": f"Week {current_week} content complete!",
+        "completed_week": current_week,
+    }
+
+
+# ============================================================
+# API 8: START QUIZ
+# ============================================================
+
+@frappe.whitelist(allow_guest=False)
+def start_quiz(student_id, course_level, quiz_id, language=None):
+    """
+    Begin a quiz attempt or resume an existing in-progress attempt.
+    Returns the first (or current) question with options A/B/C/D.
+
+    Called by: Glific quiz sub-flow after get_next_content returns
+    a Quiz content item.
+
+    Args:
+        student_id: Student ID, Glific ID, or phone
+        course_level: Course Level document name
+        quiz_id: Quiz document name
+        language: Optional language code for question translations
+
+    Returns:
+        dict with quiz_started / quiz_resumed status, quiz_attempt_id,
+        and first question details.
+    """
+    try:
+        if not all([student_id, course_level, quiz_id]):
+            return {"success": False, "error": "student_id, course_level, and quiz_id required"}
+
+        student_id = _resolve_student_id(student_id)
+        if not student_id:
+            return {"success": False, "error": "Student not found"}
+
+        if not frappe.db.exists("Quiz", quiz_id):
+            return {"success": False, "error": f"Quiz not found: {quiz_id}"}
+
+        progress_data = frappe.db.get_value(
+            "StudentStageProgress",
+            {"student": student_id, "course_context": course_level, "stage_type": "LearningUnit"},
+            ["name", "stage", "current_week", "current_tier", "current_content_index",
+             "is_on_remedial", "active_quiz_attempt"],
+            as_dict=True,
+        )
+
+        if not progress_data:
+            return {"success": False, "error": "No progress record. Call get_next_content first."}
+
+        # Resume existing in-progress attempt
+        if progress_data.get("active_quiz_attempt"):
+            attempt = frappe.get_doc("StudentQuizAttempt", progress_data["active_quiz_attempt"])
+            if attempt.quiz == quiz_id and attempt.status == "in_progress":
+                return _resume_quiz(attempt, progress_data, language)
+
+        # Create new attempt
+        quiz_doc = frappe.get_doc("Quiz", quiz_id)
+        questions = _get_quiz_questions(quiz_doc)
+        if not questions:
+            return {"success": False, "error": "Quiz has no questions"}
+
+        prev_attempts = frappe.db.count("StudentQuizAttempt", {
+            "student": student_id, "quiz": quiz_id, "course_level": course_level,
+        })
+
+        attempt = frappe.get_doc({
+            "doctype": "StudentQuizAttempt",
+            "student": student_id,
+            "course_level": course_level,
+            "student_progress": progress_data["name"],
+            "quiz": quiz_id,
+            "quiz_name": getattr(quiz_doc, 'quiz_name', quiz_id),
+            "stage_no": progress_data["current_week"],
+            "tier": progress_data["current_tier"],
+            "attempt_number": prev_attempts + 1,
+            "status": "in_progress",
+            "total_questions": len(questions),
+            "current_question_index": 0,
+            "question_started_at": now_datetime(),
+            "started_at": now_datetime(),
+            "passing_score": flt(getattr(quiz_doc, 'passing_score', 60)),
+            "score": 0,
+            "correct_answers": 0,
+            "passed": 0,
+            "answers": [],
+        })
+        attempt.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        # Update progress
+        frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+            "active_quiz_attempt": attempt.name,
+            "active_content_type": "Quiz",
+            "active_content_id": quiz_id,
+            "content_started_at": now_datetime(),
+            "question_started_at": now_datetime(),
+            "last_activity_timestamp": now_datetime(),
+        })
+        frappe.db.commit()
+
+        first_q = _get_question_details(questions[0].question, language)
+        return {
+            "success": True,
+            "status": "quiz_started",
+            "message": "Quiz started! Good luck!",
+            "quiz_attempt_id": attempt.name,
+            "quiz_name": attempt.quiz_name,
+            "total_questions": len(questions),
+            "passing_score": attempt.passing_score,
+            "question": {
+                "index": 1,
+                "id": questions[0].question,
+                "text": first_q.get("question"),
+                "type": first_q.get("question_type", "Multiple Choice"),
+                "options": {
+                    "A": first_q.get("option_a"),
+                    "B": first_q.get("option_b"),
+                    "C": first_q.get("option_c"),
+                    "D": first_q.get("option_d"),
+                },
+                "correct_option": first_q.get("correct_option"),
+            },
+        }
+
+    except Exception as e:
+        frappe.log_error(f"start_quiz error: {str(e)}", "SP Progression API")
+        return {"success": False, "error": str(e)}
+
+
+def _resume_quiz(attempt, progress_data, language=None):
+    """Resume an in-progress quiz attempt."""
+    quiz_doc = frappe.get_doc("Quiz", attempt.quiz)
+    questions = _get_quiz_questions(quiz_doc)
+
+    answered_indices = {cint(a.question_index) for a in attempt.answers}
+    next_index = 1
+    for i in range(1, len(questions) + 1):
+        if i not in answered_indices:
+            next_index = i
+            break
+
+    frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+        "question_started_at": now_datetime(),
+        "last_activity_timestamp": now_datetime(),
+    })
+    attempt.question_started_at = now_datetime()
+    attempt.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    q_row = questions[next_index - 1]
+    q_details = _get_question_details(q_row.question, language)
+    correct_so_far = sum(1 for a in attempt.answers if a.is_correct)
+
+    return {
+        "success": True,
+        "status": "quiz_resumed",
+        "message": f"Welcome back! Continuing from question {next_index}.",
+        "quiz_attempt_id": attempt.name,
+        "quiz_name": attempt.quiz_name,
+        "total_questions": attempt.total_questions,
+        "questions_answered": len(attempt.answers),
+        "correct_so_far": correct_so_far,
+        "question": {
+            "index": next_index,
+            "id": q_row.question,
+            "text": q_details.get("question"),
+            "type": q_details.get("question_type", "Multiple Choice"),
+            "options": {
+                "A": q_details.get("option_a"),
+                "B": q_details.get("option_b"),
+                "C": q_details.get("option_c"),
+                "D": q_details.get("option_d"),
+            },
+            "correct_option": q_details.get("correct_option"),
+        },
+    }
+
+
+# ============================================================
+# API 9: SUBMIT ANSWER
+# ============================================================
+
+@frappe.whitelist(allow_guest=False)
+def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=None):
+    """
+    Submit an answer for the current quiz question.
+
+    On the last question, automatically completes the quiz and returns
+    pass/fail result. Server-side time tracking per question.
+
+    KEY DESIGN CHANGE vs old system:
+      - Core quiz FAIL → advance to next content (no remedial switch)
+      - Remedial quiz FAIL → restart or continue remedial LU
+      - Remedial quiz PASS → advance (exit remedial for next week)
+    Remedial path is driven by assignment submission, not quiz score.
+
+    Args:
+        student_id: Student ID, Glific ID, or phone
+        quiz_attempt_id: StudentQuizAttempt document name
+        question_index: 1-based question number
+        answer: Selected option letter (A, B, C, or D)
+        language: Optional language code for next question translation
+
+    Returns:
+        dict with answer_result + next_question or quiz_passed/quiz_failed
+    """
+    try:
+        if not all([student_id, quiz_attempt_id, question_index, answer]):
+            return {"success": False, "error": "All parameters required"}
+
+        question_index = cint(question_index)
+        answer = answer.strip().upper()
+        if answer not in OPTION_LETTERS:
+            return {"success": False, "error": "Invalid answer. Must be A, B, C, or D"}
+
+        student_id = _resolve_student_id(student_id)
+        if not student_id:
+            return {"success": False, "error": "Student not found"}
+
+        if not frappe.db.exists("StudentQuizAttempt", quiz_attempt_id):
+            return {"success": False, "error": f"Quiz attempt not found: {quiz_attempt_id}"}
+
+        attempt = frappe.get_doc("StudentQuizAttempt", quiz_attempt_id)
+        if attempt.student != student_id:
+            return {"success": False, "error": "Attempt does not belong to this student"}
+        if attempt.status != "in_progress":
+            return {"success": False, "error": "Quiz attempt is not in progress"}
+        if question_index < 1 or question_index > attempt.total_questions:
+            return {"success": False, "error": f"Invalid question_index. Must be 1-{attempt.total_questions}"}
+
+        quiz_doc = frappe.get_doc("Quiz", attempt.quiz)
+        questions = _get_quiz_questions(quiz_doc)
+        q_row = questions[question_index - 1]
+
+        q_details = _get_question_details(q_row.question)
+        correct_option = q_details.get("correct_option", "A")
+        is_correct = (answer == correct_option)
+
+        started_at = attempt.question_started_at or attempt.started_at
+        answered_at = now_datetime()
+        time_spent = cint(time_diff_in_seconds(answered_at, started_at))
+
+        # Save answer (update or append)
+        existing_answer = None
+        for ans in attempt.answers:
+            if cint(ans.question_index) == question_index:
+                existing_answer = ans
+                break
+
+        if existing_answer:
+            existing_answer.selected_option = answer
+            existing_answer.correct_option = correct_option
+            existing_answer.is_correct = 1 if is_correct else 0
+            existing_answer.started_at = started_at
+            existing_answer.answered_at = answered_at
+            existing_answer.time_spent_seconds = time_spent
+        else:
+            attempt.append("answers", {
+                "question_index": question_index,
+                "question": q_row.question,
+                "selected_option": answer,
+                "correct_option": correct_option,
+                "is_correct": 1 if is_correct else 0,
+                "started_at": started_at,
+                "answered_at": answered_at,
+                "time_spent_seconds": time_spent,
+            })
+
+        attempt.current_question_index = question_index
+        attempt.correct_answers = sum(1 for a in attempt.answers if a.is_correct)
+
+        # Last question → complete quiz
+        if question_index >= attempt.total_questions:
+            return _complete_quiz_sp(attempt, quiz_doc, questions, language)
+
+        # More questions — save and return next
+        attempt.question_started_at = now_datetime()
+        attempt.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        progress_name = attempt.student_progress
+        if progress_name:
+            frappe.db.set_value("StudentStageProgress", progress_name, {
+                "question_started_at": now_datetime(),
+                "last_activity_timestamp": now_datetime(),
+            })
+            frappe.db.commit()
+
+        next_q_row = questions[question_index]  # 0-based → next question
+        next_q = _get_question_details(next_q_row.question, language)
+
+        return {
+            "success": True,
+            "action": "next_question",
+            "answer_result": {
+                "question_index": question_index,
+                "selected_answer": answer,
+                "correct_answer": correct_option,
+                "was_correct": is_correct,
+                "time_spent_seconds": time_spent,
+            },
+            "progress": {
+                "answered": question_index,
+                "total": attempt.total_questions,
+                "correct": attempt.correct_answers,
+                "percentage": round((question_index / attempt.total_questions) * 100, 1),
+            },
+            "question": {
+                "index": question_index + 1,
+                "id": next_q_row.question,
+                "text": next_q.get("question"),
+                "type": next_q.get("question_type", "Multiple Choice"),
+                "options": {
+                    "A": next_q.get("option_a"),
+                    "B": next_q.get("option_b"),
+                    "C": next_q.get("option_c"),
+                    "D": next_q.get("option_d"),
+                },
+                "correct_option": next_q.get("correct_option"),
+            },
+        }
+
+    except Exception as e:
+        frappe.log_error(f"submit_answer error: {str(e)}", "SP Progression API")
+        return {"success": False, "error": str(e)}
+
+
+def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
+    """
+    Complete quiz attempt and determine next action.
+
+    KEY DIFFERENCE from old system:
+      - Core quiz fail → advance to next content (NOT switch to remedial)
+      - Remedial quiz fail → restart/continue remedial LU
+      - Remedial quiz pass → advance (exit remedial)
+    """
+    correct_count = sum(1 for a in attempt.answers if a.is_correct)
+    total = attempt.total_questions
+    score = (correct_count / total * 100) if total > 0 else 0
+    passed = score >= flt(attempt.passing_score)
+
+    total_time = cint(time_diff_in_seconds(now_datetime(), attempt.started_at))
+
+    # Finalize attempt
+    attempt.status = "completed"
+    attempt.completed_at = now_datetime()
+    attempt.score = score
+    attempt.correct_answers = correct_count
+    attempt.passed = 1 if passed else 0
+    attempt.time_spent_seconds = total_time
+    attempt.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    # Get progress
+    progress_data = frappe.db.get_value(
+        "StudentStageProgress", attempt.student_progress,
+        ["name", "student", "stage", "current_week", "current_tier",
+         "is_on_remedial", "remedial_attempts", "current_content_index", "course_context"],
+        as_dict=True,
+    )
+
+    course_level = progress_data["course_context"]
+
+    # Clear quiz state
+    frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+        "active_quiz_attempt": None,
+        "active_content_type": None,
+        "active_content_id": None,
+        "content_started_at": None,
+        "question_started_at": None,
+        "last_activity_timestamp": now_datetime(),
+    })
+    frappe.db.commit()
+
+    # Background jobs
+    frappe.enqueue(
+        "tap_lms.journey.background_jobs.job_log_content_completion",
+        queue="short", timeout=60,
+        student_id=progress_data["student"],
+        course_level=course_level,
+        progress_name=progress_data["name"],
+        content_type="Quiz",
+        content_id=attempt.quiz,
+        action="completed" if passed else "failed",
+        score=score, max_score=100, passed=passed,
+        time_spent_seconds=total_time,
+        quiz_attempt=attempt.name,
+        stage_no=progress_data["current_week"],
+        tier=progress_data["current_tier"],
+        learning_unit=progress_data["stage"],
+    )
+    frappe.enqueue(
+        "tap_lms.journey.background_jobs.job_update_statistics",
+        queue="short", timeout=30,
+        progress_name=progress_data["name"],
+        content_completed=1,
+        quiz_passed=1 if passed else 0,
+        quiz_failed=0 if passed else 1,
+        time_spent=total_time,
+    )
+
+    # Build base response
+    last_ans = attempt.answers[-1] if attempt.answers else None
+    response = {
+        "success": True,
+        "action": "quiz_passed" if passed else "quiz_failed",
+        "answer_result": {
+            "question_index": attempt.total_questions,
+            "selected_answer": last_ans.selected_option if last_ans else None,
+            "correct_answer": last_ans.correct_option if last_ans else None,
+            "was_correct": bool(last_ans.is_correct) if last_ans else False,
+            "time_spent_seconds": last_ans.time_spent_seconds if last_ans else 0,
+        },
+        "quiz_result": {
+            "score": round(score, 1),
+            "correct": correct_count,
+            "total": total,
+            "passed": passed,
+            "passing_score": attempt.passing_score,
+            "time_spent_seconds": total_time,
+        },
+    }
+
+    # Progression based on pass/fail
+    is_remedial = bool(progress_data.get("is_on_remedial"))
+
+    if passed:
+        if is_remedial:
+            # Remedial quiz pass → week complete (exit remedial)
+            response.update({
+                "next_action": "week_complete",
+                "message": "Great job! Week complete!",
+                "completed_week": progress_data["current_week"],
+            })
+        else:
+            # Core quiz pass → advance to next content
+            next_action = _advance_to_next_content(progress_data, course_level)
+            next_action.pop("success", None)
+            response["next_action"] = next_action.pop("action", "next_content")
+            response.update(next_action)
+    else:
+        if is_remedial:
+            # Remedial quiz fail → restart or continue remedial LU
+            content_items = _get_content_items(progress_data["stage"])
+            current_index = cint(progress_data["current_content_index"])
+
+            if current_index < len(content_items) - 1:
+                new_index = current_index + 1
+                frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+                    "current_content_index": new_index,
+                    "last_activity_timestamp": now_datetime(),
+                })
+                frappe.db.commit()
+                next_content = content_items[new_index]
+                response.update({
+                    "next_action": "continue_remedial",
+                    "message": "Keep practicing! Continue with next content.",
+                    "next_content": {
+                        "type": next_content["content_type"],
+                        "id": next_content["content_id"],
+                        "name": next_content["content_name"],
+                    },
+                })
+            else:
+                remedial_attempts = cint(progress_data.get("remedial_attempts", 0)) + 1
+                frappe.db.set_value("StudentStageProgress", progress_data["name"], {
+                    "current_content_index": 0,
+                    "remedial_attempts": remedial_attempts,
+                    "last_activity_timestamp": now_datetime(),
+                })
+                frappe.db.commit()
+                first_content = content_items[0] if content_items else None
+                response.update({
+                    "next_action": "restart_remedial",
+                    "message": "Let's review from the beginning.",
+                    "remedial_attempt": remedial_attempts,
+                    "next_content": {
+                        "type": first_content["content_type"],
+                        "id": first_content["content_id"],
+                        "name": first_content["content_name"],
+                    } if first_content else None,
+                })
+        else:
+            # Core quiz fail → advance to next content (NOT switch to remedial)
+            # Remedial routing is driven by assignment submission, not quiz score.
+            next_action = _advance_to_next_content(progress_data, course_level)
+            next_action.pop("success", None)
+            response["next_action"] = next_action.pop("action", "next_content")
+            response["message"] = "Quiz complete. Let's continue with the next content."
+            response.update(next_action)
+
+    return response
 
 
 # ============================================================
@@ -781,6 +1810,101 @@ def _get_content_display_name(content_type, content_id):
         return frappe.db.get_value(content_type, content_id, field) or content_id
     except Exception:
         return content_id
+
+
+def _get_next_learning_unit(course_level, week_no, tier, after_lu):
+    """Get next LU after current one in same week/tier."""
+    current_idx = frappe.db.get_value(
+        "LearningUnitList",
+        {"parent": course_level, "parenttype": "Course Level", "learning_unit": after_lu},
+        "idx"
+    )
+    if not current_idx:
+        return None
+
+    result = frappe.db.sql("""
+        SELECT lul.learning_unit
+        FROM `tabLearningUnitList` lul
+        INNER JOIN `tabLearningUnit` lu ON lu.name = lul.learning_unit
+        WHERE lul.parent = %s
+          AND lul.parenttype = 'Course Level'
+          AND lul.week_no = %s
+          AND lu.difficulty_tier = %s
+          AND lul.idx > %s
+        ORDER BY lul.idx ASC
+        LIMIT 1
+    """, (course_level, week_no, tier, current_idx), as_dict=True)
+    return result[0].learning_unit if result else None
+
+
+def _check_week_exists(course_level, week_no):
+    """Check if a week exists in course level."""
+    return frappe.db.exists("LearningUnitList", {
+        "parent": course_level, "parenttype": "Course Level", "week_no": week_no
+    })
+
+
+def _get_learning_unit_info(learning_unit):
+    """Get LU display info."""
+    if not learning_unit:
+        return None
+    try:
+        lu = frappe.get_doc("LearningUnit", learning_unit)
+        return {"id": learning_unit, "name": getattr(lu, 'unit_name', learning_unit)}
+    except Exception:
+        return {"id": learning_unit, "name": learning_unit}
+
+
+def _get_quiz_questions(quiz_doc):
+    """Get ordered list of quiz questions."""
+    if not hasattr(quiz_doc, 'questions') or not quiz_doc.questions:
+        return []
+    questions = list(quiz_doc.questions)
+    questions.sort(key=lambda q: getattr(q, 'question_number', q.idx))
+    return questions
+
+
+def _get_question_details(question_id, language=None):
+    """Get question details with translation support."""
+    try:
+        from frappe.utils import strip_html_tags
+
+        q = frappe.get_doc("QuizQuestion", question_id)
+        question_text = q.question or getattr(q, 'question_name', '') or ""
+
+        if language and hasattr(q, 'question_translations') and q.question_translations:
+            for trans in q.question_translations:
+                if trans.language == language and trans.translated_question:
+                    question_text = trans.translated_question
+                    break
+
+        question_text = strip_html_tags(question_text) if question_text else ""
+
+        options = {"option_a": "", "option_b": "", "option_c": "", "option_d": ""}
+        if hasattr(q, 'options') and q.options:
+            for i, opt_row in enumerate(q.options[:4]):
+                letter = OPTION_LETTERS[i].lower()
+                option_id = opt_row.options
+                if option_id:
+                    option_text = frappe.db.get_value("QuizOption", option_id, "option_text") or ""
+                    options[f"option_{letter}"] = strip_html_tags(option_text) if option_text else ""
+
+        correct_num = cint(q.correct_option)
+        correct_letter = OPTION_LETTERS[correct_num - 1] if 1 <= correct_num <= 4 else "A"
+
+        return {
+            "question_id": question_id,
+            "question": question_text,
+            "question_type": getattr(q, 'question_type', 'Multiple Choice'),
+            "option_a": options["option_a"],
+            "option_b": options["option_b"],
+            "option_c": options["option_c"],
+            "option_d": options["option_d"],
+            "correct_option": correct_letter,
+        }
+    except Exception as e:
+        frappe.log_error(f"_get_question_details error for {question_id}: {str(e)}")
+        return {"question_id": question_id, "error": str(e)}
 
 
 # ============================================================
