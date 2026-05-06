@@ -40,77 +40,48 @@ class FeedbackConsumer:
             main_queue = self.settings.feedback_results_queue
             dlx_exchange = f"{main_queue}_dlx"
             dl_queue = f"{main_queue}_dead_letter"
+            main_queue_arguments = {
+                "x-dead-letter-exchange": dlx_exchange,
+                "x-dead-letter-routing-key": main_queue,
+            }
             
-            # Handle dead letter exchange (use existing settings)
-            try:
-                # Try to declare with existing settings first
-                self.channel.exchange_declare(
-                    exchange=dlx_exchange,
-                    exchange_type='direct',
-                    passive=True  # Check if exists
-                )
-                frappe.logger().info(f"Using existing dead letter exchange: {dlx_exchange}")
-            except pika.exceptions.ChannelClosedByBroker:
-                # Exchange doesn't exist or needs to be created
-                self._reconnect()
-                try:
-                    # Try with durable=False (common default)
-                    self.channel.exchange_declare(
-                        exchange=dlx_exchange,
-                        exchange_type='direct',
-                        durable=False
-                    )
-                    frappe.logger().info(f"Created dead letter exchange: {dlx_exchange}")
-                except pika.exceptions.ChannelClosedByBroker:
-                    # Try with durable=True
-                    self._reconnect()
-                    self.channel.exchange_declare(
-                        exchange=dlx_exchange,
-                        exchange_type='direct',
-                        durable=True
-                    )
-                    frappe.logger().info(f"Created durable dead letter exchange: {dlx_exchange}")
+            self.channel.exchange_declare(
+                exchange=dlx_exchange,
+                exchange_type='direct',
+                durable=True
+            )
+            frappe.logger().info(f"Declared dead letter exchange: {dlx_exchange}")
             
-            # Handle dead letter queue
-            try:
-                self.channel.queue_declare(
-                    queue=dl_queue,
-                    durable=True
-                )
-                frappe.logger().info(f"Using/created dead letter queue: {dl_queue}")
-            except pika.exceptions.ChannelClosedByBroker:
-                self._reconnect()
-                self.channel.queue_declare(
-                    queue=dl_queue,
-                    durable=True
-                )
+            self.channel.queue_declare(
+                queue=dl_queue,
+                durable=True
+            )
+            frappe.logger().info(f"Declared dead letter queue: {dl_queue}")
             
-            # Bind dead letter queue to exchange (ignore if already bound)
-            try:
-                self.channel.queue_bind(
-                    exchange=dlx_exchange,
-                    queue=dl_queue,
-                    routing_key=main_queue
-                )
-            except:
-                pass  # Binding might already exist
+            self.channel.queue_bind(
+                exchange=dlx_exchange,
+                queue=dl_queue,
+                routing_key=main_queue
+            )
             
-            # Handle main queue (use existing configuration)
             try:
                 self.channel.queue_declare(
                     queue=main_queue,
                     durable=True,
-                    passive=True  # Use existing queue
+                    arguments=main_queue_arguments
                 )
-                frappe.logger().info(f"Using existing main queue: {main_queue}")
-            except pika.exceptions.ChannelClosedByBroker:
-                # Queue doesn't exist, create simple version
+                frappe.logger().info(
+                    f"Declared main queue with dead letter routing: {main_queue}"
+                )
+            except pika.exceptions.ChannelClosedByBroker as e:
                 self._reconnect()
-                self.channel.queue_declare(
-                    queue=main_queue,
-                    durable=True
+                frappe.logger().error(
+                    "Main queue declaration failed for "
+                    f"{main_queue}. RabbitMQ queues cannot change arguments in place. "
+                    "Recreate the queue or apply a broker policy so it includes "
+                    f"{main_queue_arguments}. Original error: {str(e)}"
                 )
-                frappe.logger().info(f"Created main queue: {main_queue}")
+                raise
             
             frappe.logger().info("RabbitMQ connection established successfully")
             
@@ -169,10 +140,20 @@ class FeedbackConsumer:
             self.cleanup()
             raise
 
+    def _safe_ack(self, ch, delivery_tag) -> None:
+        ch.basic_ack(delivery_tag=delivery_tag)
+
+    def _safe_nack(self, ch, delivery_tag, requeue: bool) -> None:
+        ch.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
+
+    def _safe_reject(self, ch, delivery_tag, requeue: bool) -> None:
+        ch.basic_reject(delivery_tag=delivery_tag, requeue=requeue)
+
     def process_message(self, ch, method, properties, body):
         """Process incoming feedback message with improved error handling"""
         message_data = None
         submission_id = None
+        committed = False
         
         try:
             # Start new database transaction
@@ -183,7 +164,8 @@ class FeedbackConsumer:
                 message_data, submission_id = self.processor.parse_and_validate(body)
             except ValueError as e:
                 frappe.logger().error(f"Invalid message format: {str(e)}. Body: {body}")
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+                frappe.db.rollback()
+                self._safe_reject(ch, method.delivery_tag, requeue=False)
                 return
             
             frappe.logger().info(f"Processing feedback for submission: {submission_id}")
@@ -192,8 +174,17 @@ class FeedbackConsumer:
             try:
                 self.processor.ensure_submission_exists(submission_id)
             except ValueError as e:
-                frappe.logger().error(f"{str(e)}. Rejecting message.")
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+                frappe.db.rollback()
+                frappe.logger().warning(f"{str(e)}. Requeueing message for retry.")
+                self._safe_nack(ch, method.delivery_tag, requeue=True)
+                return
+
+            if self.processor.is_already_processed(message_data):
+                frappe.db.rollback()
+                frappe.logger().info(
+                    f"Duplicate delivery detected for submission {submission_id}; acknowledging without reprocessing"
+                )
+                self._safe_ack(ch, method.delivery_tag)
                 return
             
             # Process the message
@@ -208,24 +199,32 @@ class FeedbackConsumer:
             
             # Commit transaction
             frappe.db.commit()
+            committed = True
             
             # Acknowledge message only after successful processing
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            self._safe_ack(ch, method.delivery_tag)
             
             frappe.logger().info(f"Successfully processed feedback for submission: {submission_id}")
             print(f"Successfully processed feedback for submission: {submission_id}")
             
         except Exception as e:
             # Rollback database transaction
-            frappe.db.rollback()
+            if not committed:
+                frappe.db.rollback()
             
             error_msg = str(e)
             frappe.logger().error(f"Error processing submission {submission_id}: {error_msg}")
+
+            if committed:
+                frappe.logger().warning(
+                    f"Processing for submission {submission_id} committed before failure; allowing redelivery to be handled idempotently"
+                )
+                raise
             
             # Determine if error is retryable
             if self.processor.is_retryable_error(e):
                 frappe.logger().warning(f"Retryable error for submission {submission_id}, will retry")
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                self._safe_nack(ch, method.delivery_tag, requeue=True)
             else:
                 frappe.logger().error(f"Non-retryable error for submission {submission_id}, rejecting message")
                 # Mark submission as failed and reject message
@@ -236,7 +235,7 @@ class FeedbackConsumer:
                 except:
                     frappe.db.rollback()
                 
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
+                self._safe_reject(ch, method.delivery_tag, requeue=False)
 
 
     def send_glific_notification(self, message_data: Dict):

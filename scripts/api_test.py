@@ -1,10 +1,10 @@
 import tap_lms.imgana.submission as m
-a = m.get_assignment_context(assignment_id="SC_L4_CA1-Basic")
+a = m.get_assignment_context(assignment_id="VAL1RB07")
 print(a)
 
 
 import tap_lms.imgana.submission as m
-a = m.get_student_details(name="Test_Hindi", glific_id="1234")
+a = m.get_student_details(student_id="ST00000182")
 print(a)
 
 
@@ -33,6 +33,12 @@ api_key = "33qwqWwre12@321"
 assign_id = "VA_L1_CA1-Basic"
 name1 = "Test_Hindi"
 glific_id = "1234"
-img_url = "https://storage.googleapis.com/bucket_tap_1/uploads/11/AugProccess/20251105103501_C155227_F32580_M18105608.mp4"
-a = m.submit_artwork(api_key, assign_id, name1, glific_id, img_url)
+submission = "https://storage.googleapis.com/bucket_tap_1/uploads/11/AugProccess/20251105103501_C155227_F32580_M18105608.mp4"
+a = m.assignment_submission(
+    api_key,
+    assign_id,
+    name1,
+    glific_id,
+    submission,
+)
 print(a)

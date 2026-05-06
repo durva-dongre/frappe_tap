@@ -92,21 +92,19 @@ class FeedbackProcessor:
 
     def ensure_submission_exists(self, submission_id: str) -> None:
         # Preserve the existing (odd) behavior: commit and re-check in case another txn created it.
-        if frappe.db.exists("ImgSubmission", submission_id):
+        if frappe.db.exists("Submission", submission_id):
             return
 
-        frappe.logger().error(f"ImgSubmission {submission_id} not found. Commiting DB.")
+        frappe.logger().error(f"Submission {submission_id} not found. Commiting DB.")
         frappe.db.commit()
 
-        if not frappe.db.exists("ImgSubmission", submission_id):
-            raise ValueError(f"ImgSubmission {submission_id} not found")
+        if not frappe.db.exists("Submission", submission_id):
+            raise ValueError(f"Submission {submission_id} not found")
 
     def is_retryable_error(self, error: Exception) -> bool:
         error_str = str(error).lower()
 
         non_retryable_patterns = [
-            "does not exist",
-            "not found",
             "invalid",
             "permission denied",
             "duplicate",
@@ -118,9 +116,22 @@ class FeedbackProcessor:
 
         return not any(pattern in error_str for pattern in non_retryable_patterns)
 
+    def is_already_processed(self, message_data: Dict[str, Any]) -> bool:
+        submission_id = message_data["submission_id"]
+        submission = frappe.get_doc("Submission", submission_id)
+
+        if submission.status != "Completed":
+            return False
+
+        stored_feedback = submission.generated_feedback or ""
+        incoming_feedback = json.dumps(
+            message_data.get("feedback", {}), indent=2, ensure_ascii=False
+        )
+        return stored_feedback == incoming_feedback
+
     def mark_submission_failed(self, submission_id: str, error_message: str) -> None:
         try:
-            submission = frappe.get_doc("ImgSubmission", submission_id)
+            submission = frappe.get_doc("Submission", submission_id)
             submission.status = "Failed"
 
             if hasattr(submission, "error_message"):
@@ -143,7 +154,7 @@ class FeedbackProcessor:
         feedback_data = message_data.get("feedback", {})
         plagiarism_data = feedback_data.get("plagiarism_output", {})
 
-        submission = frappe.get_doc("ImgSubmission", submission_id)
+        submission = frappe.get_doc("Submission", submission_id)
 
         # Extract plagiarism data
         is_plagiarized = plagiarism_data.get("is_plagiarized", False)

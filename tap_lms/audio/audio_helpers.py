@@ -56,8 +56,6 @@ def generate_speech_file(text: str, langcode: str, output_path: str, tone: str =
 	) ## default mp3_44100_128 format
 	
 	frappe.logger().info(f"Response received from TTS model, saving to: {output_path}")
-	print("#"*30)
-	print(output_path)
 	
 	# Ensure output directory exists
 	output_dir = os.path.dirname(output_path)
