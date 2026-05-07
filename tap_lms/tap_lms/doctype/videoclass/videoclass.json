@@ -13,6 +13,7 @@
   "video_youtube_url",
   "duration",
   "difficulty_tier",
+  "assignment_id",
   "description",
   "video_file",
   "video_plio_url",
@@ -94,6 +95,12 @@
    "fieldtype": "Select",
    "label": "Difficulty Tier",
    "options": "Remedial\nBasic\nIntermediate\nAdvanced"
+  },
+  {
+   "fieldname": "assignment_id",
+   "fieldtype": "Link",
+   "label": "Assignment ID",
+   "options": "Assignment"
   },
   {
    "fieldname": "course_vertical",

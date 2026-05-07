@@ -16,6 +16,7 @@
   "learning_objectives",
   "related_content",
   "submission_guidelines",
+  "submission_media_links",
   "file_type_restrictions",
   "max_file_size",
   "max_score",
@@ -70,6 +71,12 @@
    "fieldname": "submission_guidelines",
    "fieldtype": "Text Editor",
    "label": "submission_guidelines"
+  },
+  {
+   "fieldname": "submission_media_links",
+   "fieldtype": "Table",
+   "label": "Submission Media Links",
+   "options": "Assignment Submission Media Link"
   },
   {
    "fieldname": "file_type_restrictions",
