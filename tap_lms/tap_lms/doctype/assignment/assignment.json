@@ -32,8 +32,11 @@
   "difficulty_tier",
   "activity_type",
   "rubric_grades",
-  "points_per_item"
+  "points_per_item",
+  "media_links_section",
+  "media_links"
  ],
+
  "fields": [
   {
    "fieldname": "assignment_id",
@@ -174,11 +177,22 @@
    "fieldname": "points_per_item",
    "fieldtype": "Int",
    "label": "Points Per Item"
+  },
+  {
+   "fieldname": "media_links_section",
+   "fieldtype": "Section Break",
+   "label": "Submission Media Links"
+  },
+  {
+   "fieldname": "media_links",
+   "fieldtype": "Table",
+   "label": "Submission Media Links",
+   "options": "Submission Media Link"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 08:54:11.661733",
+ "modified": "2026-05-07 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "Assignment",
