@@ -466,8 +466,8 @@ def apply_submission_transition(pe, points=0, trigger_source="flow_callback"):
         return "T9", True
 
     if state == STATE_REMEDIAL_ESCALATION:
-        t3_escalation_submission(pe, points, trigger_source)
-        return "T3", True
+        t9_remedial_submission(pe, points, trigger_source)
+        return "T9", True
 
     if state == STATE_GRACE_WAITING:
         t17_grace_submission(pe, points, trigger_source)

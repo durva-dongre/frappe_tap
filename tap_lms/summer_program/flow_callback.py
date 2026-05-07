@@ -267,17 +267,9 @@ def _handle_info_flow(pe, flow_name, status, metadata):
 # ════════════════════════════════════════════════════════════
 
 def _resolve_student(identifier):
-    """Resolve student_id or glific_id to Student name."""
-    if not identifier:
-        return None
-    if frappe.db.exists("Student", identifier):
-        return identifier
-    # Try glific_id
-    student = frappe.db.get_value("Student", {"glific_id": identifier}, "name")
-    if student:
-        return student
-    # Try phone
-    return frappe.db.get_value("Student", {"phone": str(identifier).strip()}, "name")
+    """Delegate to shared utility."""
+    from tap_lms.summer_program.utils import resolve_student
+    return resolve_student(identifier)
 
 
 def _get_first_escalation_step(pe):

@@ -16,33 +16,30 @@ import json
 from frappe import _
 from frappe.utils import (
     now_datetime, today, getdate, cint, flt,
-    time_diff_in_hours, time_diff_in_seconds, date_diff, get_datetime,
+    date_diff, get_datetime,
     add_days, add_to_date,
 )
+
+
+def __time_diff_in_seconds(dt1, dt2):
+    """Return the difference (dt1 - dt2) in seconds."""
+    return (get_datetime(dt1) - get_datetime(dt2)).total_seconds()
 
 from tap_lms.summer_program.constants import (
     ALL_ARCHETYPES,
     ALL_ARMS,
     BPR_ACTIVE,
+    PATH_CORE,
+    PATH_REMEDIAL,
+    TIER_BY_WEEK,
+    DEFAULT_TIER,
+    REMEDIAL_TIER,
 )
 
 
 # ============================================================
-# CONSTANTS
+# CONSTANTS (local to this module)
 # ============================================================
-
-PATH_CORE = "Core"
-PATH_REMEDIAL = "Remedial"
-
-# Tier mapping: Summer Program uses Core/Remedial, not Basic/Intermediate/Advanced
-# But LearningUnit.difficulty_tier still uses the old values.
-# Core path → difficulty_tier per week (same as old logic)
-TIER_BY_WEEK = {
-    1: "Basic",
-    2: "Intermediate",
-}
-DEFAULT_TIER = "Advanced"
-REMEDIAL_TIER = "Remedial"
 
 VALID_CONTENT_TYPES = ["VideoClass", "Quiz", "Assignment", "NoteContent", "CourseProject",
                        "TextMessageContent", "VoiceNoteContent", "ParentCallConfig"]
@@ -206,7 +203,8 @@ def record_submission(student_id, week=None, submission_type=None, content_id=No
 
     # Update StudentStageProgress
     if course_level:
-        _mark_week_submitted(student_id, course_level, current_week)
+        total_weeks = cint(batch.total_weeks) if batch else 0
+        _mark_week_submitted(student_id, course_level, current_week, total_weeks)
 
     # Reset escalation tracking for this student/week
     _reset_escalation(student_id, current_week)
@@ -833,7 +831,7 @@ def complete_content(student_id, course_level, content_type, content_id):
         # Calculate time spent
         time_spent = 0
         if progress_data.get("content_started_at"):
-            time_spent = cint(time_diff_in_seconds(now_datetime(), progress_data["content_started_at"]))
+            time_spent = cint(_time_diff_in_seconds(now_datetime(), progress_data["content_started_at"]))
 
         # Log content completion via background job
         frappe.enqueue(
@@ -1080,11 +1078,15 @@ def _resume_quiz(attempt, progress_data, language=None):
     questions = _get_quiz_questions(quiz_doc)
 
     answered_indices = {cint(a.question_index) for a in attempt.answers}
-    next_index = 1
+    next_index = None
     for i in range(1, len(questions) + 1):
         if i not in answered_indices:
             next_index = i
             break
+
+    # All questions already answered — complete the quiz instead of re-serving
+    if next_index is None:
+        return _complete_quiz_sp(attempt, quiz_doc, questions, language)
 
     frappe.db.set_value("StudentStageProgress", progress_data["name"], {
         "question_started_at": now_datetime(),
@@ -1185,7 +1187,7 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=
 
         started_at = attempt.question_started_at or attempt.started_at
         answered_at = now_datetime()
-        time_spent = cint(time_diff_in_seconds(answered_at, started_at))
+        time_spent = cint(_time_diff_in_seconds(answered_at, started_at))
 
         # Save answer (update or append)
         existing_answer = None
@@ -1287,7 +1289,7 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
     score = (correct_count / total * 100) if total > 0 else 0
     passed = score >= flt(attempt.passing_score)
 
-    total_time = cint(time_diff_in_seconds(now_datetime(), attempt.started_at))
+    total_time = cint(_time_diff_in_seconds(now_datetime(), attempt.started_at))
 
     # Finalize attempt
     attempt.status = "completed"
@@ -2091,11 +2093,12 @@ def _get_effective_week(student, batch, calendar_week):
 
     Returns the week the student should be working on.
     """
-    # Get student's progress record
+    # Get student's progress record (scoped to this batch)
     progress = frappe.db.get_value(
         "StudentStageProgress",
         {
             "student": student.name,
+            "course_context": batch.name,
             "stage_type": "LearningUnit",
         },
         ["current_week"],
@@ -2173,8 +2176,13 @@ def _get_or_create_sp_progress(student_id, course_level, week, tier, learning_un
     return doc.name
 
 
-def _mark_week_submitted(student_id, course_level, week):
-    """Mark the current week as submitted in StudentStageProgress."""
+def _mark_week_submitted(student_id, course_level, week, total_weeks=0):
+    """Mark the current week as submitted in StudentStageProgress.
+
+    Only sets status='completed' when the student finishes the LAST week.
+    For earlier weeks, status stays 'in_progress' and the week advancement
+    logic in get_next_content handles progression.
+    """
     progress_name = frappe.db.get_value(
         "StudentStageProgress",
         {
@@ -2186,11 +2194,19 @@ def _mark_week_submitted(student_id, course_level, week):
     )
 
     if progress_name:
-        frappe.db.set_value("StudentStageProgress", progress_name, {
-            "status": "completed",
+        updates = {
             "last_activity_timestamp": now_datetime(),
-            "total_content_completed": frappe.db.get_value(
-                "StudentStageProgress", progress_name, "total_content_completed"
-            ) + 1,
-        })
+        }
+        # Only mark completed on the LAST week
+        if total_weeks and week >= total_weeks:
+            updates["status"] = "completed"
+
+        frappe.db.set_value("StudentStageProgress", progress_name, updates)
+
+        # Atomic increment for total_content_completed
+        frappe.db.sql("""
+            UPDATE `tabStudentStageProgress`
+            SET total_content_completed = COALESCE(total_content_completed, 0) + 1
+            WHERE name = %s
+        """, (progress_name,))
         frappe.db.commit()

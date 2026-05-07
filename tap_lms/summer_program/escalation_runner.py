@@ -17,15 +17,12 @@ Register in hooks.py:
 """
 import frappe
 import json
-from frappe.utils import now_datetime, today, getdate, time_diff_in_hours
+from frappe.utils import now_datetime, getdate, time_diff_in_hours
 
 from tap_lms.glific_integration import start_contact_flow
-from tap_lms.summer_program.constants import BPR_ACTIVE, ACTION_FLOW_FIELD_MAP
+from tap_lms.summer_program.constants import BPR_ACTIVE
 from tap_lms.summer_program.student_progression_sp import (
-    _resolve_student_id,
-    _get_active_bpr_for_student,
     _get_current_week,
-    _has_submitted_this_week,
     _get_escalation_steps,
 )
 

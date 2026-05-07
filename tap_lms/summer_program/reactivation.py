@@ -126,11 +126,6 @@ def reactivate_student(student_id):
 
 
 def _resolve_student(identifier):
-    if not identifier:
-        return None
-    if frappe.db.exists("Student", identifier):
-        return identifier
-    student = frappe.db.get_value("Student", {"glific_id": identifier}, "name")
-    if student:
-        return student
-    return frappe.db.get_value("Student", {"phone": str(identifier).strip()}, "name")
+    """Delegate to shared utility."""
+    from tap_lms.summer_program.utils import resolve_student
+    return resolve_student(identifier)

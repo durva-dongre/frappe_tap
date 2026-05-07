@@ -177,7 +177,6 @@ def _process_enrollment_chunk(bpr_name, batch_name, student_ids, chunk_index):
                 frappe.logger().warning(
                     f"Student {sid} has no glific_id, skipping Glific field update"
                 )
-                enrolled += 1
                 continue
 
             # Update Glific contact fields for Summer Program

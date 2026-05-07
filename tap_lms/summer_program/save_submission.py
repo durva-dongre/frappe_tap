@@ -202,10 +202,13 @@ def _calculate_points(pe):
         # Submitted before any escalation → highest points (step 1)
         return steps[0].get("points_awarded", 0)
 
-    if sent_count <= len(steps):
-        return steps[sent_count - 1].get("points_awarded", 0)
+    if sent_count < len(steps):
+        # Submitted after N escalations → points from step N
+        # (later steps award fewer points)
+        return steps[sent_count].get("points_awarded", 0)
 
-    return 0
+    # Submitted after all escalation steps exhausted → minimum or 0
+    return steps[-1].get("points_awarded", 0) if steps else 0
 
 
 # ════════════════════════════════════════════════════════════
@@ -279,12 +282,6 @@ def _update_engagement(student_id):
 # ════════════════════════════════════════════════════════════
 
 def _resolve_student(identifier):
-    """Resolve student_id or glific_id to Student name."""
-    if not identifier:
-        return None
-    if frappe.db.exists("Student", identifier):
-        return identifier
-    student = frappe.db.get_value("Student", {"glific_id": identifier}, "name")
-    if student:
-        return student
-    return frappe.db.get_value("Student", {"phone": str(identifier).strip()}, "name")
+    """Delegate to shared utility."""
+    from tap_lms.summer_program.utils import resolve_student
+    return resolve_student(identifier)
