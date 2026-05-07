@@ -496,6 +496,19 @@ def get_next_content(student_id, course_level=None):
             })
             frappe.db.commit()
 
+            content_resp = {
+                "type": item["content_type"],
+                "id": item["content_id"],
+                "name": item["content_name"],
+                "order": current_index + 1,
+                "total_in_unit": len(content_items),
+                "is_optional": item.get("is_optional"),
+            }
+            # If VideoClass, include linked assessments (type + id)
+            assessments = _get_video_assessments(item["content_type"], item["content_id"])
+            if assessments:
+                content_resp["assessments"] = assessments
+
             return {
                 "success": True,
                 "status": "content_available",
@@ -509,14 +522,7 @@ def get_next_content(student_id, course_level=None):
                     "is_remedial": bool(progress_data.get("is_on_remedial")),
                     "path": path,
                 },
-                "content": {
-                    "type": item["content_type"],
-                    "id": item["content_id"],
-                    "name": item["content_name"],
-                    "order": current_index + 1,
-                    "total_in_unit": len(content_items),
-                    "is_optional": item.get("is_optional"),
-                },
+                "content": content_resp,
                 "has_active_quiz": False,
                 "course_level": course_level,
             }
@@ -539,6 +545,19 @@ def get_next_content(student_id, course_level=None):
             if content_items:
                 item = content_items[0]
                 lu_info = _get_learning_unit_info(next_lu)
+
+                content_resp = {
+                    "type": item["content_type"],
+                    "id": item["content_id"],
+                    "name": item["content_name"],
+                    "order": 1,
+                    "total_in_unit": len(content_items),
+                    "is_optional": item.get("is_optional"),
+                }
+                assessments = _get_video_assessments(item["content_type"], item["content_id"])
+                if assessments:
+                    content_resp["assessments"] = assessments
+
                 return {
                     "success": True,
                     "status": "content_available",
@@ -552,14 +571,7 @@ def get_next_content(student_id, course_level=None):
                         "is_remedial": tier == REMEDIAL_TIER,
                         "path": path,
                     },
-                    "content": {
-                        "type": item["content_type"],
-                        "id": item["content_id"],
-                        "name": item["content_name"],
-                        "order": 1,
-                        "total_in_unit": len(content_items),
-                        "is_optional": item.get("is_optional"),
-                    },
+                    "content": content_resp,
                     "has_active_quiz": False,
                     "new_learning_unit": True,
                     "course_level": course_level,
@@ -702,6 +714,7 @@ def get_content_details(content_type, content_id, language=None):
                 "duration": str(doc.duration) if doc.duration else None,
                 "description": doc.description,
                 "translated": False,
+                "assessments": _get_video_assessments("VideoClass", content_id),
             }
             if language and hasattr(doc, 'video_translations'):
                 for trans in doc.video_translations:
@@ -1877,6 +1890,22 @@ def _get_content_display_name(content_type, content_id):
         return frappe.db.get_value(content_type, content_id, field) or content_id
     except Exception:
         return content_id
+
+
+def _get_video_assessments(content_type, content_id):
+    """If content is a VideoClass, return its linked assessments (type + id)."""
+    if content_type != "VideoClass":
+        return None
+    rows = frappe.get_all(
+        "AssessmentList",
+        filters={"parent": content_id, "parenttype": "VideoClass"},
+        fields=["assessment_type", "assessment"],
+        order_by="idx asc",
+    )
+    if not rows:
+        return None
+    return [{"assessment_type": r.assessment_type, "assessment_id": r.assessment}
+            for r in rows if r.assessment]
 
 
 def _get_next_learning_unit(course_level, week_no, tier, after_lu):
