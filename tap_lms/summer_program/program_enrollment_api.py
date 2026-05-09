@@ -2,9 +2,10 @@
 Program Enrollment APIs
 tap_lms/summer_program/program_enrollment_api.py
 
-API A6: create_program_enrollment — creates PE + sets 14 Glific contact fields
+Bulk:  start_program_enrollment — bulk-create PEs for all students in a BPR (pipeline step 3)
+API A6: create_program_enrollment — creates single PE + sets 14 Glific contact fields
 API A8: get_enrollment_summary — aggregated stats for admin dashboard
-API extra: get_student_state — fallback when contact fields may be stale (A1)
+API A1: get_student_state — fallback when contact fields may be stale
 """
 import frappe
 import json
@@ -22,8 +23,234 @@ from tap_lms.summer_program.constants import (
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
     CF_EXPERIMENT_ARM,
     ALL_ARCHETYPES, TERMINAL_STATES,
+    ENROLLMENT_CHUNK_SIZE, ENROLLMENT_QUEUE,
+    BPR_COLLECTIONS_READY,
 )
 from tap_lms.summer_program.event_log import log_event
+
+
+# ════════════════════════════════════════════════════════════
+# BULK PROGRAM ENROLLMENT (Pipeline Step — after collections_ready)
+# ════════════════════════════════════════════════════════════
+
+@frappe.whitelist(allow_guest=False)
+def start_program_enrollment(bpr_name):
+    """
+    Bulk-create ProgramEnrollment records for all students in a BPR.
+
+    This is a SEPARATE pipeline step from enrollment.py (which handles
+    Glific contact field updates and collection setup).
+
+    Pipeline order:
+      1. start_enrollment      → Glific field updates (enrolling)
+      2. setup_collections     → Glific collections (collections_ready)
+      3. start_program_enrollment → PE records (this function)
+      4. validate_bpr          → Readiness check
+      5. activate_bpr          → Go live
+
+    Runs in background chunks via frappe.enqueue.
+
+    Args:
+        bpr_name: BatchProgramRun document name
+
+    Returns:
+        dict with total students queued
+    """
+    bpr = frappe.get_doc("BatchProgramRun", bpr_name)
+    batch = frappe.get_doc("Batch", bpr.batch)
+
+    if bpr.status not in (BPR_COLLECTIONS_READY, "active"):
+        return {
+            "success": False,
+            "error": f"BPR status must be '{BPR_COLLECTIONS_READY}' or 'active', "
+                     f"currently '{bpr.status}'",
+        }
+
+    # Gather student IDs from the BPR's onboarding sets
+    from tap_lms.summer_program.enrollment import _get_students_for_bpr
+    student_ids = _get_students_for_bpr(bpr)
+
+    if not student_ids:
+        return {"success": False, "error": "No students found for this BPR"}
+
+    # Filter out students who already have a PE for this batch
+    existing_pes = set(frappe.get_all(
+        "ProgramEnrollment",
+        filters={"batch": bpr.batch, "student": ["in", student_ids]},
+        pluck="student",
+    ))
+    new_students = [sid for sid in student_ids if sid not in existing_pes]
+
+    if not new_students:
+        return {
+            "success": True,
+            "message": "All students already have ProgramEnrollment records",
+            "total": len(student_ids),
+            "already_enrolled": len(existing_pes),
+            "new": 0,
+        }
+
+    # Enqueue in chunks
+    total_chunks = (len(new_students) - 1) // ENROLLMENT_CHUNK_SIZE + 1
+    for i in range(0, len(new_students), ENROLLMENT_CHUNK_SIZE):
+        chunk = new_students[i : i + ENROLLMENT_CHUNK_SIZE]
+        frappe.enqueue(
+            "tap_lms.summer_program.program_enrollment_api._process_pe_chunk",
+            queue=ENROLLMENT_QUEUE,
+            timeout=600,
+            bpr_name=bpr_name,
+            batch_name=bpr.batch,
+            student_ids=chunk,
+            chunk_index=i // ENROLLMENT_CHUNK_SIZE,
+        )
+
+    frappe.msgprint(
+        f"Program Enrollment started: {len(new_students)} new students "
+        f"in {total_chunks} chunks. ({len(existing_pes)} already enrolled, skipped.)",
+        alert=True,
+    )
+
+    return {
+        "success": True,
+        "total": len(student_ids),
+        "already_enrolled": len(existing_pes),
+        "new": len(new_students),
+        "chunks": total_chunks,
+    }
+
+
+def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
+    """
+    Background job: create ProgramEnrollment for a chunk of students.
+
+    For each student:
+      1. Create PE record (same logic as create_program_enrollment)
+      2. Set 14 Glific contact fields
+      3. Log enrollment event
+    """
+    batch = frappe.get_doc("Batch", batch_name)
+    created = 0
+    skipped = 0
+    errors = []
+
+    for sid in student_ids:
+        try:
+            # Skip if PE already exists (idempotency)
+            existing = frappe.db.get_value(
+                "ProgramEnrollment",
+                {"student": sid, "batch": batch_name,
+                 "program_status": ["not in", ["dropped"]]},
+                "name",
+            )
+            if existing:
+                skipped += 1
+                continue
+
+            student = frappe.get_doc("Student", sid)
+            archetype = student.archetype
+            experiment_arm = student.experiment_arm or "default"
+            language = getattr(student, "language", None)
+            glific_id = student.glific_id
+
+            if not archetype:
+                errors.append(f"{sid}: no archetype")
+                continue
+
+            course_level = _resolve_course_level(student, batch)
+            expected_submission = _get_week1_submission_type(batch, archetype, experiment_arm)
+
+            # Create PE
+            pe = frappe.new_doc("ProgramEnrollment")
+            pe.enrollment = f"{sid}-{batch.batch_id}"
+            pe.student = sid
+            pe.batch = batch_name
+            pe.program_type = batch.program_type or "Summer"
+            pe.glific_id = glific_id or ""
+            pe.course_level = course_level
+            pe.language = language
+            pe.experiment_arm = experiment_arm
+            pe.archetype = archetype
+            pe.current_path = PATH_CORE
+            pe.current_tier = TIER_BY_WEEK.get(1, "Basic")
+            pe.journey_label = LABEL_ENROLLED
+            pe.last_label_change_at = now_datetime()
+            pe.program_status = PROGRAM_ACTIVE
+            pe.resolved_flow_state = STATE_NORMAL_CONTENT
+            pe.current_expected_submission_type = expected_submission
+            pe.current_week = 1
+            pe.max_allowed_week = (batch.current_calendar_week or 1) + 1
+            pe.total_points = 0
+            pe.current_streak = 0
+            pe.pause_count = 0
+            pe.submission_count = 0
+            pe.quiz_completed = 0
+            pe.in_grace_window = 0
+            pe.last_escalation_step = 0
+            pe.delivery_failure_count = 0
+            pe.re_engagement_count = 0
+            pe.next_action_at = None
+            pe.next_action_type = ""
+            pe.insert(ignore_permissions=True)
+
+            # Set 14 Glific contact fields
+            if glific_id:
+                try:
+                    from tap_lms.glific_integration import update_contact_fields
+                    fields = {
+                        CF_STUDENT_ID: sid,
+                        CF_BATCH_ID: batch.batch_id or batch_name,
+                        CF_ARCHETYPE: archetype,
+                        CF_LANGUAGE: language or "",
+                        CF_RESOLVED_FLOW_STATE: STATE_NORMAL_CONTENT,
+                        CF_CURRENT_WEEK: "1",
+                        CF_CURRENT_PATH: PATH_CORE,
+                        CF_CURRENT_TIER: TIER_BY_WEEK.get(1, "Basic"),
+                        CF_PROGRAM_STATUS: PROGRAM_ACTIVE,
+                        CF_TOTAL_POINTS: "0",
+                        CF_CURRENT_STREAK: "0",
+                        CF_GRACE_WINDOW_END: "",
+                        CF_EXPECTED_SUBMISSION: expected_submission or "",
+                        CF_EXPERIMENT_ARM: experiment_arm or "",
+                    }
+                    update_contact_fields(str(glific_id), fields)
+                except Exception as e:
+                    frappe.log_error(
+                        f"Glific field update error for {sid}: {str(e)}",
+                        "SP Program Enrollment Glific",
+                    )
+
+            # Log
+            log_event(pe, "archetype_assigned", new_value=archetype,
+                      trigger_source="admin",
+                      details={"experiment_arm": experiment_arm, "batch": batch_name})
+
+            created += 1
+
+        except Exception as e:
+            frappe.log_error(
+                f"PE creation error for {sid}: {str(e)}",
+                "SP Program Enrollment Chunk",
+            )
+            errors.append(f"{sid}: {str(e)}")
+
+    frappe.db.commit()
+
+    # Update BPR total_enrolled count
+    frappe.db.sql("""
+        UPDATE `tabBatchProgramRun`
+        SET total_enrolled = (
+            SELECT COUNT(*) FROM `tabProgramEnrollment`
+            WHERE batch = (SELECT batch FROM `tabBatchProgramRun` WHERE name = %s)
+              AND program_status != 'dropped'
+        )
+        WHERE name = %s
+    """, (bpr_name, bpr_name))
+    frappe.db.commit()
+
+    frappe.logger().info(
+        f"SP PE chunk {chunk_index}: created={created}, skipped={skipped}, "
+        f"errors={len(errors)} for BPR {bpr_name}"
+    )
 
 
 @frappe.whitelist(allow_guest=False)
@@ -324,21 +551,16 @@ def _resolve_student(identifier):
 
 
 def _resolve_course_level(student, batch):
-    """Get course level from student's enrollment in this batch."""
+    """Get course level from student's enrollment in this batch.
+
+    enrollment.course is a Link field pointing directly to a Course Level
+    document name, so no extra lookup is needed.
+    """
     if not student.enrollment:
         return None
     for enrollment in student.enrollment:
         if enrollment.batch == batch.name and enrollment.course:
-            cl = frappe.db.get_value(
-                "Course Level",
-                {"course": enrollment.course, "grade": student.grade},
-                "name",
-            )
-            if cl:
-                return cl
-            return frappe.db.get_value(
-                "Course Level", {"course": enrollment.course}, "name"
-            )
+            return enrollment.course
     return None
 
 
