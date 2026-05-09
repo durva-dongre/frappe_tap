@@ -90,6 +90,9 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
         "flow_name": flow_name,
         "status": status,
         "resolved_flow_state": pe.resolved_flow_state,
+        "next_action_type": pe.next_action_type or "",
+        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
+        "program_status": pe.program_status or "",
     }
 
 
@@ -141,6 +144,9 @@ def _handle_content_delivery(pe, flow_name, status, metadata):
         "success": True,
         "action": "delivery_confirmed",
         "resolved_flow_state": pe.resolved_flow_state,
+        "next_action_type": pe.next_action_type or "",
+        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
+        "program_status": pe.program_status or "",
     }
 
 
@@ -163,6 +169,8 @@ def _handle_escalation(pe, flow_name, status, metadata):
         "action": "escalation_confirmed",
         "resolved_flow_state": pe.resolved_flow_state,
         "last_escalation_step": pe.last_escalation_step,
+        "next_action_type": pe.next_action_type or "",
+        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
     }
 
 
@@ -180,6 +188,8 @@ def _handle_feedback_delivery(pe, flow_name, status, metadata):
             "success": True,
             "action": "already_advanced",
             "resolved_flow_state": pe.resolved_flow_state,
+            "next_action_type": pe.next_action_type or "",
+            "program_status": pe.program_status or "",
         }
 
     # T13: feedback_ready → week_completed → schedule week_advancement
@@ -191,7 +201,10 @@ def _handle_feedback_delivery(pe, flow_name, status, metadata):
         "success": True,
         "action": "week_completed",
         "resolved_flow_state": pe.resolved_flow_state,
-        "next_action_type": pe.next_action_type,
+        "next_action_type": pe.next_action_type or "",
+        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
+        "program_status": pe.program_status or "",
+        "current_week": pe.current_week,
     }
 
 

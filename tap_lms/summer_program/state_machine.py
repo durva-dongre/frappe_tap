@@ -76,31 +76,55 @@ def transition(pe, new_state, trigger_source="scheduler", extra_updates=None, sk
     # Log the transition
     log_state_transition(pe, old_state, new_state, trigger_source)
 
-    # Update Glific contact fields
+    # Update Glific contact fields (async — runs in background worker)
     if not skip_glific and pe.glific_id:
-        _sync_contact_fields(pe)
+        _enqueue_contact_field_sync(pe)
 
     return True
 
 
-def _sync_contact_fields(pe):
-    """Push current PE state to Glific contact fields."""
+def _enqueue_contact_field_sync(pe):
+    """
+    Enqueue Glific contact field sync as a background job.
+
+    Serializes the PE fields into a plain dict so the background worker
+    doesn't need to reload the doc. This keeps the API response fast
+    (~50ms) while Glific sync happens in the background (~200-500ms).
+    """
+    fields = {
+        CF_RESOLVED_FLOW_STATE: pe.resolved_flow_state or "",
+        CF_CURRENT_WEEK: str(pe.current_week or 0),
+        CF_CURRENT_PATH: pe.current_path or "",
+        CF_CURRENT_TIER: pe.current_tier or "",
+        CF_PROGRAM_STATUS: pe.program_status or "",
+        CF_TOTAL_POINTS: str(pe.total_points or 0),
+        CF_CURRENT_STREAK: str(pe.current_streak or 0),
+        CF_GRACE_WINDOW_END: str(pe.grace_window_end_at) if pe.grace_window_end_at else "",
+        CF_EXPECTED_SUBMISSION: pe.current_expected_submission_type or "",
+    }
+    frappe.enqueue(
+        "tap_lms.summer_program.state_machine._sync_contact_fields_job",
+        queue="short",
+        timeout=30,
+        enqueue_after_commit=True,
+        glific_id=str(pe.glific_id),
+        fields=fields,
+        pe_name=pe.name,
+    )
+
+
+def _sync_contact_fields_job(glific_id, fields, pe_name):
+    """
+    Background job: push PE state to Glific contact fields.
+
+    Called via frappe.enqueue from _enqueue_contact_field_sync.
+    Uses the single-call update_contact_fields mutation.
+    """
     try:
-        fields = {
-            CF_RESOLVED_FLOW_STATE: pe.resolved_flow_state or "",
-            CF_CURRENT_WEEK: str(pe.current_week or 0),
-            CF_CURRENT_PATH: pe.current_path or "",
-            CF_CURRENT_TIER: pe.current_tier or "",
-            CF_PROGRAM_STATUS: pe.program_status or "",
-            CF_TOTAL_POINTS: str(pe.total_points or 0),
-            CF_CURRENT_STREAK: str(pe.current_streak or 0),
-            CF_GRACE_WINDOW_END: str(pe.grace_window_end_at) if pe.grace_window_end_at else "",
-            CF_EXPECTED_SUBMISSION: pe.current_expected_submission_type or "",
-        }
-        update_contact_fields(str(pe.glific_id), fields)
+        update_contact_fields(glific_id, fields)
     except Exception as e:
         frappe.log_error(
-            f"Glific sync error for PE {pe.name}: {str(e)}",
+            f"Glific sync error for PE {pe_name}: {str(e)}",
             "SP State Machine Glific Sync",
         )
 
