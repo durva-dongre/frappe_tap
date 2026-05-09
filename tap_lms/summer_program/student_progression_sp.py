@@ -21,7 +21,7 @@ from frappe.utils import (
 )
 
 
-def __time_diff_in_seconds(dt1, dt2):
+def _time_diff_in_seconds(dt1, dt2):
     """Return the difference (dt1 - dt2) in seconds."""
     return (get_datetime(dt1) - get_datetime(dt2)).total_seconds()
 
