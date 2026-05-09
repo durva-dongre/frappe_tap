@@ -551,21 +551,16 @@ def _resolve_student(identifier):
 
 
 def _resolve_course_level(student, batch):
-    """Get course level from student's enrollment in this batch."""
+    """Get course level from student's enrollment in this batch.
+
+    enrollment.course is a Link field pointing directly to a Course Level
+    document name, so no extra lookup is needed.
+    """
     if not student.enrollment:
         return None
     for enrollment in student.enrollment:
         if enrollment.batch == batch.name and enrollment.course:
-            cl = frappe.db.get_value(
-                "Course Level",
-                {"course": enrollment.course, "grade": student.grade},
-                "name",
-            )
-            if cl:
-                return cl
-            return frappe.db.get_value(
-                "Course Level", {"course": enrollment.course}, "name"
-            )
+            return enrollment.course
     return None
 
 
