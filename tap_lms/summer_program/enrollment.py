@@ -231,7 +231,7 @@ def _get_students_for_bpr(bpr):
             "Backend Students",
             filters={
                 "parent": row.onboarding_set,
-                "processing_status": "Processed",
+                "processing_status": ["in", ["Processed", "Success"]],
                 "student_id": ["is", "set"],
             },
             pluck="student_id",
