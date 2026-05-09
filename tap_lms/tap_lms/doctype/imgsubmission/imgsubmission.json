@@ -11,6 +11,7 @@
   "assign_id",
   "student_id",
   "img_url",
+  "response_text",
   "status",
   "result_status",
   "created_at",
@@ -249,11 +250,17 @@
    "fieldname": "is_primary",
    "fieldtype": "Check",
    "label": "Is Primary"
+  },
+  {
+   "description": "Text or emoji content submitted by the student (for non-media submissions)",
+   "fieldname": "response_text",
+   "fieldtype": "Long Text",
+   "label": "Response Text"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 19:29:57.075227",
+ "modified": "2026-05-09 19:18:00.407853",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "ImgSubmission",
