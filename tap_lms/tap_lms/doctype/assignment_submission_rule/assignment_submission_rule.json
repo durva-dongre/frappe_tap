@@ -1,0 +1,97 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-04-29 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "submission_label",
+  "language",
+  "submission_title",
+  "allowed_submission_types",
+  "guided_text",
+  "guided_text_audio",
+  "unguided_text",
+  "unguided_text_audio",
+  "valid_criteria",
+  "invalid_criteria",
+  "display_order"
+ ],
+ "fields": [
+  {
+   "fieldname": "submission_label",
+   "fieldtype": "Data",
+   "label": "Submission Label",
+   "reqd": 1
+  },
+  {
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "label": "Language",
+   "options": "TAP Language",
+   "reqd": 1
+  },
+  {
+   "fieldname": "submission_title",
+   "fieldtype": "Data",
+   "label": "Submission Title"
+  },
+  {
+   "description": "Comma-separated values such as emoji or text,audio",
+   "fieldname": "allowed_submission_types",
+   "fieldtype": "Data",
+   "label": "Allowed Submission Types",
+   "reqd": 1
+  },
+  {
+   "fieldname": "guided_text",
+   "fieldtype": "Text Editor",
+   "label": "Guided Text"
+  },
+  {
+   "description": "Public URL for the guided text audio",
+   "fieldname": "guided_text_audio",
+   "fieldtype": "Data",
+   "label": "Guided Text Audio URL"
+  },
+  {
+   "fieldname": "unguided_text",
+   "fieldtype": "Text Editor",
+   "label": "Unguided Text"
+  },
+  {
+   "description": "Public URL for the unguided text audio",
+   "fieldname": "unguided_text_audio",
+   "fieldtype": "Data",
+   "label": "Unguided Text Audio URL"
+  },
+  {
+   "fieldname": "valid_criteria",
+   "fieldtype": "Long Text",
+   "label": "Valid Criteria"
+  },
+  {
+   "fieldname": "invalid_criteria",
+   "fieldtype": "Long Text",
+   "label": "Invalid Criteria"
+  },
+  {
+   "fieldname": "display_order",
+   "fieldtype": "Int",
+   "label": "Display Order"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-09 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "Assignment Submission Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
