@@ -20,10 +20,10 @@ class FeedbackConsumer:
         try:
             self.settings = frappe.get_single("RabbitMQ Settings")
             credentials = pika.PlainCredentials(
-                self.settings.username, 
+                self.settings.username,
                 self.settings.get_password('password')
             )
-            
+
             parameters = pika.ConnectionParameters(
                 host=self.settings.host,
                 port=int(self.settings.port),
@@ -32,15 +32,15 @@ class FeedbackConsumer:
                 heartbeat=600,
                 blocked_connection_timeout=300
             )
-            
+
             self.connection = pika.BlockingConnection(parameters)
             self.channel = self.connection.channel()
-            
+
             # Get queue names
             main_queue = self.settings.feedback_results_queue
             dlx_exchange = f"{main_queue}_dlx"
             dl_queue = f"{main_queue}_dead_letter"
-            
+
             # Handle dead letter exchange (use existing settings)
             try:
                 # Try to declare with existing settings first
@@ -70,7 +70,7 @@ class FeedbackConsumer:
                         durable=True
                     )
                     frappe.logger().info(f"Created durable dead letter exchange: {dlx_exchange}")
-            
+
             # Handle dead letter queue
             try:
                 self.channel.queue_declare(
@@ -84,7 +84,7 @@ class FeedbackConsumer:
                     queue=dl_queue,
                     durable=True
                 )
-            
+
             # Bind dead letter queue to exchange (ignore if already bound)
             try:
                 self.channel.queue_bind(
@@ -94,7 +94,7 @@ class FeedbackConsumer:
                 )
             except:
                 pass  # Binding might already exist
-            
+
             # Handle main queue (use existing configuration)
             try:
                 self.channel.queue_declare(
@@ -111,9 +111,9 @@ class FeedbackConsumer:
                     durable=True
                 )
                 frappe.logger().info(f"Created main queue: {main_queue}")
-            
+
             frappe.logger().info("RabbitMQ connection established successfully")
-            
+
         except Exception as e:
             frappe.logger().error(f"Failed to setup RabbitMQ connection: {str(e)}")
             raise
@@ -125,12 +125,12 @@ class FeedbackConsumer:
                 self.connection.close()
         except:
             pass
-        
+
         credentials = pika.PlainCredentials(
-            self.settings.username, 
+            self.settings.username,
             self.settings.get_password('password')
         )
-        
+
         parameters = pika.ConnectionParameters(
             host=self.settings.host,
             port=int(self.settings.port),
@@ -139,7 +139,7 @@ class FeedbackConsumer:
             heartbeat=600,
             blocked_connection_timeout=300
         )
-        
+
         self.connection = pika.BlockingConnection(parameters)
         self.channel = self.connection.channel()
 
@@ -148,18 +148,18 @@ class FeedbackConsumer:
         try:
             if not self.channel:
                 self.setup_rabbitmq()
-            
+
             frappe.logger().info(f"Starting to consume from queue: {self.settings.feedback_results_queue}")
-            
+
             self.channel.basic_qos(prefetch_count=1)
             self.channel.basic_consume(
                 queue=self.settings.feedback_results_queue,
                 on_message_callback=self.process_message,
                 auto_ack=False
             )
-            
+
             self.channel.start_consuming()
-            
+
         except KeyboardInterrupt:
             frappe.logger().info("Consumer stopped by user")
             self.stop_consuming()
@@ -173,11 +173,11 @@ class FeedbackConsumer:
         """Process incoming feedback message with improved error handling"""
         message_data = None
         submission_id = None
-        
+
         try:
             # Start new database transaction
             frappe.db.begin()
-            
+
             # Parse and validate message
             try:
                 message_data, submission_id = self.processor.parse_and_validate(body)
@@ -185,9 +185,9 @@ class FeedbackConsumer:
                 frappe.logger().error(f"Invalid message format: {str(e)}. Body: {body}")
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
-            
+
             frappe.logger().info(f"Processing feedback for submission: {submission_id}")
-            
+
             # Check if submission exists
             try:
                 self.processor.ensure_submission_exists(submission_id)
@@ -195,33 +195,40 @@ class FeedbackConsumer:
                 frappe.logger().error(f"{str(e)}. Rejecting message.")
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
-            
+
             # Process the message
             self.processor.update_submission(message_data)
-            
+
             # Send Glific notification (non-critical - don't fail message if this fails)
             try:
                 self.send_glific_notification(message_data)
             except Exception as glific_error:
                 frappe.logger().warning(f"Glific notification failed for {submission_id}: {str(glific_error)}")
                 # Continue processing - notification failure shouldn't fail the entire message
-            
+
+            # Summer Program: trigger T12 state transition (non-critical)
+            try:
+                self._update_sp_state(submission_id, message_data)
+            except Exception as sp_error:
+                frappe.logger().warning(f"SP state update failed for {submission_id}: {str(sp_error)}")
+                # Continue - pe_dispatcher's feedback_timeout handler is the safety net
+
             # Commit transaction
             frappe.db.commit()
-            
+
             # Acknowledge message only after successful processing
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            
+
             frappe.logger().info(f"Successfully processed feedback for submission: {submission_id}")
             print(f"Successfully processed feedback for submission: {submission_id}")
-            
+
         except Exception as e:
             # Rollback database transaction
             frappe.db.rollback()
-            
+
             error_msg = str(e)
             frappe.logger().error(f"Error processing submission {submission_id}: {error_msg}")
-            
+
             # Determine if error is retryable
             if self.processor.is_retryable_error(e):
                 frappe.logger().warning(f"Retryable error for submission {submission_id}, will retry")
@@ -235,51 +242,84 @@ class FeedbackConsumer:
                         frappe.db.commit()
                 except:
                     frappe.db.rollback()
-                
+
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
 
+    def _update_sp_state(self, submission_id, message_data):
+        """
+        Summer Program hook: advance PE state from submitted_awaiting_feedback
+        to feedback_ready (T12) after AI feedback is processed.
+
+        This is non-critical — if it fails, pe_dispatcher's handle_feedback_timeout
+        will catch it within 1-4 hours as a safety net.
+
+        The Glific notification (send_glific_notification above) already delivers
+        the feedback to the student, so this only updates the state machine to
+        unlock week advancement.
+        """
+        try:
+            from tap_lms.summer_program.feedback_consumer_hook import on_feedback_ready
+
+            student_id = message_data.get("student_id")
+            result = on_feedback_ready(submission_id, student_id)
+
+            if result.get("status") == "transitioned":
+                frappe.logger().info(
+                    f"[SP] feedback_ready transition done for PE {result.get('pe')}"
+                )
+            elif result.get("status") == "error":
+                frappe.logger().warning(
+                    f"[SP] Hook returned error for {submission_id}: {result.get('message')}"
+                )
+        except ImportError:
+            # Summer Program module not installed/available — skip silently
+            pass
+        except Exception as e:
+            frappe.logger().warning(f"[SP] State update failed for {submission_id}: {str(e)}")
+            # Re-raise so process_message logs it but continues
+            raise
 
     def send_glific_notification(self, message_data: Dict):
         """Send feedback notification via Glific with proper error handling"""
         try:
             submission_id = message_data["submission_id"]
             student_id = message_data.get("student_id")
-            
+
             if not student_id:
                 frappe.logger().warning(f"No student_id for submission {submission_id}, skipping Glific notification")
                 return
-            
+
             feedback_data = message_data.get("feedback", {})
             overall_feedback = feedback_data.get("overall_feedback", "")
-            
+
             if not overall_feedback:
                 frappe.logger().warning(f"No overall_feedback for submission {submission_id}, skipping Glific notification")
                 return
-            
+
             # Get Glific flow ID
             flow_id = frappe.get_value("Glific Flow", {"label": "feedback"}, "flow_id")
             if not flow_id:
                 frappe.logger().warning("Feedback flow not configured in Glific Flow, skipping notification")
                 return
-            
+
             # Prepare flow variables
             default_results = {
                 "submission_id": submission_id,
                 "feedback": overall_feedback
             }
-            
+
             # Start Glific flow
             success = start_contact_flow(
                 flow_id=flow_id,
                 contact_id=student_id,
                 default_results=default_results
             )
-            
+
             if success:
                 frappe.logger().info(f"Sent Glific notification for submission: {submission_id}")
             else:
                 frappe.logger().warning(f"Failed to send Glific notification for submission: {submission_id}")
-            
+
         except Exception as e:
             frappe.logger().error(f"Error sending Glific notification for {submission_id}: {str(e)}")
             # Re-raise so it can be caught in process_message and handled as non-critical
@@ -314,7 +354,7 @@ class FeedbackConsumer:
         """Move failed message to dead letter queue (if needed for manual processing)"""
         try:
             dead_letter_queue = f"{self.settings.feedback_results_queue}_dead_letter"
-            
+
             self.channel.basic_publish(
                 exchange='',
                 routing_key=dead_letter_queue,
@@ -323,7 +363,7 @@ class FeedbackConsumer:
                     delivery_mode=2,  # make message persistent
                 )
             )
-            
+
             frappe.logger().warning(
                 f"Moved message for submission {message_data.get('submission_id')} "
                 f"to dead letter queue"
@@ -336,14 +376,14 @@ class FeedbackConsumer:
         try:
             if not self.channel:
                 self.setup_rabbitmq()
-            
+
             # Main queue stats
             main_queue_state = self.channel.queue_declare(
                 queue=self.settings.feedback_results_queue,
                 passive=True
             )
             main_count = main_queue_state.method.message_count
-            
+
             # Dead letter queue stats
             try:
                 dl_queue_state = self.channel.queue_declare(
@@ -353,12 +393,12 @@ class FeedbackConsumer:
                 dl_count = dl_queue_state.method.message_count
             except:
                 dl_count = 0
-            
+
             return {
                 "main_queue": main_count,
                 "dead_letter_queue": dl_count
             }
-            
+
         except Exception as e:
             frappe.logger().error(f"Error getting queue stats: {str(e)}")
             return {"main_queue": 0, "dead_letter_queue": 0}

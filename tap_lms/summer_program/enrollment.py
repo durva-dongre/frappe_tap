@@ -185,6 +185,8 @@ def _process_enrollment_chunk(bpr_name, batch_name, student_ids, chunk_index):
                 "experiment_arm": student.experiment_arm or "",
                 "program_type": "Summer",
                 "batch_id": batch.batch_id or "",
+                "course_level": getattr(student, "course_level", "") or "",
+                "student_name": student.student_name or "",
             }
             update_contact_fields(str(glific_id), fields)
             enrolled += 1

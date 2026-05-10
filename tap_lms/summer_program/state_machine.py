@@ -37,6 +37,7 @@ from tap_lms.summer_program.constants import (
     CF_RESOLVED_FLOW_STATE, CF_CURRENT_WEEK, CF_CURRENT_PATH,
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
+    CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
     TIER_BY_WEEK, DEFAULT_TIER,
 )
 from tap_lms.summer_program.event_log import log_event, log_state_transition
@@ -101,6 +102,8 @@ def _enqueue_contact_field_sync(pe):
         CF_CURRENT_STREAK: str(pe.current_streak or 0),
         CF_GRACE_WINDOW_END: str(pe.grace_window_end_at) if pe.grace_window_end_at else "",
         CF_EXPECTED_SUBMISSION: pe.current_expected_submission_type or "",
+        CF_LAST_ESCALATION_STEP: str(pe.last_escalation_step or 0),
+        CF_SUBMISSION_COUNT: str(pe.submission_count or 0),
     }
     frappe.enqueue(
         "tap_lms.summer_program.state_machine._sync_contact_fields_job",

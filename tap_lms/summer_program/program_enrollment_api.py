@@ -22,6 +22,8 @@ from tap_lms.summer_program.constants import (
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
     CF_EXPERIMENT_ARM,
+    CF_COURSE_LEVEL, CF_STUDENT_NAME,
+    CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
     ALL_ARCHETYPES, TERMINAL_STATES,
     ENROLLMENT_CHUNK_SIZE, ENROLLMENT_QUEUE,
     BPR_COLLECTIONS_READY,
@@ -192,7 +194,7 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
             pe.next_action_type = ""
             pe.insert(ignore_permissions=True)
 
-            # Set 14 Glific contact fields
+            # Set 18 Glific contact fields
             if glific_id:
                 try:
                     from tap_lms.glific_integration import update_contact_fields
@@ -211,6 +213,10 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
                         CF_GRACE_WINDOW_END: "",
                         CF_EXPECTED_SUBMISSION: expected_submission or "",
                         CF_EXPERIMENT_ARM: experiment_arm or "",
+                        CF_COURSE_LEVEL: course_level or "",
+                        CF_STUDENT_NAME: student.student_name or "",
+                        CF_LAST_ESCALATION_STEP: "0",
+                        CF_SUBMISSION_COUNT: "0",
                     }
                     update_contact_fields(str(glific_id), fields)
                 except Exception as e:
@@ -352,7 +358,7 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
 
     pe.insert(ignore_permissions=True)
 
-    # ── Set 14 Glific Contact Fields ────────────────────────
+    # ── Set 18 Glific Contact Fields ────────────────────────
     if glific_id:
         try:
             fields = {
@@ -370,6 +376,10 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
                 CF_GRACE_WINDOW_END: "",
                 CF_EXPECTED_SUBMISSION: expected_submission or "",
                 CF_EXPERIMENT_ARM: experiment_arm or "",
+                CF_COURSE_LEVEL: course_level or "",
+                CF_STUDENT_NAME: student.student_name or "",
+                CF_LAST_ESCALATION_STEP: "0",
+                CF_SUBMISSION_COUNT: "0",
             }
             update_contact_fields(str(glific_id), fields)
         except Exception as e:

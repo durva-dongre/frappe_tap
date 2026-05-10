@@ -129,7 +129,6 @@ COLLECTION_ACTIONS = [
 ]
 
 PER_STUDENT_ACTIONS = [
-    ACTION_FEEDBACK_NOTIFICATION,
     ACTION_WEEK_ADVANCEMENT,
     ACTION_GRACE_CHECK,
     ACTION_GRACE_REMINDER,
@@ -142,9 +141,11 @@ PER_STUDENT_ACTIONS = [
 ACTION_FLOW_FIELD_MAP = {
     ACTION_CONTENT_DELIVERY: "content_delivery_flow",
     ACTION_ESCALATION: "escalation_flow",
-    ACTION_REENGAGEMENT: "reengagement_flow",
+    ACTION_RE_ENGAGEMENT: "reengagement_flow",
     ACTION_GRACE_REMINDER: "grace_notification_flow",
     ACTION_GRACE_CHECK: "grace_notification_flow",
+    ACTION_FEEDBACK_NOTIFICATION: "feedback_delivery_flow",
+    ACTION_PAUSE_CHECK: "binge_info_flow",
     "program_complete": "program_complete_flow",
 }
 
@@ -174,7 +175,7 @@ VALIDATION_FAILED = "failed"
 
 
 # ── Glific Contact Field Keys ─────────────────────────────
-# These are the 14 contact field names set on Glific contacts
+# These are the 18 contact field names set on Glific contacts
 CF_STUDENT_ID = "student_id"
 CF_BATCH_ID = "batch_id"
 CF_ARCHETYPE = "archetype"
@@ -189,6 +190,10 @@ CF_CURRENT_STREAK = "current_streak"
 CF_GRACE_WINDOW_END = "grace_window_end_at"
 CF_EXPECTED_SUBMISSION = "current_expected_submission_type"
 CF_EXPERIMENT_ARM = "experiment_arm"
+CF_COURSE_LEVEL = "course_level"
+CF_STUDENT_NAME = "student_name"
+CF_LAST_ESCALATION_STEP = "last_escalation_step"
+CF_SUBMISSION_COUNT = "submission_count"
 
 
 # ── Tier mapping ──────────────────────────────────────────

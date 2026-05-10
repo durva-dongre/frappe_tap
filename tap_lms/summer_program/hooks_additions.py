@@ -13,8 +13,13 @@ Add to scheduler_events in hooks.py:
         "daily": [
             "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages",
             "tap_lms.summer_program.scheduler.run_daily_actions",
+            "tap_lms.summer_program.batch_activation.check_auto_activate",
         ],
         "cron": {
+            # Per-PE dispatcher: runs every 2 minutes, picks up overdue actions
+            "*/2 * * * *": [
+                "tap_lms.summer_program.pe_dispatcher.dispatch_pending_actions",
+            ],
             "0 */2 * * *": [
                 "tap_lms.summer_program.escalation_runner.run_escalation_check",
             ],
@@ -50,10 +55,14 @@ API endpoints (auto-discovered via @frappe.whitelist):
   # ── Enrollment Pipeline ───────────────────────────────────
   tap_lms.summer_program.enrollment.start_enrollment
   tap_lms.summer_program.enrollment.setup_collections
+  tap_lms.summer_program.program_enrollment_api.start_program_enrollment
 
   # ── Batch Activation ──────────────────────────────────────
   tap_lms.summer_program.batch_activation.validate_bpr
   tap_lms.summer_program.batch_activation.activate_bpr
+
+  # ── Per-PE Dispatcher (scheduler cron) ─────────────────────
+  tap_lms.summer_program.pe_dispatcher.dispatch_pending_actions           # cron: */2 * * * *
 
   # ── Legacy (from student_progression_sp.py) ───────────────
   tap_lms.summer_program.student_progression_sp.record_submission         # replaced by save_submission
