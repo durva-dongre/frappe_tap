@@ -13,6 +13,7 @@
   "reengagement_flow",
   "grace_notification_flow",
   "program_complete_flow",
+  "binge_info_flow",
   "status",
   "total_imported",
   "total_enrolled",
@@ -157,11 +158,16 @@
    "fieldname": "arm_default_count",
    "fieldtype": "Int",
    "label": "Arm Default Count"
+  },
+  {
+   "fieldname": "binge_info_flow",
+   "fieldtype": "Int",
+   "label": "Binge Info Flow"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-05 22:25:22.022044",
+ "modified": "2026-05-10 21:04:00.310150",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "BatchProgramRun",
