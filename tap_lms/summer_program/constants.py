@@ -144,9 +144,10 @@ ACTION_FLOW_FIELD_MAP = {
     ACTION_RE_ENGAGEMENT: "reengagement_flow",
     ACTION_GRACE_REMINDER: "grace_notification_flow",
     ACTION_GRACE_CHECK: "grace_notification_flow",
-    ACTION_FEEDBACK_NOTIFICATION: "feedback_delivery_flow",
     ACTION_PAUSE_CHECK: "binge_info_flow",
     "program_complete": "program_complete_flow",
+    # NOTE: feedback_delivery_flow removed — FeedbackConsumer handles
+    # feedback notification via its own Glific Flow lookup (label="feedback")
 }
 
 
