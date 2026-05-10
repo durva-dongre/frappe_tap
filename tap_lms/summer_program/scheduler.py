@@ -183,19 +183,23 @@ def _run_grace_notifications(bpr, batch, grace_days):
     if not student_ids:
         return
 
+    # Postgres-correct date arithmetic:
+    #   (CURRENT_DATE - es.last_activity_date)::int  →  whole-day delta
+    #   = ANY(%s) with a Python list  →  portable, robust empty-list handling
+    # See lessons L-002 (no DATEDIFF/CURDATE) and L-005 (no IN %s tuple form).
     grace_students = frappe.db.sql(
         """
         SELECT s.name, s.glific_id
         FROM `tabStudent` s
         LEFT JOIN `tabEngagementState` es ON es.student = s.name
-        WHERE s.name IN %s
+        WHERE s.name = ANY(%s)
           AND s.glific_id IS NOT NULL
           AND s.glific_id != ''
           AND es.last_activity_date IS NOT NULL
-          AND DATEDIFF(CURDATE(), es.last_activity_date) >= %s
-          AND DATEDIFF(CURDATE(), es.last_activity_date) < %s
+          AND (CURRENT_DATE - es.last_activity_date)::int >= %s
+          AND (CURRENT_DATE - es.last_activity_date)::int < %s
         """,
-        (student_ids, grace_days, grace_days + 3),  # notify once in a 3-day window
+        (list(student_ids), grace_days, grace_days + 3),  # notify once in a 3-day window
         as_dict=True,
     )
 
