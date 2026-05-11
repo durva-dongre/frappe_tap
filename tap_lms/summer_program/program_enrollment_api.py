@@ -29,6 +29,7 @@ from tap_lms.summer_program.constants import (
     BPR_COLLECTIONS_READY,
 )
 from tap_lms.summer_program.event_log import log_event
+from tap_lms.summer_program.utils import get_student_display_name
 
 
 # ════════════════════════════════════════════════════════════
@@ -194,36 +195,40 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
             pe.next_action_type = ""
             pe.insert(ignore_permissions=True)
 
-            # Set 18 Glific contact fields
+            # Set 18 Glific contact fields — async via retry-aware background job
+            # so transient Glific outages don't lose the enrollment-time push.
             if glific_id:
-                try:
-                    from tap_lms.glific_integration import update_contact_fields
-                    fields = {
-                        CF_STUDENT_ID: sid,
-                        CF_BATCH_ID: batch.batch_id or batch_name,
-                        CF_ARCHETYPE: archetype,
-                        CF_LANGUAGE: language or "",
-                        CF_RESOLVED_FLOW_STATE: STATE_NORMAL_CONTENT,
-                        CF_CURRENT_WEEK: "1",
-                        CF_CURRENT_PATH: PATH_CORE,
-                        CF_CURRENT_TIER: TIER_BY_WEEK.get(1, "Basic"),
-                        CF_PROGRAM_STATUS: PROGRAM_ACTIVE,
-                        CF_TOTAL_POINTS: "0",
-                        CF_CURRENT_STREAK: "0",
-                        CF_GRACE_WINDOW_END: "",
-                        CF_EXPECTED_SUBMISSION: expected_submission or "",
-                        CF_EXPERIMENT_ARM: experiment_arm or "",
-                        CF_COURSE_LEVEL: course_level or "",
-                        CF_STUDENT_NAME: student.student_name or "",
-                        CF_LAST_ESCALATION_STEP: "0",
-                        CF_SUBMISSION_COUNT: "0",
-                    }
-                    update_contact_fields(str(glific_id), fields)
-                except Exception as e:
-                    frappe.log_error(
-                        f"Glific field update error for {sid}: {str(e)}",
-                        "SP Program Enrollment Glific",
-                    )
+                fields = {
+                    CF_STUDENT_ID: sid,
+                    CF_BATCH_ID: batch.batch_id or batch_name,
+                    CF_ARCHETYPE: archetype,
+                    CF_LANGUAGE: language or "",
+                    CF_RESOLVED_FLOW_STATE: STATE_NORMAL_CONTENT,
+                    CF_CURRENT_WEEK: "1",
+                    CF_CURRENT_PATH: PATH_CORE,
+                    CF_CURRENT_TIER: TIER_BY_WEEK.get(1, "Basic"),
+                    CF_PROGRAM_STATUS: PROGRAM_ACTIVE,
+                    CF_TOTAL_POINTS: "0",
+                    CF_CURRENT_STREAK: "0",
+                    CF_GRACE_WINDOW_END: "",
+                    CF_EXPECTED_SUBMISSION: expected_submission or "",
+                    CF_EXPERIMENT_ARM: experiment_arm or "",
+                    CF_COURSE_LEVEL: course_level or "",
+                    CF_STUDENT_NAME: get_student_display_name(student),
+                    CF_LAST_ESCALATION_STEP: "0",
+                    CF_SUBMISSION_COUNT: "0",
+                }
+                frappe.enqueue(
+                    "tap_lms.summer_program.state_machine._sync_contact_fields_job",
+                    queue="short",
+                    timeout=30,
+                    enqueue_after_commit=True,
+                    glific_id=str(glific_id),
+                    fields=fields,
+                    pe_name=pe.name,
+                    retry_count=0,
+                    student_id=sid,
+                )
 
             # Log
             log_event(pe, "archetype_assigned", new_value=archetype,
@@ -359,34 +364,40 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
     pe.insert(ignore_permissions=True)
 
     # ── Set 18 Glific Contact Fields ────────────────────────
+    # Async via retry-aware background job (pattern P-007) so transient Glific
+    # outages don't lose the enrollment-time push.
     if glific_id:
-        try:
-            fields = {
-                CF_STUDENT_ID: student_id,
-                CF_BATCH_ID: batch.batch_id or batch_id,
-                CF_ARCHETYPE: archetype,
-                CF_LANGUAGE: language or "",
-                CF_RESOLVED_FLOW_STATE: STATE_NORMAL_CONTENT,
-                CF_CURRENT_WEEK: "1",
-                CF_CURRENT_PATH: PATH_CORE,
-                CF_CURRENT_TIER: TIER_BY_WEEK.get(1, "Basic"),
-                CF_PROGRAM_STATUS: PROGRAM_ACTIVE,
-                CF_TOTAL_POINTS: "0",
-                CF_CURRENT_STREAK: "0",
-                CF_GRACE_WINDOW_END: "",
-                CF_EXPECTED_SUBMISSION: expected_submission or "",
-                CF_EXPERIMENT_ARM: experiment_arm or "",
-                CF_COURSE_LEVEL: course_level or "",
-                CF_STUDENT_NAME: student.student_name or "",
-                CF_LAST_ESCALATION_STEP: "0",
-                CF_SUBMISSION_COUNT: "0",
-            }
-            update_contact_fields(str(glific_id), fields)
-        except Exception as e:
-            frappe.log_error(
-                f"Glific field update error for {student_id}: {str(e)}",
-                "SP Enrollment Glific",
-            )
+        fields = {
+            CF_STUDENT_ID: student_id,
+            CF_BATCH_ID: batch.batch_id or batch_id,
+            CF_ARCHETYPE: archetype,
+            CF_LANGUAGE: language or "",
+            CF_RESOLVED_FLOW_STATE: STATE_NORMAL_CONTENT,
+            CF_CURRENT_WEEK: "1",
+            CF_CURRENT_PATH: PATH_CORE,
+            CF_CURRENT_TIER: TIER_BY_WEEK.get(1, "Basic"),
+            CF_PROGRAM_STATUS: PROGRAM_ACTIVE,
+            CF_TOTAL_POINTS: "0",
+            CF_CURRENT_STREAK: "0",
+            CF_GRACE_WINDOW_END: "",
+            CF_EXPECTED_SUBMISSION: expected_submission or "",
+            CF_EXPERIMENT_ARM: experiment_arm or "",
+            CF_COURSE_LEVEL: course_level or "",
+            CF_STUDENT_NAME: get_student_display_name(student),
+            CF_LAST_ESCALATION_STEP: "0",
+            CF_SUBMISSION_COUNT: "0",
+        }
+        frappe.enqueue(
+            "tap_lms.summer_program.state_machine._sync_contact_fields_job",
+            queue="short",
+            timeout=30,
+            enqueue_after_commit=True,
+            glific_id=str(glific_id),
+            fields=fields,
+            pe_name=pe.name,
+            retry_count=0,
+            student_id=student_id,
+        )
 
         # Add to collection if group_id provided
         if glific_group_id:

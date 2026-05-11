@@ -39,6 +39,31 @@ from tap_lms.summer_program.state_machine import (
 from tap_lms.summer_program.event_log import log_event
 
 
+# ════════════════════════════════════════════════════════════
+# RESPONSE HELPER — v3.0 contract
+# ════════════════════════════════════════════════════════════
+# Glific Integration Guide v3.0 §1.2: every webhook response from update_flow_status
+# MUST return these four fields so Glific flows can read @results.webhook.* for
+# immediate routing without waiting for the async contact-field sync.
+
+def _response(pe, action, **extras):
+    """Build a v3.0-compliant webhook response.
+
+    Always emits: success, action, resolved_flow_state, next_action_type,
+    next_action_at, program_status. Additional fields can be passed as **extras.
+    """
+    base = {
+        "success": True,
+        "action": action,
+        "resolved_flow_state": pe.resolved_flow_state or "",
+        "next_action_type": pe.next_action_type or "",
+        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
+        "program_status": pe.program_status or "",
+    }
+    base.update(extras)
+    return base
+
+
 @frappe.whitelist(allow_guest=False)
 def update_flow_status(student_id, flow_name, status, metadata=None):
     """
@@ -84,16 +109,7 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
     pe.save(ignore_permissions=True)
     frappe.db.commit()
 
-    return {
-        "success": True,
-        "action": "acknowledged",
-        "flow_name": flow_name,
-        "status": status,
-        "resolved_flow_state": pe.resolved_flow_state,
-        "next_action_type": pe.next_action_type or "",
-        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
-        "program_status": pe.program_status or "",
-    }
+    return _response(pe, "acknowledged", flow_name=flow_name, status=status)
 
 
 def _get_handler(flow_name, status):
@@ -129,25 +145,13 @@ def _handle_content_delivery(pe, flow_name, status, metadata):
         # Get first escalation step timing from ArchetypeConfig
         step = _get_first_escalation_step(pe)
         t1_content_no_response(pe, step, "flow_callback")
-        return {
-            "success": True,
-            "action": "escalation_scheduled",
-            "resolved_flow_state": pe.resolved_flow_state,
-            "next_action_type": pe.next_action_type,
-        }
+        return _response(pe, "escalation_scheduled")
 
     # completed — content was delivered, student tapped. Flow ended normally.
     # If submission happened within the flow, save_submission already handled state.
     # Just confirm delivery.
     pe.save(ignore_permissions=True)
-    return {
-        "success": True,
-        "action": "delivery_confirmed",
-        "resolved_flow_state": pe.resolved_flow_state,
-        "next_action_type": pe.next_action_type or "",
-        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
-        "program_status": pe.program_status or "",
-    }
+    return _response(pe, "delivery_confirmed")
 
 
 def _handle_escalation(pe, flow_name, status, metadata):
@@ -164,14 +168,11 @@ def _handle_escalation(pe, flow_name, status, metadata):
     log_event(pe, "escalation_sent", trigger_source="flow_callback",
               details={"step": pe.last_escalation_step})
 
-    return {
-        "success": True,
-        "action": "escalation_confirmed",
-        "resolved_flow_state": pe.resolved_flow_state,
-        "last_escalation_step": pe.last_escalation_step,
-        "next_action_type": pe.next_action_type or "",
-        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
-    }
+    return _response(
+        pe,
+        "escalation_confirmed",
+        last_escalation_step=pe.last_escalation_step,
+    )
 
 
 def _handle_feedback_delivery(pe, flow_name, status, metadata):
@@ -184,28 +185,14 @@ def _handle_feedback_delivery(pe, flow_name, status, metadata):
     if pe.resolved_flow_state != STATE_FEEDBACK_READY:
         # State already moved (race condition or retry) — just acknowledge
         pe.save(ignore_permissions=True)
-        return {
-            "success": True,
-            "action": "already_advanced",
-            "resolved_flow_state": pe.resolved_flow_state,
-            "next_action_type": pe.next_action_type or "",
-            "program_status": pe.program_status or "",
-        }
+        return _response(pe, "already_advanced")
 
     # T13: feedback_ready → week_completed → schedule week_advancement
     t13_feedback_delivered(pe, "flow_callback")
 
     log_event(pe, "feedback_delivered", trigger_source="flow_callback")
 
-    return {
-        "success": True,
-        "action": "week_completed",
-        "resolved_flow_state": pe.resolved_flow_state,
-        "next_action_type": pe.next_action_type or "",
-        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
-        "program_status": pe.program_status or "",
-        "current_week": pe.current_week,
-    }
+    return _response(pe, "week_completed", current_week=pe.current_week)
 
 
 def _handle_submission_flow(pe, flow_name, status, metadata):
@@ -215,11 +202,7 @@ def _handle_submission_flow(pe, flow_name, status, metadata):
     This just confirms the flow ended.
     """
     pe.save(ignore_permissions=True)
-    return {
-        "success": True,
-        "action": "submission_flow_completed",
-        "resolved_flow_state": pe.resolved_flow_state,
-    }
+    return _response(pe, "submission_flow_completed")
 
 
 def _handle_grace_flow(pe, flow_name, status, metadata):
@@ -228,12 +211,11 @@ def _handle_grace_flow(pe, flow_name, status, metadata):
     If student submitted during wait node, save_submission already cleared grace.
     """
     pe.save(ignore_permissions=True)
-    return {
-        "success": True,
-        "action": "grace_flow_completed",
-        "resolved_flow_state": pe.resolved_flow_state,
-        "in_grace_window": pe.in_grace_window,
-    }
+    return _response(
+        pe,
+        "grace_flow_completed",
+        in_grace_window=pe.in_grace_window,
+    )
 
 
 def _handle_reengagement(pe, flow_name, status, metadata):
@@ -247,32 +229,23 @@ def _handle_reengagement(pe, flow_name, status, metadata):
     log_event(pe, "re_engagement_attempt", trigger_source="flow_callback",
               details={"attempt": pe.re_engagement_count})
 
-    return {
-        "success": True,
-        "action": "reengagement_delivered",
-        "re_engagement_count": pe.re_engagement_count,
-        "resolved_flow_state": pe.resolved_flow_state,
-    }
+    return _response(
+        pe,
+        "reengagement_delivered",
+        re_engagement_count=pe.re_engagement_count,
+    )
 
 
 def _handle_binge_info(pe, flow_name, status, metadata):
     """Handle SP_Paused_Binge completion. Informational only."""
     pe.save(ignore_permissions=True)
-    return {
-        "success": True,
-        "action": "binge_info_delivered",
-        "resolved_flow_state": pe.resolved_flow_state,
-    }
+    return _response(pe, "binge_info_delivered")
 
 
 def _handle_info_flow(pe, flow_name, status, metadata):
     """Handle informational flows (Week Summary, Program Complete)."""
     pe.save(ignore_permissions=True)
-    return {
-        "success": True,
-        "action": "info_delivered",
-        "resolved_flow_state": pe.resolved_flow_state,
-    }
+    return _response(pe, "info_delivered")
 
 
 # ════════════════════════════════════════════════════════════

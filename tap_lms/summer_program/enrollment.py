@@ -179,16 +179,29 @@ def _process_enrollment_chunk(bpr_name, batch_name, student_ids, chunk_index):
                 )
                 continue
 
-            # Update Glific contact fields for Summer Program
+            # Update Glific contact fields for Summer Program — async via
+            # retry-aware background job (pattern P-007). Failures get re-queued
+            # up to GLIFIC_SYNC_MAX_RETRIES, then land in the DLQ Error Log.
+            from tap_lms.summer_program.utils import get_student_display_name
             fields = {
                 "archetype": student.archetype or "",
                 "experiment_arm": student.experiment_arm or "",
                 "program_type": "Summer",
                 "batch_id": batch.batch_id or "",
                 "course_level": getattr(student, "course_level", "") or "",
-                "student_name": student.student_name or "",
+                "student_name": get_student_display_name(student),
             }
-            update_contact_fields(str(glific_id), fields)
+            frappe.enqueue(
+                "tap_lms.summer_program.state_machine._sync_contact_fields_job",
+                queue="short",
+                timeout=30,
+                enqueue_after_commit=True,
+                glific_id=str(glific_id),
+                fields=fields,
+                pe_name=f"pre-pe:{sid}",
+                retry_count=0,
+                student_id=sid,
+            )
             enrolled += 1
 
         except Exception as e:

@@ -29,6 +29,44 @@ def resolve_student(identifier):
     return frappe.db.get_value("Student", {"phone": str(identifier).strip()}, "name")
 
 
+def get_student_display_name(student):
+    """Return the student's display name for personalization (Glific student_name contact field).
+
+    The Student doctype canonical name field is `name1` (label "Name").
+    Historically some code paths read `student.student_name`, which Frappe silently
+    resolves to None because the field does not exist — leading to empty-string pushes
+    to Glific and broken personalization in WhatsApp messages.
+
+    This helper centralizes the read so we have ONE place to update if the doctype is
+    ever normalized to a proper `student_name` / `first_name` / `last_name` split.
+
+    Args:
+        student: Student document, dict, or anything with attribute/dict access.
+
+    Returns:
+        str — student's display name, or "" if nothing usable is set.
+    """
+    if student is None:
+        return ""
+
+    # Attribute access (Frappe Document) — try in priority order.
+    # Order: name1 (canonical) → student_name (future-proof if field is added) →
+    # first_name (some legacy paths) → "".
+    for attr in ("name1", "student_name", "first_name"):
+        value = _safe_get(student, attr)
+        if value:
+            return str(value).strip()
+
+    return ""
+
+
+def _safe_get(obj, attr):
+    """Read `attr` from `obj` whether it's a dict, Frappe Document, or plain object."""
+    if isinstance(obj, dict):
+        return obj.get(attr)
+    return getattr(obj, attr, None)
+
+
 def staggered_action_time(base_time, pe_name, window_minutes=30):
     """
     Add deterministic jitter to a base time to prevent thundering herd.

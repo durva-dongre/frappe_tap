@@ -197,6 +197,31 @@ CF_LAST_ESCALATION_STEP = "last_escalation_step"
 CF_SUBMISSION_COUNT = "submission_count"
 
 
+# ── Glific sync retry policy (pattern P-007 / lesson L-015) ───
+# Background-job retry budget for update_contact_fields failures.
+# After MAX_RETRIES attempts the job logs to a DLQ-titled Error Log entry
+# so operators can replay manually. Increase if Glific outages become longer
+# than ~5 minutes typical.
+# Retry budget: 5 immediate retries (no backoff in this revision — see
+# follow-up task for proper exponential backoff scheduler). 5 is chosen so
+# Redis blips and Glific transient 502/503s self-heal, but a sustained
+# Glific outage (>~30 seconds) will still DLQ. Acceptable trade-off vs.
+# the previous behavior which silently dropped on first failure.
+GLIFIC_SYNC_MAX_RETRIES = 5
+GLIFIC_SYNC_RETRY_LOG_TITLE = "SP Glific Sync Retry"
+GLIFIC_SYNC_DLQ_LOG_TITLE = "SP Glific Sync DLQ — manual replay required"
+
+# ── RabbitMQ feedback pipeline retry policy (pattern P-007 / lesson L-015) ─
+# Mirror of the Glific sync policy. When the broker is briefly unreachable
+# (network blip, RabbitMQ restart), retry the publish so the submission isn't
+# lost. After MAX_RETRIES attempts, drop to DLQ with a structured payload that
+# includes student_id, submission_id, and the original message so operators
+# can replay.
+FEEDBACK_PIPELINE_MAX_RETRIES = 5
+FEEDBACK_PIPELINE_RETRY_LOG_TITLE = "SP Feedback Pipeline Retry"
+FEEDBACK_PIPELINE_DLQ_LOG_TITLE = "SP Feedback Pipeline DLQ — manual replay required"
+
+
 # ── Tier mapping ──────────────────────────────────────────
 TIER_BY_WEEK = {1: "Basic", 2: "Intermediate"}
 DEFAULT_TIER = "Advanced"

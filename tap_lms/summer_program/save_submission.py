@@ -30,6 +30,9 @@ from tap_lms.summer_program.constants import (
     LABEL_CONTENT_DELIVERED, LABEL_SUBMITTED,
     CONTENT_DELIVERY_STATES, ESCALATION_STATES,
     TERMINAL_STATES, PAUSED_STATES,
+    FEEDBACK_PIPELINE_MAX_RETRIES,
+    FEEDBACK_PIPELINE_RETRY_LOG_TITLE,
+    FEEDBACK_PIPELINE_DLQ_LOG_TITLE,
 )
 from tap_lms.summer_program.state_machine import (
     get_active_pe,
@@ -143,6 +146,7 @@ def save_submission(student_id, submission_type=None, media_url=None,
             response_text=response_text,
             submission_type=submission_type,
             pe_context=pe_context,
+            retry_count=0,
         )
 
     # ── Apply state transition ──────────────────────────────
@@ -474,7 +478,7 @@ def _resolve_student(identifier):
 
 
 def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
-                                  submission_type, pe_context):
+                                  submission_type, pe_context, retry_count=0):
     """
     Upload media to GCS (if applicable) and publish enriched payload to RabbitMQ.
 
@@ -486,6 +490,25 @@ def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
     submission_type to select the right rubric and feedback tone.
 
     Called for ALL primary submissions (media and text/emoji).
+
+    Retry policy (pattern P-007 / lesson L-015):
+      - On exception, re-enqueue self with retry_count+1 until FEEDBACK_PIPELINE_MAX_RETRIES.
+      - When retry budget is exhausted, log a DLQ entry with structured JSON so the
+        submission can be replayed manually. Payload includes submission_id, student_id,
+        media_url, response_text, submission_type, the pe_context, the final error, and
+        the retry count.
+      - Double-fault path (enqueue itself fails) writes directly to DLQ with
+        reason=double_fault_enqueue_failed.
+
+    Idempotency:
+      - GCS upload is idempotent on retry: if ImgSubmission.img_url is already
+        set to a GCS URL (i.e., a previous attempt's upload succeeded), skip the
+        re-upload. Without this, retries upload the same file N times and the
+        Glific media_url could 404 on second attempt anyway.
+
+    Known limitation (shared with G3): retries are IMMEDIATE (no backoff). For
+    sustained broker outages > ~30s, all retries fire within milliseconds and
+    DLQ. Proper exponential backoff is tracked in the G3 follow-up task.
     """
     try:
         from tap_lms.imgana.submission import get_rabbitmq_settings
@@ -493,12 +516,21 @@ def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
 
         gcs_url = None
 
-        # 1. Upload media to GCS (only if there's a media URL)
+        # 1. Upload media to GCS (only if there's a media URL).
+        # Idempotent: if a previous attempt already uploaded successfully,
+        # ImgSubmission.img_url will be a GCS path — skip re-upload.
         if media_url:
-            from tap_lms.imgana.submission import upload_to_gcs
-            gcs_url = upload_to_gcs(media_url, img_sub_name)
-            if gcs_url:
-                frappe.db.set_value("ImgSubmission", img_sub_name, "img_url", gcs_url)
+            existing_url = frappe.db.get_value(
+                "ImgSubmission", img_sub_name, "img_url"
+            )
+            if existing_url and existing_url != media_url:
+                # Previous attempt's GCS upload succeeded — reuse.
+                gcs_url = existing_url
+            else:
+                from tap_lms.imgana.submission import upload_to_gcs
+                gcs_url = upload_to_gcs(media_url, img_sub_name)
+                if gcs_url:
+                    frappe.db.set_value("ImgSubmission", img_sub_name, "img_url", gcs_url)
 
         # 2. Build enriched payload for feedback generation
         assign_id = frappe.db.get_value(
@@ -532,7 +564,22 @@ def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
             "created_at": str(now_datetime()),
         }
 
-        # 3. Publish to RabbitMQ
+        # 3. Publish to RabbitMQ with durability guarantees:
+        #    - Publisher confirms: basic_publish raises if the broker doesn't
+        #      durably accept the message (UnroutableError / NackError).
+        #      Without this, a TCP-successful publish does NOT mean the broker
+        #      has the message — broker can crash between accept and disk write
+        #      and the publisher would never know. G4's retry only fires if an
+        #      exception is raised, so confirms are what make G4 actually
+        #      protect against broker failure (not just connection failure).
+        #    - delivery_mode=2 (PERSISTENT): broker writes message to disk
+        #      before acknowledging. Without this, durable queue retains its
+        #      DEFINITION across restart but NOT its contents — messages held
+        #      in RAM only and dropped on every broker restart (including
+        #      routine maintenance).
+        #    - mandatory=True: broker returns unroutable messages instead of
+        #      silently dropping them. Pika converts to UnroutableError →
+        #      caught by G4 retry path.
         rabbitmq_config = get_rabbitmq_settings()
         credentials = pika.PlainCredentials(
             rabbitmq_config['username'],
@@ -544,32 +591,128 @@ def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
             rabbitmq_config['virtual_host'],
             credentials,
         )
-        connection = pika.BlockingConnection(parameters)
-        channel = connection.channel()
 
+        # Wrap the entire pika lifecycle in try/finally so a publish failure
+        # doesn't leak the broker connection, and a post-publish close error
+        # doesn't bubble up to the outer retry path (which would cause the
+        # already-confirmed message to be republished — duplicate).
+        publish_succeeded = False
+        connection = None
         try:
-            channel.queue_declare(
-                queue=rabbitmq_config['queue'], durable=True, passive=True,
-            )
-        except Exception:
+            connection = pika.BlockingConnection(parameters)
+            channel = connection.channel()
+            # Enable publisher confirms BEFORE any publish. In BlockingConnection
+            # mode, basic_publish blocks until the broker confirms (ack/nack).
+            channel.confirm_delivery()
+
+            # Idempotent declare: matches existing queue if present, creates if
+            # not. We deliberately don't use passive=True — a passive declare
+            # on a missing queue closes the channel, which then can't be reused
+            # for the fallback declare. If queue parameters mismatch (e.g.
+            # durable toggled), broker raises ChannelPreconditionFailed →
+            # caught by G4 → surfaces in DLQ with the mismatch error.
             channel.queue_declare(
                 queue=rabbitmq_config['queue'], durable=True,
             )
 
-        channel.basic_publish(
-            exchange='',
-            routing_key=rabbitmq_config['queue'],
-            body=json.dumps(payload),
-        )
-        connection.close()
+            channel.basic_publish(
+                exchange='',
+                routing_key=rabbitmq_config['queue'],
+                body=json.dumps(payload, default=str),
+                properties=pika.BasicProperties(
+                    delivery_mode=2,  # PERSISTENT — survives broker restart
+                    content_type='application/json',
+                ),
+                mandatory=True,  # surface unroutable messages to publisher
+            )
+            publish_succeeded = True
+        finally:
+            # Always close the connection — even after publish failure — so we
+            # don't leak TCP sockets / file descriptors during sustained broker
+            # outages. Swallow close errors regardless of publish outcome:
+            #  - publish failed: the original exception is propagating; we
+            #    must not let a close error mask it.
+            #  - publish succeeded: a close error must NOT trigger the outer
+            #    retry, because the message is already durably accepted by the
+            #    broker — retrying would duplicate.
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception as close_err:
+                    frappe.logger("submission").warning(
+                        f"RabbitMQ close failed for {img_sub_name} "
+                        f"(publish_succeeded={publish_succeeded}): {close_err}"
+                    )
 
-        frappe.logger("submission").info(
-            f"Enqueued SP submission {img_sub_name} for feedback"
-        )
+        # Only log success when the publish itself was confirmed.
+        if publish_succeeded:
+            frappe.logger("submission").info(
+                f"Enqueued SP submission {img_sub_name} for feedback"
+            )
 
     except Exception as e:
-        # Don't fail the submission if pipeline errors — log and continue
-        frappe.log_error(
-            f"Feedback pipeline error for {img_sub_name}: {str(e)}",
-            "SP Feedback Pipeline",
-        )
+        student_id = pe_context.get("student", "") if pe_context else ""
+        retry_count = (retry_count or 0) + 1
+
+        if retry_count <= FEEDBACK_PIPELINE_MAX_RETRIES:
+            frappe.log_error(
+                title=FEEDBACK_PIPELINE_RETRY_LOG_TITLE,
+                message=(
+                    f"Feedback pipeline transient failure "
+                    f"(attempt {retry_count}/{FEEDBACK_PIPELINE_MAX_RETRIES + 1}) "
+                    f"for submission {img_sub_name} "
+                    f"(student={student_id or 'unknown'}): {e}"
+                ),
+            )
+            try:
+                frappe.enqueue(
+                    "tap_lms.summer_program.save_submission._enqueue_to_feedback_pipeline",
+                    queue="default",
+                    timeout=120,
+                    img_sub_name=img_sub_name,
+                    media_url=media_url,
+                    response_text=response_text,
+                    submission_type=submission_type,
+                    pe_context=pe_context,
+                    retry_count=retry_count,
+                )
+            except Exception as enqueue_err:
+                # Double-fault: broker down AND queue infrastructure down.
+                # Surface the submission to DLQ immediately so it isn't lost.
+                frappe.log_error(
+                    title=FEEDBACK_PIPELINE_DLQ_LOG_TITLE,
+                    message=json.dumps(
+                        {
+                            "reason": "double_fault_enqueue_failed",
+                            "submission_id": img_sub_name,
+                            "student_id": student_id,
+                            "media_url": media_url,
+                            "response_text": response_text,
+                            "submission_type": submission_type,
+                            "pe_context": pe_context,
+                            "final_error": str(e),
+                            "enqueue_error": str(enqueue_err),
+                            "retries_attempted": retry_count,
+                        },
+                        indent=2,
+                        default=str,
+                    ),
+                )
+        else:
+            frappe.log_error(
+                title=FEEDBACK_PIPELINE_DLQ_LOG_TITLE,
+                message=json.dumps(
+                    {
+                        "submission_id": img_sub_name,
+                        "student_id": student_id,
+                        "media_url": media_url,
+                        "response_text": response_text,
+                        "submission_type": submission_type,
+                        "pe_context": pe_context,
+                        "final_error": str(e),
+                        "retries_attempted": retry_count,
+                    },
+                    indent=2,
+                    default=str,
+                ),
+            )

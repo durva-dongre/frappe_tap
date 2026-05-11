@@ -38,6 +38,7 @@ from tap_lms.summer_program.constants import (
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
     CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
+    GLIFIC_SYNC_MAX_RETRIES, GLIFIC_SYNC_RETRY_LOG_TITLE, GLIFIC_SYNC_DLQ_LOG_TITLE,
     TIER_BY_WEEK, DEFAULT_TIER,
 )
 from tap_lms.summer_program.event_log import log_event, log_state_transition
@@ -113,23 +114,108 @@ def _enqueue_contact_field_sync(pe):
         glific_id=str(pe.glific_id),
         fields=fields,
         pe_name=pe.name,
+        retry_count=0,
+        student_id=pe.student,
     )
 
 
-def _sync_contact_fields_job(glific_id, fields, pe_name):
+def _sync_contact_fields_job(glific_id, fields, pe_name, retry_count=0, student_id=None):
     """
     Background job: push PE state to Glific contact fields.
 
-    Called via frappe.enqueue from _enqueue_contact_field_sync.
-    Uses the single-call update_contact_fields mutation.
+    Called via frappe.enqueue from _enqueue_contact_field_sync and the three
+    enrollment paths. Uses the single-call update_contact_fields mutation.
+
+    Args:
+        glific_id: Glific contact ID — required to address the contact.
+        fields: dict of contact field name → string value (already serialized).
+        pe_name: ProgramEnrollment.name when available, OR a synthetic id like
+                 "pre-pe:<student_id>" during the pre-PE enrollment chunk path.
+                 Used for log correlation; do NOT assume it's resolvable via
+                 frappe.get_doc("ProgramEnrollment", pe_name).
+        retry_count: Current retry attempt (0 on first call). Re-enqueues
+                     increment this; jobs exhausting GLIFIC_SYNC_MAX_RETRIES
+                     attempts land in the DLQ.
+        student_id: Optional Student document name. Always populated for
+                    operator replay so the DLQ entry is actionable even when
+                    pe_name is a synthetic "pre-pe:..." string. None for legacy
+                    in-flight messages (backward-compat).
+
+    Retry policy (pattern P-007 / lesson L-015):
+      - On exception, re-enqueue self with retry_count+1 until GLIFIC_SYNC_MAX_RETRIES.
+      - When the retry budget is exhausted, log a structured DLQ entry so operators
+        can replay manually. The DLQ payload includes student_id, pe_name, glific_id,
+        the fields dict, the final error, and the retry count.
+
+    Known limitation (filed as follow-up): retries are IMMEDIATE (no backoff).
+    For sustained Glific outages > ~30 seconds, all 5 retries fire within
+    milliseconds and the job DLQs. A proper exponential-backoff scheduler is
+    deferred to a follow-up task. Bumping MAX_RETRIES to 5 (from the originally
+    proposed 3) covers short Glific 502/503 blips and Redis hiccups while keeping
+    this revision minimal.
     """
     try:
         update_contact_fields(glific_id, fields)
     except Exception as e:
-        frappe.log_error(
-            f"Glific sync error for PE {pe_name}: {str(e)}",
-            "SP State Machine Glific Sync",
-        )
+        retry_count = (retry_count or 0) + 1
+        if retry_count <= GLIFIC_SYNC_MAX_RETRIES:
+            frappe.log_error(
+                title=GLIFIC_SYNC_RETRY_LOG_TITLE,
+                message=(
+                    f"Glific sync transient failure "
+                    f"(attempt {retry_count}/{GLIFIC_SYNC_MAX_RETRIES + 1}) "
+                    f"for PE {pe_name} (student={student_id or 'unknown'}): {e}"
+                ),
+            )
+            try:
+                frappe.enqueue(
+                    "tap_lms.summer_program.state_machine._sync_contact_fields_job",
+                    queue="short",
+                    timeout=30,
+                    glific_id=glific_id,
+                    fields=fields,
+                    pe_name=pe_name,
+                    retry_count=retry_count,
+                    student_id=student_id,
+                )
+            except Exception as enqueue_err:
+                # Double-fault: queue itself is unhealthy. Surface to DLQ
+                # immediately so the update isn't lost.
+                import json as _json
+                frappe.log_error(
+                    title=GLIFIC_SYNC_DLQ_LOG_TITLE,
+                    message=_json.dumps(
+                        {
+                            "reason": "double_fault_enqueue_failed",
+                            "student_id": student_id,
+                            "pe_name": pe_name,
+                            "glific_id": glific_id,
+                            "fields": fields,
+                            "final_error": str(e),
+                            "enqueue_error": str(enqueue_err),
+                            "retries_attempted": retry_count,
+                        },
+                        indent=2,
+                        default=str,
+                    ),
+                )
+        else:
+            import json as _json
+            frappe.log_error(
+                title=GLIFIC_SYNC_DLQ_LOG_TITLE,
+                message=_json.dumps(
+                    {
+                        "student_id": student_id,
+                        "pe_name": pe_name,
+                        "glific_id": glific_id,
+                        "fields": fields,
+                        "final_error": str(e),
+                        "retries_attempted": retry_count,
+                    },
+                    indent=2,
+                    default=str,
+                ),
+            )
 
 
 # ════════════════════════════════════════════════════════════
