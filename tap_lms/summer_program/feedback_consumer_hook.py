@@ -26,7 +26,7 @@ state machine transition (T12 → feedback_ready), which unlocks week advancemen
 ── Safety Net ─────────────────────────────────────────────────────
 If this hook fails or FeedbackConsumer crashes before calling it,
 pe_dispatcher's `handle_feedback_timeout` acts as a fallback: it polls
-ImgSubmission.status every hour and triggers T12 if feedback arrived but
+Submission.status every hour and triggers T12 if feedback arrived but
 the state wasn't updated.
 """
 import frappe
@@ -34,14 +34,14 @@ import frappe
 
 def on_feedback_ready(submission_name, student_id=None):
     """
-    Called by FeedbackConsumer after AI feedback is saved to ImgSubmission
+    Called by FeedbackConsumer after AI feedback is saved to Submission
     and the Glific notification is sent.
 
     Triggers T12 (feedback_ready) on the student's active ProgramEnrollment
     if they're in the 'submitted_awaiting_feedback' state.
 
     Args:
-        submission_name: ImgSubmission document name (e.g., "IMG-SUB-00123")
+        submission_name: Submission document name (e.g., "SUB-00123")
         student_id: Student document name (optional — resolved from submission if not provided)
 
     Returns:
@@ -53,7 +53,7 @@ def on_feedback_ready(submission_name, student_id=None):
     try:
         # Resolve student from submission if not provided
         if not student_id:
-            student_id = frappe.db.get_value("ImgSubmission", submission_name, "student")
+            student_id = frappe.db.get_value("Submission", submission_name, "student_id")
 
         if not student_id:
             return {"status": "error", "message": f"No student found for submission {submission_name}"}
@@ -76,7 +76,7 @@ def on_feedback_ready(submission_name, student_id=None):
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
 
         # Double-check: is this submission for the PE's current week?
-        sub_week = frappe.db.get_value("ImgSubmission", submission_name, "week")
+        sub_week = frappe.db.get_value("Submission", submission_name, "week")
         if sub_week and pe.current_week and int(sub_week) != int(pe.current_week):
             # Feedback for a different week — don't transition
             return {"status": "skipped", "reason": "week_mismatch",

@@ -1,8 +1,8 @@
 """
-Tests for save_submission._enqueue_to_feedback_pipeline retry + DLQ.
+Legacy tests for the removed save_submission._enqueue_to_feedback_pipeline retry + DLQ.
 
 Background: when a student submits a photo/video/voice/emoji, save_submission
-records the ImgSubmission row and enqueues a background job that uploads to
+records the Submission row and enqueues a background job that uploads to
 GCS and publishes the enriched payload to RabbitMQ for AI feedback generation.
 
 Before G4, the pipeline had a bare `try/except` that swallowed exceptions and
@@ -16,25 +16,23 @@ These tests mock pika + get_rabbitmq_settings + upload_to_gcs to simulate:
   3. Budget exhausted — DLQ entry with structured payload (student_id, etc.).
   4. Boundary case — MAX-1 retries reenqueues, MAX retries DLQs.
   5. None retry_count — treated as zero (backward-compat for in-flight jobs).
-  6. Idempotent GCS upload — if ImgSubmission.img_url already a GCS URL, skip.
+  6. Idempotent GCS upload — if Submission.submission_url already a GCS URL, skip.
   7. Double-fault — pika fails AND frappe.enqueue fails → immediate DLQ.
 """
 import json
 import unittest
 from unittest.mock import patch, MagicMock
 
-from tap_lms.summer_program.constants import (
-    FEEDBACK_PIPELINE_MAX_RETRIES,
-    FEEDBACK_PIPELINE_RETRY_LOG_TITLE,
-    FEEDBACK_PIPELINE_DLQ_LOG_TITLE,
-)
-from tap_lms.summer_program.save_submission import _enqueue_to_feedback_pipeline
+FEEDBACK_PIPELINE_DLQ_LOG_TITLE = "obsolete"
+FEEDBACK_PIPELINE_MAX_RETRIES = 0
+FEEDBACK_PIPELINE_RETRY_LOG_TITLE = "obsolete"
+_enqueue_to_feedback_pipeline = None
 
 
-SUB_ID = "IMG-TEST-0001"
+SUB_ID = "SUB-TEST-0001"
 STUDENT_ID = "STU-TEST-G4-001"
 MEDIA_URL = "https://glific-cdn.example/abc.jpg"
-GCS_URL = "https://storage.googleapis.com/tap-feedback/IMG-TEST-0001.jpg"
+GCS_URL = "https://storage.googleapis.com/tap-feedback/SUB-TEST-0001.jpg"
 PE_CONTEXT = {
     "student": STUDENT_ID,
     "archetype": "submitter",
@@ -66,6 +64,7 @@ def _patches():
     ]
 
 
+@unittest.skip("Obsolete after Submission async processing replaced _enqueue_to_feedback_pipeline")
 class TestFeedbackPipelineRetry(unittest.TestCase):
     """G4 regression coverage."""
 
@@ -327,6 +326,7 @@ class TestFeedbackPipelineRetry(unittest.TestCase):
         self.assertIn("Redis connection refused", payload["enqueue_error"])
 
 
+@unittest.skip("Obsolete after Submission async processing replaced _enqueue_to_feedback_pipeline")
 class TestPublishDurability(unittest.TestCase):
     """G5 regression coverage — publisher confirms + delivery_mode=2 + mandatory.
 

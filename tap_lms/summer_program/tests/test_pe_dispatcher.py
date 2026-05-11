@@ -394,7 +394,7 @@ class TestPeDispatcherHandlers(FrappeTestCase):
             frappe.delete_doc("ProgramEnrollment", pe, force=True)
 
     def test_handle_feedback_timeout_fallback_calls_t12_when_feedback_present(self):
-        """When handle_feedback_timeout fires and the AI feedback ImgSubmission
+        """When handle_feedback_timeout fires and the AI feedback Submission
         is found (consumer succeeded but somehow didn't move PE state), the
         handler invokes t12_feedback_ready as a fallback transition. T12 is
         what wires up F5 on Glific via the consumer's notification path —
@@ -423,8 +423,8 @@ class TestPeDispatcherHandlers(FrappeTestCase):
         original_exists = frappe.db.exists
 
         def fake_exists(*args, **kwargs):
-            if args and args[0] == "ImgSubmission":
-                return "FAKE-IMG-001"
+            if args and args[0] == "Submission":
+                return "FAKE-SUB-001"
             return original_exists(*args, **kwargs)
 
         with patch.object(frappe.db, "exists", side_effect=fake_exists), \
