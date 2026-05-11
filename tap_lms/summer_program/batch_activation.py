@@ -28,6 +28,13 @@ from tap_lms.summer_program.constants import (
 from tap_lms.summer_program.utils import staggered_action_time
 
 
+# Chunk size for the bulk UPDATE in _seed_pe_actions. At 5000 PEs per chunk,
+# the bulk UPDATE binds 1 + 2*5000 = 10001 params per query. Postgres's
+# protocol parameter limit is 65535, so we have ~6.5x headroom. Do NOT raise
+# this past ~30000 without revisiting that limit.
+_SEED_CHUNK_SIZE = 5000
+
+
 @frappe.whitelist()
 def validate_bpr(bpr_name):
     """
@@ -227,23 +234,55 @@ def _seed_pe_actions(bpr, batch):
     if not pe_list:
         return 0
 
-    # Bulk update with staggered times (batch SQL for performance at 100K scale)
-    # Process in chunks of 5000 to avoid memory issues
-    CHUNK = 5000
+    # Bulk update with staggered times. Single UPDATE per chunk using the
+    # Postgres VALUES pattern — at 100K students, the prior per-row set_value
+    # loop produced ~200K DB queries (SELECT+UPDATE per PE); this produces
+    # ~20 queries (one per 5000-row chunk).
+    #
+    # Why VALUES instead of CASE WHEN: each PE gets a deterministic per-name
+    # jitter (via staggered_action_time), so we can't use a single SET expression.
+    # VALUES lets us push the precomputed (pe_name, action_time) pairs to the DB
+    # in one round-trip.
+    #
+    # Postgres-only syntax — see lessons.md (project is Postgres, not MariaDB).
+    # We intentionally do NOT cast `v.action_time::timestamp` — Frappe's PG
+    # driver binds Python datetime as a native timestamp value, so an explicit
+    # cast is redundant and risks parse errors when the binding already-typed.
+    # Real-DB execution against PG is the source of truth here; the unit tests
+    # below assert structure, and bench run-tests catches any binding issue.
     seeded = 0
 
-    for i in range(0, len(pe_list), CHUNK):
-        chunk = pe_list[i:i + CHUNK]
-        for pe_row in chunk:
-            action_time = staggered_action_time(base_time, pe_row.name, window_minutes=30)
-            frappe.db.set_value(
-                "ProgramEnrollment", pe_row.name,
-                {
-                    "next_action_at": action_time,
-                    "next_action_type": ACTION_CONTENT_DELIVERY,
-                },
-                update_modified=False,
-            )
+    for i in range(0, len(pe_list), _SEED_CHUNK_SIZE):
+        chunk = pe_list[i:i + _SEED_CHUNK_SIZE]
+
+        # Precompute the (name, time) tuples for this chunk.
+        rows = [
+            (pe_row.name, staggered_action_time(base_time, pe_row.name, window_minutes=30))
+            for pe_row in chunk
+        ]
+
+        # Build the VALUES literal: "(%s, %s), (%s, %s), ..." and a flat
+        # parameter list [name1, time1, name2, time2, ...].
+        values_sql = ", ".join(["(%s, %s)"] * len(rows))
+        flat_params = [item for row in rows for item in row]
+
+        # Single UPDATE per chunk. The action_type is constant; passed first.
+        # Idempotency guard: the WHERE clause re-checks `next_action_at IS NULL`
+        # so that if two activations race (manual click vs. scheduler, retry-on-
+        # timeout, etc.) the second run only touches PEs the first one missed.
+        # Without this, a re-entrant call would scramble jitter on already-
+        # seeded PEs.
+        frappe.db.sql(
+            f"""
+            UPDATE `tabProgramEnrollment` AS pe
+               SET next_action_at = v.action_time,
+                   next_action_type = %s
+              FROM (VALUES {values_sql}) AS v(name, action_time)
+             WHERE pe.name = v.name
+               AND pe.next_action_at IS NULL
+            """,
+            [ACTION_CONTENT_DELIVERY] + flat_params,
+        )
         frappe.db.commit()
         seeded += len(chunk)
 

@@ -1499,8 +1499,15 @@ def _get_archetype_config(batch_name, arm, archetype, path):
         return None
 
     config = frappe.get_doc("ArchetypeConfig", config_name)
-    # Cache for 5 minutes
-    frappe.cache().set_value(cache_key, config, expires_in_sec=300)
+    # Cache for 1 hour. ArchetypeConfig is essentially static admin-controlled
+    # configuration (escalation timings, archetype rules per batch/arm/path).
+    # At 100K students × per-tick dispatcher reads, the 5-minute TTL that was
+    # here originally caused ~12x more DB hits than necessary for data that
+    # rarely changes. Trade-off: after an admin edits an ArchetypeConfig row,
+    # workers may use stale config for up to 1 hour. If that becomes a problem,
+    # add an on_update hook on ArchetypeConfig that invalidates the cache key
+    # for the affected (batch, arm, archetype, path) combination.
+    frappe.cache().set_value(cache_key, config, expires_in_sec=3600)
     return config
 
 

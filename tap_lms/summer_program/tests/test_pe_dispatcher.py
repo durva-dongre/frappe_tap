@@ -107,11 +107,17 @@ def _make_pe(
     submission_count=0,
     current_path=PATH_CORE,
     grace_window_start=None,
-    feedback_retry_count=0,
     re_engagement_count=0,
     delivery_failure_count=0,
 ):
-    """Insert a ProgramEnrollment with the fields needed for dispatcher tests."""
+    """Insert a ProgramEnrollment with the fields needed for dispatcher tests.
+
+    Note: `feedback_retry_count` is intentionally NOT a kwarg here. Task #11
+    was closed without adding that field — production schema only has
+    `delivery_failure_count` (used by handle_feedback_timeout as the retry
+    counter). If you need a feedback-specific counter later, file it tied to
+    the watchdog feature that actually consumes it (task #56).
+    """
     pe = frappe.new_doc("ProgramEnrollment")
     pe.enrollment = f"PE-DISP-{enrollment_suffix}-{frappe.utils.random_string(6)}"
     pe.student = student_name
@@ -130,18 +136,17 @@ def _make_pe(
         pe.grace_window_start = grace_window_start
     pe.insert(ignore_permissions=True)
 
-    # Set fields the tests examine but the doctype may not have a default for.
-    # Use raw UPDATE so we don't trip controllers and we exercise the same
-    # SQL path the production COALESCE-update does.
+    # Set counter fields the tests examine. Raw UPDATE so we don't trip
+    # controllers and we exercise the same SQL path the production
+    # COALESCE-update does.
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET feedback_retry_count = %s,
-               re_engagement_count = %s,
+           SET re_engagement_count = %s,
                delivery_failure_count = %s
          WHERE name = %s
         """,
-        (feedback_retry_count, re_engagement_count, delivery_failure_count, pe.name),
+        (re_engagement_count, delivery_failure_count, pe.name),
     )
     return pe.name
 
@@ -388,12 +393,16 @@ class TestPeDispatcherHandlers(FrappeTestCase):
         ):
             frappe.delete_doc("ProgramEnrollment", pe, force=True)
 
-    def test_handle_feedback_notification_fires_F5(self):
-        """T12 routes feedback_notification through the FeedbackConsumer's flow
-        lookup, but the dispatcher's handle_feedback_timeout fallback path
-        should call t12_feedback_ready when the AI feedback ImgSubmission row
-        appears. This test verifies the timeout-fallback branch invokes the
-        T12 transition (which is what wires up F5 on Glific)."""
+    def test_handle_feedback_timeout_fallback_calls_t12_when_feedback_present(self):
+        """When handle_feedback_timeout fires and the AI feedback ImgSubmission
+        is found (consumer succeeded but somehow didn't move PE state), the
+        handler invokes t12_feedback_ready as a fallback transition. T12 is
+        what wires up F5 on Glific via the consumer's notification path —
+        the handler itself does NOT call Glific directly.
+
+        Replaces the prior `test_handle_feedback_notification_fires_F5` which
+        had a misleading name (asserted F5 was NOT fired) and tested the same
+        codepath. See task #55."""
         from tap_lms.summer_program import pe_dispatcher
 
         s = _ensure_student("41")
@@ -435,8 +444,12 @@ class TestPeDispatcherHandlers(FrappeTestCase):
 
     def test_handle_feedback_timeout_increments_count_atomically(self):
         """Calling handle_feedback_timeout twice in sequence (no AI feedback yet)
-        must result in feedback_retry_count == 2. Pattern P-002 guards against
-        the read-then-write race that would otherwise lose one increment."""
+        must result in delivery_failure_count == 2.
+
+        Pattern P-002 guards against the read-then-write race that would
+        otherwise lose one increment. The handler uses delivery_failure_count
+        (not a separate feedback_retry_count — task #11 was closed, see
+        _make_pe docstring)."""
         from tap_lms.summer_program import pe_dispatcher
 
         s = _ensure_student("51")
@@ -449,7 +462,7 @@ class TestPeDispatcherHandlers(FrappeTestCase):
             journey_label=LABEL_SUBMITTED,
             enrollment_suffix="FT2",
             glific_id="glific-disp-FT2",
-            feedback_retry_count=0,
+            delivery_failure_count=0,
         )
 
         # Make sure the handler thinks no feedback row exists, so we hit the
@@ -465,7 +478,7 @@ class TestPeDispatcherHandlers(FrappeTestCase):
             pe_dispatcher.handle_feedback_timeout(row)
 
         new_count = frappe.db.get_value(
-            "ProgramEnrollment", pe_name, "feedback_retry_count"
+            "ProgramEnrollment", pe_name, "delivery_failure_count"
         )
         self.assertEqual(new_count, 2)
 
@@ -600,6 +613,77 @@ class TestPeDispatcherHandlers(FrappeTestCase):
             "Batch", self.batch_name, "current_calendar_week", 1,
             update_modified=False,
         )
+
+    def test_handle_grace_check_calls_t18_when_still_in_grace(self):
+        """A PE whose grace_check timer fires while still in grace_waiting
+        must invoke t18_grace_expired. If the student submitted during grace
+        and moved out of the state, the handler should no-op (clear action,
+        skip transition).
+
+        This handler is the CR-001 entry point — currently t18 pauses the
+        student; per CR-001 it will route directly to program_dropped once
+        task #33 ships. Either way, the dispatcher's job is to invoke t18
+        when the timer fires, which is what this test locks in."""
+        from tap_lms.summer_program import pe_dispatcher
+        from tap_lms.summer_program.constants import ACTION_GRACE_CHECK
+
+        # Case 1: still in grace_waiting → t18 should fire
+        s = _ensure_student("71")
+        pe_name = _make_pe(
+            self.batch_name,
+            s,
+            add_to_date(now_datetime(), minutes=-1),
+            ACTION_GRACE_CHECK,
+            resolved_flow_state=STATE_GRACE_WAITING,
+            journey_label=LABEL_GRACE_WINDOW,
+            enrollment_suffix="GC1",
+            glific_id="glific-disp-GC1",
+            grace_window_start=add_to_date(now_datetime(), days=-14),
+        )
+
+        with patch(
+            "tap_lms.summer_program.state_machine.t18_grace_expired"
+        ) as fake_t18:
+            row = frappe._dict({
+                "name": pe_name,
+                "next_action_type": ACTION_GRACE_CHECK,
+                "journey_label": LABEL_GRACE_WINDOW,
+            })
+            pe_dispatcher.handle_grace_check(row)
+
+        self.assertEqual(fake_t18.call_count, 1)
+
+        # Case 2: state already moved (student submitted during grace) →
+        # handler should no-op
+        s2 = _ensure_student("72")
+        pe_name_2 = _make_pe(
+            self.batch_name,
+            s2,
+            add_to_date(now_datetime(), minutes=-1),
+            ACTION_GRACE_CHECK,
+            resolved_flow_state=STATE_SUBMITTED_AWAITING,  # already moved
+            journey_label=LABEL_SUBMITTED,
+            enrollment_suffix="GC2",
+            glific_id="glific-disp-GC2",
+        )
+
+        with patch(
+            "tap_lms.summer_program.state_machine.t18_grace_expired"
+        ) as fake_t18_b:
+            row = frappe._dict({
+                "name": pe_name_2,
+                "next_action_type": ACTION_GRACE_CHECK,
+                "journey_label": LABEL_SUBMITTED,
+            })
+            pe_dispatcher.handle_grace_check(row)
+
+        # t18 NOT invoked — student is past the grace state
+        self.assertEqual(fake_t18_b.call_count, 0)
+        # And next_action was cleared (idempotency)
+        cleared = frappe.db.get_value(
+            "ProgramEnrollment", pe_name_2, "next_action_type"
+        )
+        self.assertEqual(cleared or "", "")
 
     def test_auto_activate_due_bprs_idempotent(self):
         """check_auto_activate run twice on the same BPR is a no-op the

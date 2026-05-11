@@ -18,7 +18,11 @@ Register in hooks.py:
         }
     }
 
-Feature-flagged: only processes batches where Batch.scheduler_mode = 'per_pe'.
+Scheduler partition: this dispatcher processes PEs whose next_action_type is
+an individual-timer action (feedback_timeout, grace_reminder, pause_check,
+etc.). Synchronous events shared across many students (content_delivery,
+week_advancement at batch start) are handled by collection-mode batchers
+when those exist. Partition is by next_action_type, not by Batch.
 """
 import frappe
 from frappe.utils import now_datetime, get_datetime, add_to_date
@@ -61,13 +65,19 @@ def dispatch_pending_actions():
     Finds all PEs where:
       - next_action_at <= now
       - program_status is active (not paused/completed/dropped)
-      - batch.scheduler_mode = 'per_pe' (feature flag)
+      - next_action_type is a per-PE individual-timer action
 
     Routes each PE to the appropriate handler based on next_action_type.
+
+    Note: there is no batch-level partition. Collection-mode batchers (when
+    built) filter on different next_action_type values; this dispatcher and
+    those batchers are partitioned by action type, not by Batch. See
+    architecture §8.
     """
     now = now_datetime()
 
-    # Query overdue PEs (only from per_pe-mode batches)
+    # Query overdue PEs. No JOIN to Batch needed — partition is by action type,
+    # not by batch-level feature flag.
     overdue_pes = frappe.db.sql(
         """
         SELECT pe.name, pe.next_action_type, pe.next_action_at,
@@ -75,12 +85,10 @@ def dispatch_pending_actions():
                pe.resolved_flow_state, pe.current_week,
                pe.last_escalation_step, pe.current_path
         FROM `tabProgramEnrollment` pe
-        JOIN `tabBatch` b ON b.name = pe.batch
         WHERE pe.next_action_at IS NOT NULL
           AND pe.next_action_at <= %s
           AND pe.program_status = %s
           AND pe.next_action_type != ''
-          AND COALESCE(b.scheduler_mode, 'per_pe') = 'per_pe'
         ORDER BY pe.next_action_at ASC
         LIMIT %s
         """,
