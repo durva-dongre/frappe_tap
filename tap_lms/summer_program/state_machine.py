@@ -286,10 +286,19 @@ def t11_remedial_to_grace(pe, trigger_source="scheduler"):
 
 # ── T12: AI feedback generated ──────────────────────────
 def t12_feedback_ready(pe, trigger_source="microservice"):
-    """T12: submitted_awaiting_feedback → feedback_ready."""
+    """T12: submitted_awaiting_feedback → feedback_ready.
+
+    FeedbackConsumer handles the Glific notification directly (label="feedback").
+    When that Glific flow completes, the flow callback triggers T13
+    (feedback_ready → week_completed → week_advancement).
+
+    No dispatcher action is scheduled here — the Glific callback drives the
+    next transition. If the callback never fires, a manual check or admin
+    intervention is needed.
+    """
     return transition(pe, STATE_FEEDBACK_READY, trigger_source, {
-        "next_action_at": now_datetime(),
-        "next_action_type": ACTION_FEEDBACK_NOTIFICATION,
+        "next_action_at": None,
+        "next_action_type": "",
     })
 
 

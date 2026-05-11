@@ -500,7 +500,11 @@ def _trigger_flow(flow_id, glific_id, pe_name, action_label):
     from tap_lms.glific_integration import start_contact_flow
 
     try:
-        start_contact_flow(str(flow_id), str(glific_id))
+        default_results = {
+            "pe_name": pe_name,
+            "action": action_label,
+        }
+        start_contact_flow(str(flow_id), str(glific_id), default_results)
     except Exception as e:
         frappe.log_error(
             f"Flow trigger error: PE={pe_name}, action={action_label}, "

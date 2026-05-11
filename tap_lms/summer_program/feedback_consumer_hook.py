@@ -83,8 +83,9 @@ def on_feedback_ready(submission_name, student_id=None):
                     "sub_week": sub_week, "pe_week": pe.current_week}
 
         # Transition: submitted_awaiting_feedback → feedback_ready
+        # NOTE: Do NOT commit here — let the caller (FeedbackConsumer.process_message)
+        # handle the commit so that submission update + state transition are atomic.
         t12_feedback_ready(pe, trigger_source="feedback_consumer")
-        frappe.db.commit()
 
         return {"status": "transitioned", "pe": pe_name}
 
