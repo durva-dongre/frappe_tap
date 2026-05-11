@@ -37,7 +37,7 @@ from tap_lms.summer_program.event_log import log_event
 URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 
 
-@frappe.whitelist(allow_guest=False)
+@frappe.whitelist(allow_guest=True)
 def save_submission(student_id, assignment_id, submission, week=None):
     """
     API A3: save_submission
