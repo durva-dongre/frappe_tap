@@ -38,9 +38,7 @@ URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 
 
 @frappe.whitelist(allow_guest=False)
-def save_submission(student_id, submission_type=None, media_url=None,
-                    response_text=None, week=None, assignment_id=None,
-                    submission=None):
+def save_submission(student_id, assignment_id, submission, week=None):
     """
     API A3: save_submission
 
@@ -48,15 +46,10 @@ def save_submission(student_id, submission_type=None, media_url=None,
 
     Args:
         student_id: Student name, glific_id, or phone
-        submission_type: emoji | text_word | voice_note | photo | video |
-                        photo_video_artefact | voice_note_text_summary
-                        If omitted, defaults to PE.current_expected_submission_type
-        media_url: URL of submitted media (photo/video/voice_note)
-        response_text: Text or emoji content submitted by the student.
-                       Used for emoji and text_word submission types.
-        week: Override week number (defaults to PE.current_week)
         assignment_id: Assignment ID from get_content_details API
                        (e.g. "B2_FL_L1_RA12-Basic")
+        submission: URL, text, or emoji submitted by the student
+        week: Override week number (defaults to PE.current_week)
 
     Returns:
         dict with: status (accepted|duplicate|rejected), is_primary,
@@ -87,9 +80,6 @@ def save_submission(student_id, submission_type=None, media_url=None,
     #   submission_url: media URL
     payload = _normalize_submission_payload(
         submission,
-        submission_type=submission_type,
-        media_url=media_url,
-        response_text=response_text,
         pe=pe,
     )
 
@@ -329,24 +319,13 @@ def _update_engagement(student_id):
 # SUBMISSION NORMALIZATION
 # ════════════════════════════════════════════════════════════
 
-def _normalize_submission_payload(
-    submission=None,
-    submission_type=None,
-    media_url=None,
-    response_text=None,
-    pe=None,
-):
+def _normalize_submission_payload(submission, pe=None):
     """
-    Normalize Pal and assessment-style inputs into the Submission schema.
-    """
-    if submission is None:
-        return _normalize_submission_parts(
-            submission_type=submission_type,
-            media_url=media_url,
-            response_text=response_text,
-            pe=pe,
-        )
+    Normalize a raw submission into the assessment Submission schema.
 
+    The PE is accepted so callers can normalize after resolving program context;
+    the submission type still comes only from the submitted value.
+    """
     if not isinstance(submission, str) or not submission.strip():
         frappe.throw("Submission is required")
 
@@ -354,47 +333,16 @@ def _normalize_submission_payload(
 
     if _looks_like_url(submission):
         return {
-            "submission_type": (
-                _to_assessment_submission_type(submission_type)
-                or _infer_url_submission_type(submission)
-            ),
+            "submission_type": _infer_url_submission_type(submission),
             "submission_text": None,
             "submission_url": submission,
         }
 
     return {
-        "submission_type": (
-            _to_assessment_submission_type(submission_type)
-            or ("emoji" if _contains_only_emoji(submission) else "text")
-        ),
+        "submission_type": "emoji" if _contains_only_emoji(submission) else "text",
         "submission_text": submission,
         "submission_url": None,
     }
-
-
-def _normalize_submission_parts(submission_type=None, media_url=None, response_text=None, pe=None):
-    if not media_url and not response_text:
-        frappe.throw("Submission is required")
-
-    normalized_type = _to_assessment_submission_type(submission_type)
-    if not normalized_type:
-        normalized_type = _infer_structured_submission_type(media_url, response_text, pe)
-
-    return {
-        "submission_type": normalized_type,
-        "submission_text": response_text.strip() if isinstance(response_text, str) else response_text,
-        "submission_url": media_url.strip() if isinstance(media_url, str) else media_url,
-    }
-
-
-def _infer_structured_submission_type(media_url=None, response_text=None, pe=None):
-    if media_url:
-        return _infer_url_submission_type(media_url)
-    if response_text:
-        return "emoji" if _contains_only_emoji(response_text) else "text"
-    return _to_assessment_submission_type(
-        getattr(pe, "current_expected_submission_type", None)
-    ) or "image"
 
 
 def _contains_only_emoji(submission):
