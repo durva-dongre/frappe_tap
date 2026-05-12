@@ -20,6 +20,8 @@ from frappe.utils import (
     add_days, add_to_date,
 )
 
+from tap_lms.summer_program.utils import glific_response
+
 
 def _time_diff_in_seconds(dt1, dt2):
     """Return the difference (dt1 - dt2) in seconds."""
@@ -55,6 +57,7 @@ SUBMISSION_GRACE_HOURS = 24
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
+@glific_response
 def get_weekly_content(student_id, course_level=None):
     """
     Get the current week's content for a Summer Program student.
@@ -195,6 +198,7 @@ def get_weekly_content(student_id, course_level=None):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
+@glific_response
 def get_next_content(student_id, course_level=None):
     """
     Get next content item for a Summer Program student.
@@ -523,6 +527,7 @@ def get_next_content(student_id, course_level=None):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
+@glific_response
 def get_content_details(content_type, content_id, language=None):
     """
     Get detailed information about a specific content item.
@@ -670,6 +675,7 @@ def get_content_details(content_type, content_id, language=None):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
+@glific_response
 def complete_content(student_id, course_level, content_type, content_id):
     """
     Mark non-quiz content as complete and advance to next item.
@@ -856,6 +862,7 @@ def _advance_to_next_content(progress_data, course_level):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
+@glific_response
 def start_quiz(student_id, course_level, quiz_id, language=None):
     """
     Begin a quiz attempt or resume an existing in-progress attempt.
@@ -1035,6 +1042,7 @@ def _resume_quiz(attempt, progress_data, language=None):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
+@glific_response
 def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=None):
     """
     Submit an answer for the current quiz question.

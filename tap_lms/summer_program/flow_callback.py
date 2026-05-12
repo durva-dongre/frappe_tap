@@ -47,7 +47,14 @@ from tap_lms.summer_program.event_log import log_event
 # immediate routing without waiting for the async contact-field sync.
 
 def _response(pe, action, **extras):
-    """Build a v3.0-compliant webhook response.
+    """Build a v3.0-compliant webhook response AND write it to frappe.local.response.
+
+    Per docs/api-standard-glific.md Rule 1, whitelisted endpoints consumed by
+    Glific write directly to local.response so Glific reads `@results.webhook.<field>`
+    without the Frappe `message.` envelope. This helper does the write AND
+    returns the dict so handlers can chain (`return _response(pe, "x")`) — the
+    outer whitelisted method still returns None (Frappe accepts that), but the
+    dict in local.response is what Glific sees.
 
     Always emits: success, action, resolved_flow_state, next_action_type,
     next_action_at, program_status. Additional fields can be passed as **extras.
@@ -61,6 +68,7 @@ def _response(pe, action, **extras):
         "program_status": pe.program_status or "",
     }
     base.update(extras)
+    frappe.local.response.update(base)
     return base
 
 
@@ -83,11 +91,19 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
     """
     student_id = _resolve_student(student_id)
     if not student_id:
-        return {"success": False, "error": "Student not found"}
+        frappe.local.response.update({
+            "success": False, "status": "not_found",
+            "error_detail": "Student not found",
+        })
+        return
 
     pe = get_active_pe(student_id)
     if not pe:
-        return {"success": False, "error": "No active ProgramEnrollment"}
+        frappe.local.response.update({
+            "success": False, "status": "no_active_enrollment",
+            "error_detail": "No active ProgramEnrollment",
+        })
+        return
 
     # Track the flow delivery
     pe.last_flow_triggered = flow_name
@@ -98,18 +114,19 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
               trigger_source="flow_callback",
               details={"flow_name": flow_name, "status": status})
 
-    # Route to the appropriate handler based on flow_name + status
+    # Route to the appropriate handler based on flow_name + status.
+    # Handlers call _response(...) which writes to frappe.local.response and
+    # returns the dict for convenience — we don't need the return value here.
     handler = _get_handler(flow_name, status)
     if handler:
-        result = handler(pe, flow_name, status, metadata or {})
+        handler(pe, flow_name, status, metadata or {})
         frappe.db.commit()
-        return result
+        return
 
     # Default: just acknowledge the callback
     pe.save(ignore_permissions=True)
     frappe.db.commit()
-
-    return _response(pe, "acknowledged", flow_name=flow_name, status=status)
+    _response(pe, "acknowledged", flow_name=flow_name, status=status)
 
 
 def _get_handler(flow_name, status):

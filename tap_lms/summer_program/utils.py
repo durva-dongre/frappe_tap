@@ -3,6 +3,7 @@ Shared utility helpers for the Summer Program module.
 tap_lms/summer_program/utils.py
 """
 import frappe
+import functools
 import hashlib
 from datetime import timedelta
 from frappe.utils import now_datetime, get_datetime
@@ -65,6 +66,44 @@ def _safe_get(obj, attr):
     if isinstance(obj, dict):
         return obj.get(attr)
     return getattr(obj, attr, None)
+
+
+def glific_response(fn):
+    """Decorator that writes a whitelisted endpoint's return dict directly to
+    `frappe.local.response`, bypassing the Frappe `message` envelope.
+
+    Per docs/api-standard-glific.md Rule 1: Glific consumes flat top-level
+    keys (`@results.webhook.<field>`), not the `@results.webhook.message.<field>`
+    pattern Frappe defaults to. Apply this decorator INSIDE `@frappe.whitelist`:
+
+        @frappe.whitelist(allow_guest=False)
+        @glific_response
+        def my_endpoint(...):
+            return {"success": True, "status": "ok", "field": "value"}
+
+    The endpoint keeps its natural `return {dict}` style. The decorator
+    intercepts the return value, writes it to `frappe.local.response`, and
+    returns None — Frappe then sets `response.message = None` (a single null
+    field Glific ignores). All other keys are at the top level.
+
+    If the function returns None (or falsy), the decorator is a no-op — the
+    function is expected to have written to `frappe.local.response` directly.
+
+    Note: `frappe` is the module-level import at the top of utils.py — NOT
+    re-imported inside this function. That matters for tests: patches against
+    `tap_lms.summer_program.utils.frappe` need to actually shadow the binding
+    the wrapper uses, and module-attribute lookup (via `utils.__dict__`) IS
+    what `unittest.mock.patch` replaces. A local `import frappe` here would
+    create a closure cell that the patch couldn't reach.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        payload = fn(*args, **kwargs)
+        if payload:
+            frappe.local.response.update(payload)
+        # Return None — Frappe sets response.message = None (Glific ignores)
+
+    return wrapper
 
 
 def staggered_action_time(base_time, pe_name, window_minutes=30):

@@ -523,18 +523,19 @@ def get_student_state(student_id):
     Fallback API when Glific contact fields may be stale.
     Returns current PE state as a single SELECT by student_id.
 
-    Called by SP_Incoming_Router as fallback if contact fields
-    seem inconsistent.
+    Called by SP_Incoming_Router as fallback if contact fields seem
+    inconsistent.
 
-    Args:
-        student_id: Student name, glific_id, or phone
-
-    Returns:
-        dict with current PE state fields
+    Response (via frappe.local.response per docs/api-standard-glific.md Rule 1):
+        Flat dict with `success` + `status` + PE fields. Does NOT return.
     """
     student_id = _resolve_student(student_id)
     if not student_id:
-        return {"success": False, "error": "Student not found"}
+        frappe.local.response.update({
+            "success": False, "status": "not_found",
+            "error_detail": "Student not found",
+        })
+        return
 
     pe_data = frappe.db.get_value(
         "ProgramEnrollment",
@@ -553,13 +554,18 @@ def get_student_state(student_id):
     )
 
     if not pe_data:
-        return {"success": False, "error": "No ProgramEnrollment found"}
+        frappe.local.response.update({
+            "success": False, "status": "no_enrollment_found",
+            "error_detail": "No ProgramEnrollment found",
+        })
+        return
 
-    return {
+    frappe.local.response.update({
         "success": True,
+        "status": "ok",
         "student_id": student_id,
         **pe_data,
-    }
+    })
 
 
 # ════════════════════════════════════════════════════════════

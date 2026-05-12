@@ -68,21 +68,31 @@ def save_submission(student_id, submission_type=None, media_url=None,
     """
     student_id = _resolve_student(student_id)
     if not student_id:
-        return {"success": False, "error": "Student not found"}
+        frappe.local.response.update({
+            "success": False, "status": "not_found",
+            "error_detail": "Student not found",
+        })
+        return
 
     pe = get_active_pe(student_id)
     if not pe:
-        return {"success": False, "error": "No active ProgramEnrollment"}
+        frappe.local.response.update({
+            "success": False, "status": "no_active_enrollment",
+            "error_detail": "No active ProgramEnrollment",
+        })
+        return
 
     current_week = cint(week) or pe.current_week or 1
 
     # Check if student is in a terminal or paused state
     if pe.resolved_flow_state in TERMINAL_STATES:
-        return {
+        frappe.local.response.update({
             "success": False,
-            "error": "Student in terminal state",
+            "status": "terminal_state",
+            "error_detail": "Student in terminal state",
             "resolved_flow_state": pe.resolved_flow_state,
-        }
+        })
+        return
 
     # ── Resolve submission_type ──────────────────────────────
     # Glific can't identify the type, so we detect from inputs:
@@ -177,7 +187,7 @@ def save_submission(student_id, submission_type=None, media_url=None,
 
     frappe.db.commit()
 
-    return {
+    frappe.local.response.update({
         "success": True,
         "status": "accepted" if is_primary else "duplicate",
         "is_primary": is_primary,
@@ -191,7 +201,7 @@ def save_submission(student_id, submission_type=None, media_url=None,
         "current_path": pe.current_path or "",
         "student_id": student_id,
         "img_submission": img_sub,
-    }
+    })
 
 
 # ════════════════════════════════════════════════════════════
