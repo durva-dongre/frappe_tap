@@ -110,6 +110,15 @@ def save_submission(student_id, assignment_id, submission, week=None):
         transition_id, success = apply_submission_transition(
             pe, points=points, trigger_source="flow_callback"
         )
+        _log_student_content_submission(
+            pe=pe,
+            student_id=student_id,
+            week=current_week,
+            payload=payload,
+            assignment_id=assignment_id,
+            points=points,
+            submission_doc=submission_doc,
+        )
     else:
         # Duplicate — no state change (T22)
         from tap_lms.summer_program.state_machine import t22_duplicate_submission
@@ -259,6 +268,56 @@ def _create_submission(pe, student_id, week, payload, assignment_id, is_primary)
     return doc
 
 
+def _log_student_content_submission(
+    pe, student_id, week, payload, assignment_id, points, submission_doc
+):
+    """Write the legacy completion log used by StudentProgression helpers."""
+    try:
+        filters = {
+            "student": student_id,
+            "stage_no": week,
+            "content_type": "Assignment",
+            "action": "completed",
+        }
+        if frappe.db.exists("StudentContentLog", filters):
+            return
+
+        submission_type = payload.get("submission_type")
+        is_valid = _is_expected_submission_type(
+            submission_type,
+            getattr(pe, "current_expected_submission_type", None),
+        )
+
+        log = frappe.new_doc("StudentContentLog")
+        log.student = student_id
+        log.course_level = getattr(pe, "course_level", None)
+        log.stage_no = week
+        log.content_type = "Assignment"
+        log.content_id = assignment_id or f"sp_week_{week}_submission"
+        log.content_name = f"Week {week} Submission"
+        log.action = "completed"
+        log.started_at = now_datetime()
+        log.completed_at = today()
+        log.tier = getattr(pe, "current_tier", None) or "Core"
+        log.metadata = json.dumps({
+            "submission_type": submission_type,
+            "expected_submission_type": getattr(
+                pe, "current_expected_submission_type", ""
+            ),
+            "is_valid": is_valid,
+            "points_awarded": points,
+            "source": "save_submission",
+            "submission_id": submission_doc.name if submission_doc else None,
+            "program_enrollment": getattr(pe, "name", None),
+        })
+        log.insert(ignore_permissions=True)
+    except Exception as e:
+        frappe.log_error(
+            f"StudentContentLog submission bridge error: {str(e)}",
+            "SP Save Submission",
+        )
+
+
 def _build_submission_response(pe, student_id, submission_doc, is_primary, points, week):
     return {
         "success": True,
@@ -384,6 +443,23 @@ def _to_assessment_submission_type(submission_type):
         "voice_note_text_summary": "audio",
     }
     return mapping.get(submission_type or "", submission_type or "")
+
+
+def _is_expected_submission_type(actual_type, expected_type):
+    if not actual_type or not expected_type:
+        return True
+
+    actual = _to_assessment_submission_type(actual_type.lower().strip())
+    expected = expected_type.lower().strip()
+
+    compatible = {
+        "photo_video_artefact": {"image", "video"},
+        "voice_note_text_summary": {"audio", "text"},
+    }
+    if expected in compatible:
+        return actual in compatible[expected]
+
+    return actual == _to_assessment_submission_type(expected)
 
 
 # ════════════════════════════════════════════════════════════
