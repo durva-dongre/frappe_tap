@@ -7,7 +7,7 @@ API A3: save_submission — the core submission handler.
 Atomic idempotent submission with:
   - Atomic UPDATE WHERE journey_label check (prevents race conditions)
   - is_primary logic (first submission = primary, rest = duplicates)
-  - ImgSubmission record creation
+  - Submission record creation
   - ProgramEnrollment state transition
   - Points calculation from EscalationStep
   - EngagementState update
@@ -20,16 +20,11 @@ Called by:
 """
 import frappe
 import json
-from frappe import _
 from frappe.utils import now_datetime, today, getdate, cint
+from urllib.parse import urlparse
 
 from tap_lms.summer_program.constants import (
-    STATE_SUBMITTED_AWAITING, STATE_NORMAL_CONTENT,
-    STATE_NORMAL_ESCALATION, STATE_REMEDIAL_CONTENT,
-    STATE_REMEDIAL_ESCALATION, STATE_GRACE_WAITING,
-    LABEL_CONTENT_DELIVERED, LABEL_SUBMITTED,
-    CONTENT_DELIVERY_STATES, ESCALATION_STATES,
-    TERMINAL_STATES, PAUSED_STATES,
+    TERMINAL_STATES,
     FEEDBACK_PIPELINE_MAX_RETRIES,
     FEEDBACK_PIPELINE_RETRY_LOG_TITLE,
     FEEDBACK_PIPELINE_DLQ_LOG_TITLE,
@@ -39,12 +34,11 @@ from tap_lms.summer_program.state_machine import (
     apply_submission_transition,
 )
 from tap_lms.summer_program.event_log import log_event
-import re
+URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 
 
-@frappe.whitelist(allow_guest=False)
-def save_submission(student_id, submission_type=None, media_url=None,
-                    response_text=None, week=None, assignment_id=None):
+@frappe.whitelist(allow_guest=True)
+def save_submission(student_id, assignment_id, submission, week=None):
     """
     API A3: save_submission
 
@@ -52,19 +46,14 @@ def save_submission(student_id, submission_type=None, media_url=None,
 
     Args:
         student_id: Student name, glific_id, or phone
-        submission_type: emoji | text_word | voice_note | photo | video |
-                        photo_video_artefact | voice_note_text_summary
-                        If omitted, defaults to PE.current_expected_submission_type
-        media_url: URL of submitted media (photo/video/voice_note)
-        response_text: Text or emoji content submitted by the student.
-                       Used for emoji and text_word submission types.
-        week: Override week number (defaults to PE.current_week)
         assignment_id: Assignment ID from get_content_details API
                        (e.g. "B2_FL_L1_RA12-Basic")
+        submission: URL, text, or emoji submitted by the student
+        week: Override week number (defaults to PE.current_week)
 
     Returns:
         dict with: status (accepted|duplicate|rejected), is_primary,
-                   points_awarded, submission_count, img_submission
+                   points_awarded, submission_count, submission_id
     """
     student_id = _resolve_student(student_id)
     if not student_id:
@@ -94,14 +83,15 @@ def save_submission(student_id, submission_type=None, media_url=None,
         })
         return
 
-    # ── Resolve submission_type ──────────────────────────────
-    # Glific can't identify the type, so we detect from inputs:
-    #   media_url + response_text → photo_video_artefact (media with description)
-    #   media_url only → detect from URL extension (photo/video/voice_note)
-    #   response_text only → detect emoji vs text
-    #   nothing → fall back to PE's expected type
-    if not submission_type:
-        submission_type = _detect_submission_type(media_url, response_text, pe)
+    # ── Normalize submission payload ────────────────────────
+    # Produces the assessment Submission schema:
+    #   submission_type: text | emoji | audio | image | video
+    #   submission_text: text/emoji/caption
+    #   submission_url: media URL
+    payload = _normalize_submission_payload(
+        submission,
+        pe=pe,
+    )
 
     # ── Atomic is_primary check ─────────────────────────────
     # Use atomic UPDATE to claim primary submission.
@@ -115,54 +105,29 @@ def save_submission(student_id, submission_type=None, media_url=None,
     if is_primary:
         points = _calculate_points(pe)
 
-    # ── Create ImgSubmission record ─────────────────────────
-    img_sub = _create_img_submission(
+    # ── Create Submission record ────────────────────────────
+    submission_doc = _create_submission(
         pe=pe,
         student_id=student_id,
         week=current_week,
-        submission_type=submission_type,
-        media_url=media_url,
-        response_text=response_text,
+        payload=payload,
         assignment_id=assignment_id,
         is_primary=is_primary,
-        points=points,
     )
-
-    # ── Upload to GCS + enqueue to RabbitMQ (background) ────
-    # Runs async so the API responds instantly (~50ms).
-    # For media: GCS upload + RabbitMQ (2-10s)
-    # For emoji/text: RabbitMQ only (~100ms)
-    if is_primary and img_sub:
-        # Serialize PE fields needed by pipeline (can't pass doc to background job)
-        pe_context = {
-            "student": pe.student,
-            "archetype": pe.archetype,
-            "experiment_arm": pe.experiment_arm,
-            "current_expected_submission_type": pe.current_expected_submission_type,
-            "language": getattr(pe, "language", ""),
-            "batch": pe.batch,
-            "current_week": pe.current_week,
-            "current_path": pe.current_path,
-            "current_tier": pe.current_tier,
-            "course_level": pe.course_level,
-            "last_escalation_step": pe.last_escalation_step,
-        }
-        frappe.enqueue(
-            "tap_lms.summer_program.save_submission._enqueue_to_feedback_pipeline",
-            queue="default",
-            timeout=120,
-            img_sub_name=img_sub,
-            media_url=media_url,
-            response_text=response_text,
-            submission_type=submission_type,
-            pe_context=pe_context,
-            retry_count=0,
-        )
 
     # ── Apply state transition ──────────────────────────────
     if is_primary:
         transition_id, success = apply_submission_transition(
             pe, points=points, trigger_source="flow_callback"
+        )
+        _log_student_content_submission(
+            pe=pe,
+            student_id=student_id,
+            week=current_week,
+            payload=payload,
+            assignment_id=assignment_id,
+            points=points,
+            submission_doc=submission_doc,
         )
     else:
         # Duplicate — no state change (T22)
@@ -177,31 +142,66 @@ def save_submission(student_id, submission_type=None, media_url=None,
     log_event(pe, "submission_received", trigger_source="flow_callback",
               details={
                   "is_primary": is_primary,
-                  "submission_type": submission_type,
+                  "submission_type": payload["submission_type"],
                   "points_awarded": points,
                   "week": current_week,
                   "escalation_step_at_submit": pe.last_escalation_step or 0,
                   "transition": transition_id,
-                  "img_submission": img_sub,
+                  "submission_id": submission_doc.name if submission_doc else None,
               })
+
+    # ── Upload to GCS + enqueue to RabbitMQ (background) ────
+    if is_primary and submission_doc:
+        _queue_submission_processing(
+            submission_doc,
+            pe_context=_build_pe_context(pe),
+        )
 
     frappe.db.commit()
 
-    frappe.local.response.update({
-        "success": True,
-        "status": "accepted" if is_primary else "duplicate",
-        "is_primary": is_primary,
-        "points_awarded": points,
-        "submission_count": pe.submission_count or 1,
-        "week": current_week,
-        "resolved_flow_state": pe.resolved_flow_state,
-        "next_action_type": pe.next_action_type or "",
-        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
-        "program_status": pe.program_status or "",
-        "current_path": pe.current_path or "",
-        "student_id": student_id,
-        "img_submission": img_sub,
-    })
+    return _build_submission_response(
+        pe=pe,
+        student_id=student_id,
+        submission_doc=submission_doc,
+        is_primary=is_primary,
+        points=points,
+        week=current_week,
+    )
+
+
+@frappe.whitelist(allow_guest=True)
+def get_submission_feedback(submission_id):
+    """
+    Get feedback for a summer-program submission.
+
+    Args:
+        submission_id: Submission document ID
+
+    Returns:
+        dict with submission status. Completed submissions include feedback fields.
+    """
+    try:
+        submission = frappe.get_doc("Submission", submission_id)
+
+        if submission.status == "Completed":
+            return {
+                "status": submission.status,
+                "overall_feedback": submission.overall_feedback,
+                "overall_feedback_translated": submission.overall_feedback_translated,
+                "audio_feedback_url": submission.audio_feedback_url,
+            }
+
+        return {"status": submission.status}
+
+    except frappe.DoesNotExistError:
+        return {"error": "Submission not found"}
+
+    except Exception as e:
+        frappe.log_error(
+            f"Error checking submission feedback: {str(e)}",
+            "Submission Feedback Error",
+        )
+        return {"error": "An error occurred while checking submission feedback"}
 
 
 # ════════════════════════════════════════════════════════════
@@ -292,33 +292,93 @@ def _calculate_points(pe):
 
 
 # ════════════════════════════════════════════════════════════
-# IMG SUBMISSION RECORD
+# SUBMISSION RECORD
 # ════════════════════════════════════════════════════════════
 
-def _create_img_submission(pe, student_id, week, submission_type,
-                           media_url, response_text, assignment_id,
-                           is_primary, points):
-    """Create ImgSubmission record for tracking and AI feedback pipeline."""
+def _create_submission(pe, student_id, week, payload, assignment_id, is_primary):
+    """Create assessment-style Submission with summer-program context."""
+    doc = frappe.new_doc("Submission")
+    doc.assign_id = assignment_id
+    doc.student_id = student_id
+    doc.submission_type = payload["submission_type"]
+    doc.submission_text = payload["submission_text"]
+    doc.submission_url = payload["submission_url"]
+    doc.status = "Pending" if is_primary else "Completed"
+    doc.program_enrollment = pe.name
+    doc.week = week
+    doc.escalation_step_at_submit = pe.last_escalation_step or 0
+    doc.is_primary = 1 if is_primary else 0
+    doc.created_at = now_datetime()
+    doc.insert(ignore_permissions=True)
+    return doc
+
+
+def _log_student_content_submission(
+    pe, student_id, week, payload, assignment_id, points, submission_doc
+):
+    """Write the legacy completion log used by StudentProgression helpers."""
     try:
-        doc = frappe.new_doc("ImgSubmission")
-        doc.student_id = student_id
-        doc.program_enrollment = pe.name
-        doc.week = week
-        doc.submission_type = submission_type or ""
-        doc.img_url = media_url or ""
-        doc.response_text = response_text or ""
-        doc.assign_id = assignment_id
-        doc.is_primary = 1 if is_primary else 0
-        doc.escalation_step_at_submit = pe.last_escalation_step or 0
-        doc.status = "Pending" if is_primary else "Completed"
-        doc.created_at = now_datetime()
-        doc.insert(ignore_permissions=True)
-        return doc.name
+        filters = {
+            "student": student_id,
+            "stage_no": week,
+            "content_type": "Assignment",
+            "action": "completed",
+        }
+        if frappe.db.exists("StudentContentLog", filters):
+            return
+
+        submission_type = payload.get("submission_type")
+        is_valid = _is_expected_submission_type(
+            submission_type,
+            getattr(pe, "current_expected_submission_type", None),
+        )
+
+        log = frappe.new_doc("StudentContentLog")
+        log.student = student_id
+        log.course_level = getattr(pe, "course_level", None)
+        log.stage_no = week
+        log.content_type = "Assignment"
+        log.content_id = assignment_id or f"sp_week_{week}_submission"
+        log.content_name = f"Week {week} Submission"
+        log.action = "completed"
+        log.started_at = now_datetime()
+        log.completed_at = today()
+        log.tier = getattr(pe, "current_tier", None) or "Core"
+        log.metadata = json.dumps({
+            "submission_type": submission_type,
+            "expected_submission_type": getattr(
+                pe, "current_expected_submission_type", ""
+            ),
+            "is_valid": is_valid,
+            "points_awarded": points,
+            "source": "save_submission",
+            "submission_id": submission_doc.name if submission_doc else None,
+            "program_enrollment": getattr(pe, "name", None),
+        })
+        log.insert(ignore_permissions=True)
     except Exception as e:
         frappe.log_error(
-            f"ImgSubmission creation error: {str(e)}", "SP Save Submission"
+            f"StudentContentLog submission bridge error: {str(e)}",
+            "SP Save Submission",
         )
-        return None
+
+
+def _build_submission_response(pe, student_id, submission_doc, is_primary, points, week):
+    return {
+        "success": True,
+        "status": "accepted" if is_primary else "duplicate",
+        "is_primary": is_primary,
+        "points_awarded": points,
+        "submission_count": pe.submission_count or 1,
+        "week": week,
+        "resolved_flow_state": pe.resolved_flow_state,
+        "next_action_type": pe.next_action_type or "",
+        "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
+        "program_status": pe.program_status or "",
+        "current_path": pe.current_path or "",
+        "student_id": student_id,
+        "submission_id": submission_doc.name if submission_doc else None,
+    }
 
 
 # ════════════════════════════════════════════════════════════
@@ -360,121 +420,91 @@ def _update_engagement(student_id):
 
 
 # ════════════════════════════════════════════════════════════
-# SUBMISSION TYPE DETECTION
+# SUBMISSION NORMALIZATION
 # ════════════════════════════════════════════════════════════
 
-# File extensions for media type detection from Glific URLs
-PHOTO_EXTENSIONS = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp")
-VIDEO_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp")
-AUDIO_EXTENSIONS = (".ogg", ".oga", ".opus", ".mp3", ".m4a", ".wav", ".aac")
-
-# Common single-character emojis and emoji patterns
-# Covers most Unicode emoji ranges used in WhatsApp
-EMOJI_PATTERN = re.compile(
-    "["
-    "\U0001F600-\U0001F64F"  # emoticons
-    "\U0001F300-\U0001F5FF"  # symbols & pictographs
-    "\U0001F680-\U0001F6FF"  # transport & map
-    "\U0001F1E0-\U0001F1FF"  # flags
-    "\U00002702-\U000027B0"  # dingbats
-    "\U0001F900-\U0001F9FF"  # supplemental symbols
-    "\U0001FA00-\U0001FA6F"  # chess symbols
-    "\U0001FA70-\U0001FAFF"  # symbols extended-A
-    "\U00002600-\U000026FF"  # misc symbols
-    "\U0000FE00-\U0000FE0F"  # variation selectors
-    "\U0000200D"             # zero width joiner
-    "\U00000023\U0000002A\U00000030-\U00000039\U000020E3"  # keycap sequences
-    "]+",
-    flags=re.UNICODE,
-)
-
-
-def _detect_submission_type(media_url, response_text, pe):
+def _normalize_submission_payload(submission, pe=None):
     """
-    Auto-detect submission type from inputs since Glific can't identify it.
+    Normalize a raw submission into the assessment Submission schema.
 
-    Detection logic (in priority order):
-      1. media_url + response_text → "photo_video_artefact"
-         (Student sent media with a text description/caption)
-      2. media_url only → detect from URL extension:
-         - .jpg/.png/etc → "photo"
-         - .mp4/.mov/etc → "video"
-         - .ogg/.opus/.mp3/etc → "voice_note"
-      3. response_text only → detect emoji vs text:
-         - Pure emoji (1-3 emoji chars, no text) → "emoji"
-         - Otherwise → "text_word"
-      4. Neither → fall back to PE's current_expected_submission_type
-
-    Args:
-        media_url: URL of submitted media (from Glific/WhatsApp)
-        response_text: Text or emoji content from the student
-        pe: ProgramEnrollment doc (for fallback type)
-
-    Returns:
-        str: submission type
+    The PE is accepted so callers can normalize after resolving program context;
+    the submission type still comes only from the submitted value.
     """
-    # Case 1: Both media and text → artefact with description
-    if media_url and response_text:
-        return "photo_video_artefact"
+    if not isinstance(submission, str) or not submission.strip():
+        frappe.throw("Submission is required")
 
-    # Case 2: Media URL only → detect from file extension
-    if media_url:
-        return _detect_media_type(media_url)
+    submission = submission.strip()
 
-    # Case 3: Text/emoji only → detect emoji vs text
-    if response_text:
-        return _detect_text_type(response_text)
+    if _looks_like_url(submission):
+        return {
+            "submission_type": _infer_url_submission_type(submission),
+            "submission_text": None,
+            "submission_url": submission,
+        }
 
-    # Case 4: Nothing provided → use PE's expected type
-    return pe.current_expected_submission_type or "photo"
+    return {
+        "submission_type": "emoji" if _contains_only_emoji(submission) else "text",
+        "submission_text": submission,
+        "submission_url": None,
+    }
 
 
-def _detect_media_type(url):
-    """
-    Detect media type from URL file extension.
+def _contains_only_emoji(submission):
+    text = submission.strip()
+    if not text:
+        return False
 
-    Glific/WhatsApp media URLs typically look like:
-      https://storage.googleapis.com/.../image.jpg
-      https://web.whatsapp.net/.../video.mp4
-      https://filemanager.gupshup.io/.../audio.ogg
+    return not any(char.isalnum() for char in text)
 
-    Falls back to "photo" if extension is unrecognized.
-    """
-    # Strip query params and fragments to get clean path
-    clean_url = url.split("?")[0].split("#")[0].lower()
 
-    if clean_url.endswith(PHOTO_EXTENSIONS):
-        return "photo"
-    elif clean_url.endswith(VIDEO_EXTENSIONS):
+def _looks_like_url(submission):
+    parsed = urlparse(submission.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _infer_url_submission_type(submission):
+    path = urlparse(submission.strip()).path.lower()
+
+    audio_extensions = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".flac")
+    image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic")
+    video_extensions = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp", ".mpeg")
+
+    if path.endswith(audio_extensions):
+        return "audio"
+    if path.endswith(video_extensions):
         return "video"
-    elif clean_url.endswith(AUDIO_EXTENSIONS):
-        return "voice_note"
+    if path.endswith(image_extensions):
+        return "image"
 
-    # Unrecognized extension — default to photo (most common submission)
-    return "photo"
+    return "image"
 
 
-def _detect_text_type(text):
-    """
-    Detect if text is an emoji reaction or a text response.
+def _to_assessment_submission_type(submission_type):
+    mapping = {
+        "text_word": "text",
+        "voice_note": "audio",
+        "photo": "image",
+        "photo_video_artefact": "image",
+        "voice_note_text_summary": "audio",
+    }
+    return mapping.get(submission_type or "", submission_type or "")
 
-    Emoji submissions: single emoji or small cluster (1-3 emoji chars)
-      e.g., "👍", "😊", "⭐⭐⭐", "🎉👏"
-    Text submissions: any text with non-emoji characters
-      e.g., "hello", "I liked the story", "good 👍"
-    """
-    stripped = text.strip()
-    if not stripped:
-        return "text_word"
 
-    # Remove all emoji characters — if nothing remains, it's pure emoji
-    without_emoji = EMOJI_PATTERN.sub("", stripped).strip()
+def _is_expected_submission_type(actual_type, expected_type):
+    if not actual_type or not expected_type:
+        return True
 
-    if not without_emoji and len(stripped) <= 12:
-        # Pure emoji, reasonable length (3-4 emoji can be ~12 bytes)
-        return "emoji"
+    actual = _to_assessment_submission_type(actual_type.lower().strip())
+    expected = expected_type.lower().strip()
 
-    return "text_word"
+    compatible = {
+        "photo_video_artefact": {"image", "video"},
+        "voice_note_text_summary": {"audio", "text"},
+    }
+    if expected in compatible:
+        return actual in compatible[expected]
+
+    return actual == _to_assessment_submission_type(expected)
 
 
 # ════════════════════════════════════════════════════════════
@@ -487,182 +517,173 @@ def _resolve_student(identifier):
     return resolve_student(identifier)
 
 
-def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
-                                  submission_type, pe_context, retry_count=0):
+def _build_pe_context(pe):
+    return {
+        "program_enrollment": pe.name,
+        "archetype": pe.archetype,
+        "experiment_arm": pe.experiment_arm,
+        "expected_submission_type": pe.current_expected_submission_type,
+        "language": getattr(pe, "language", ""),
+        "batch": pe.batch,
+        "current_week": pe.current_week,
+        "current_path": pe.current_path,
+        "current_tier": pe.current_tier,
+        "course_level": pe.course_level,
+        "last_escalation_step": pe.last_escalation_step,
+    }
+
+
+def _queue_submission_processing(submission_doc, pe_context):
+    queue_name = (
+        "long"
+        if submission_doc.submission_type in URL_SUBMISSION_TYPES
+        else "default"
+    )
+    frappe.enqueue(
+        "tap_lms.summer_program.save_submission.process_submission_async",
+        queue=queue_name,
+        timeout=600,
+        enqueue_after_commit=True,
+        submission_id=submission_doc.name,
+        submission_url=submission_doc.submission_url,
+        pe_context=pe_context,
+    )
+
+
+def process_submission_async(submission_id, submission_url=None, pe_context=None):
     """
-    Upload media to GCS (if applicable) and publish enriched payload to RabbitMQ.
-
-    Pipeline:
-      - For photo/video/voice: upload to GCS, then publish with GCS URL
-      - For emoji/text: publish directly with response_text (no GCS upload)
-
-    The feedback generation app needs archetype, experiment_arm, and
-    submission_type to select the right rubric and feedback tone.
-
-    Called for ALL primary submissions (media and text/emoji).
-
-    Retry policy (pattern P-007 / lesson L-015):
-      - On exception, re-enqueue self with retry_count+1 until FEEDBACK_PIPELINE_MAX_RETRIES.
-      - When retry budget is exhausted, log a DLQ entry with structured JSON so the
-        submission can be replayed manually. Payload includes submission_id, student_id,
-        media_url, response_text, submission_type, the pe_context, the final error, and
-        the retry count.
-      - Double-fault path (enqueue itself fails) writes directly to DLQ with
-        reason=double_fault_enqueue_failed.
-
-    Idempotency:
-      - GCS upload is idempotent on retry: if ImgSubmission.img_url is already
-        set to a GCS URL (i.e., a previous attempt's upload succeeded), skip the
-        re-upload. Without this, retries upload the same file N times and the
-        Glific media_url could 404 on second attempt anyway.
-
-    Known limitation (shared with G3): retries are IMMEDIATE (no backoff). For
-    sustained broker outages > ~30s, all retries fire within milliseconds and
-    DLQ. Proper exponential backoff is tracked in the G3 follow-up task.
+    Upload URL submissions to GCS, mark the record Processing, and enqueue
+    feedback processing. Text and emoji submissions skip GCS upload.
     """
+    pe_context = pe_context or {}
     try:
-        from tap_lms.imgana.submission import get_rabbitmq_settings
-        import pika
+        submission = frappe.get_doc("Submission", submission_id)
 
-        gcs_url = None
+        if submission.submission_type in URL_SUBMISSION_TYPES:
+            from tap_lms.imgana.submission import upload_to_gcs
 
-        # 1. Upload media to GCS (only if there's a media URL).
-        # Idempotent: if a previous attempt already uploaded successfully,
-        # ImgSubmission.img_url will be a GCS path — skip re-upload.
-        if media_url:
-            existing_url = frappe.db.get_value(
-                "ImgSubmission", img_sub_name, "img_url"
+            uploaded_url = upload_to_gcs(submission_url, submission.name)
+            submission.submission_url = uploaded_url
+
+        submission.status = "Processing"
+        submission.upload_error_log = None
+        submission.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        enqueue_submission(submission.name, pe_context=pe_context)
+
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.logger("submission").error(
+            f"Error in background processing for submission {submission_id}: {str(e)}"
+        )
+
+        try:
+            submission = frappe.get_doc("Submission", submission_id)
+            submission.status = "Failed"
+            submission.upload_error_log = frappe.get_traceback()[:5000]
+            submission.save(ignore_permissions=True)
+            frappe.db.commit()
+        except Exception as log_error:
+            frappe.logger("submission").error(
+                f"Failed to update submission {submission_id} after background error: {str(log_error)}"
             )
-            if existing_url and existing_url != media_url:
-                # Previous attempt's GCS upload succeeded — reuse.
-                gcs_url = existing_url
-            else:
-                from tap_lms.imgana.submission import upload_to_gcs
-                gcs_url = upload_to_gcs(media_url, img_sub_name)
-                if gcs_url:
-                    frappe.db.set_value("ImgSubmission", img_sub_name, "img_url", gcs_url)
 
-        # 2. Build enriched payload for feedback generation
-        assign_id = frappe.db.get_value(
-            "ImgSubmission", img_sub_name, "assign_id") or ""
+
+def enqueue_submission(submission_id, pe_context=None, retry_count=0):
+    try:
+        import pika
+        from tap_lms.imgana.submission import get_rabbitmq_settings
+
+        pe_context = pe_context or {}
+        submission = frappe.get_doc("Submission", submission_id)
 
         payload = {
-            # Core identifiers
-            "submission_id": img_sub_name,
-            "assign_id": assign_id,
-            "student_id": pe_context.get("student", ""),
-            "img_url": gcs_url or media_url or "",
-            "response_text": response_text or "",
-
-            # Student context (needed for feedback generation)
+            "submission_id": submission.name,
+            "assign_id": submission.assign_id,
+            "student_id": submission.student_id,
+            "submission_type": submission.submission_type,
+            "submission_text": submission.submission_text,
+            "submission_url": submission.submission_url,
+            "program_enrollment": getattr(
+                submission,
+                "program_enrollment",
+                pe_context.get("program_enrollment", ""),
+            ),
+            "week": getattr(submission, "week", pe_context.get("current_week", 1)),
+            "is_primary": getattr(submission, "is_primary", 1),
+            "escalation_step_at_submit": getattr(
+                submission,
+                "escalation_step_at_submit",
+                pe_context.get("last_escalation_step", 0),
+            ),
             "archetype": pe_context.get("archetype", ""),
             "experiment_arm": pe_context.get("experiment_arm", ""),
-            "submission_type": submission_type or "",
-            "expected_submission_type": pe_context.get("current_expected_submission_type", ""),
+            "expected_submission_type": pe_context.get("expected_submission_type", ""),
             "language": pe_context.get("language", ""),
-
-            # Program context
             "batch": pe_context.get("batch", ""),
             "current_week": pe_context.get("current_week", 1),
-            "current_path": pe_context.get("current_path", "Core"),
-            "current_tier": pe_context.get("current_tier", "Basic"),
+            "current_path": pe_context.get("current_path", ""),
+            "current_tier": pe_context.get("current_tier", ""),
             "course_level": pe_context.get("course_level", ""),
-
-            # Scoring context
-            "escalation_step_at_submit": pe_context.get("last_escalation_step", 0),
-
-            "created_at": str(now_datetime()),
+            "created_at": str(getattr(submission, "created_at", submission.creation)),
         }
 
-        # 3. Publish to RabbitMQ with durability guarantees:
-        #    - Publisher confirms: basic_publish raises if the broker doesn't
-        #      durably accept the message (UnroutableError / NackError).
-        #      Without this, a TCP-successful publish does NOT mean the broker
-        #      has the message — broker can crash between accept and disk write
-        #      and the publisher would never know. G4's retry only fires if an
-        #      exception is raised, so confirms are what make G4 actually
-        #      protect against broker failure (not just connection failure).
-        #    - delivery_mode=2 (PERSISTENT): broker writes message to disk
-        #      before acknowledging. Without this, durable queue retains its
-        #      DEFINITION across restart but NOT its contents — messages held
-        #      in RAM only and dropped on every broker restart (including
-        #      routine maintenance).
-        #    - mandatory=True: broker returns unroutable messages instead of
-        #      silently dropping them. Pika converts to UnroutableError →
-        #      caught by G4 retry path.
         rabbitmq_config = get_rabbitmq_settings()
         credentials = pika.PlainCredentials(
-            rabbitmq_config['username'],
-            rabbitmq_config['password'],
+            rabbitmq_config["username"],
+            rabbitmq_config["password"],
         )
         parameters = pika.ConnectionParameters(
-            rabbitmq_config['host'],
-            int(rabbitmq_config['port']),
-            rabbitmq_config['virtual_host'],
+            rabbitmq_config["host"],
+            int(rabbitmq_config["port"]),
+            rabbitmq_config["virtual_host"],
             credentials,
         )
 
-        # Wrap the entire pika lifecycle in try/finally so a publish failure
-        # doesn't leak the broker connection, and a post-publish close error
-        # doesn't bubble up to the outer retry path (which would cause the
-        # already-confirmed message to be republished — duplicate).
-        publish_succeeded = False
         connection = None
+        publish_succeeded = False
         try:
             connection = pika.BlockingConnection(parameters)
             channel = connection.channel()
-            # Enable publisher confirms BEFORE any publish. In BlockingConnection
-            # mode, basic_publish blocks until the broker confirms (ack/nack).
             channel.confirm_delivery()
-
-            # Idempotent declare: matches existing queue if present, creates if
-            # not. We deliberately don't use passive=True — a passive declare
-            # on a missing queue closes the channel, which then can't be reused
-            # for the fallback declare. If queue parameters mismatch (e.g.
-            # durable toggled), broker raises ChannelPreconditionFailed →
-            # caught by G4 → surfaces in DLQ with the mismatch error.
-            channel.queue_declare(
-                queue=rabbitmq_config['queue'], durable=True,
-            )
-
+            channel.queue_declare(queue=rabbitmq_config["queue"], durable=True)
             channel.basic_publish(
-                exchange='',
-                routing_key=rabbitmq_config['queue'],
+                exchange="",
+                routing_key=rabbitmq_config["queue"],
                 body=json.dumps(payload, default=str),
                 properties=pika.BasicProperties(
-                    delivery_mode=2,  # PERSISTENT — survives broker restart
-                    content_type='application/json',
+                    delivery_mode=2,
+                    content_type="application/json",
                 ),
-                mandatory=True,  # surface unroutable messages to publisher
+                mandatory=True,
             )
             publish_succeeded = True
         finally:
-            # Always close the connection — even after publish failure — so we
-            # don't leak TCP sockets / file descriptors during sustained broker
-            # outages. Swallow close errors regardless of publish outcome:
-            #  - publish failed: the original exception is propagating; we
-            #    must not let a close error mask it.
-            #  - publish succeeded: a close error must NOT trigger the outer
-            #    retry, because the message is already durably accepted by the
-            #    broker — retrying would duplicate.
             if connection is not None:
                 try:
                     connection.close()
                 except Exception as close_err:
                     frappe.logger("submission").warning(
-                        f"RabbitMQ close failed for {img_sub_name} "
+                        f"RabbitMQ close failed for {submission_id} "
                         f"(publish_succeeded={publish_succeeded}): {close_err}"
                     )
 
-        # Only log success when the publish itself was confirmed.
         if publish_succeeded:
             frappe.logger("submission").info(
-                f"Enqueued SP submission {img_sub_name} for feedback"
+                f"Enqueued submission {submission_id} with type {submission.submission_type}"
             )
-
     except Exception as e:
-        student_id = pe_context.get("student", "") if pe_context else ""
+        frappe.logger("submission").error(
+            f"Failed to enqueue submission {submission_id}: {str(e)}"
+        )
         retry_count = (retry_count or 0) + 1
+        student_id = ""
+
+        try:
+            student_id = frappe.db.get_value("Submission", submission_id, "student_id") or ""
+        except Exception:
+            student_id = ""
 
         if retry_count <= FEEDBACK_PIPELINE_MAX_RETRIES:
             frappe.log_error(
@@ -670,35 +691,27 @@ def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
                 message=(
                     f"Feedback pipeline transient failure "
                     f"(attempt {retry_count}/{FEEDBACK_PIPELINE_MAX_RETRIES + 1}) "
-                    f"for submission {img_sub_name} "
+                    f"for submission {submission_id} "
                     f"(student={student_id or 'unknown'}): {e}"
                 ),
             )
             try:
                 frappe.enqueue(
-                    "tap_lms.summer_program.save_submission._enqueue_to_feedback_pipeline",
+                    "tap_lms.summer_program.save_submission.enqueue_submission",
                     queue="default",
                     timeout=120,
-                    img_sub_name=img_sub_name,
-                    media_url=media_url,
-                    response_text=response_text,
-                    submission_type=submission_type,
+                    submission_id=submission_id,
                     pe_context=pe_context,
                     retry_count=retry_count,
                 )
             except Exception as enqueue_err:
-                # Double-fault: broker down AND queue infrastructure down.
-                # Surface the submission to DLQ immediately so it isn't lost.
                 frappe.log_error(
                     title=FEEDBACK_PIPELINE_DLQ_LOG_TITLE,
                     message=json.dumps(
                         {
                             "reason": "double_fault_enqueue_failed",
-                            "submission_id": img_sub_name,
+                            "submission_id": submission_id,
                             "student_id": student_id,
-                            "media_url": media_url,
-                            "response_text": response_text,
-                            "submission_type": submission_type,
                             "pe_context": pe_context,
                             "final_error": str(e),
                             "enqueue_error": str(enqueue_err),
@@ -713,11 +726,8 @@ def _enqueue_to_feedback_pipeline(img_sub_name, media_url, response_text,
                 title=FEEDBACK_PIPELINE_DLQ_LOG_TITLE,
                 message=json.dumps(
                     {
-                        "submission_id": img_sub_name,
+                        "submission_id": submission_id,
                         "student_id": student_id,
-                        "media_url": media_url,
-                        "response_text": response_text,
-                        "submission_type": submission_type,
                         "pe_context": pe_context,
                         "final_error": str(e),
                         "retries_attempted": retry_count,

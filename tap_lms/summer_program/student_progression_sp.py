@@ -882,6 +882,7 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
         and first question details.
     """
     try:
+
         if not all([student_id, course_level, quiz_id]):
             return {"success": False, "status": "invalid_input",
                     "error_detail": "student_id, course_level, and quiz_id required"}

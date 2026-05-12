@@ -284,7 +284,7 @@ def handle_feedback_timeout(pe_row):
     If yes, trigger T12 as a fallback. If no after 3 retries, alert admin.
 
     NOTE: Normal path is handled by FeedbackConsumer directly — it calls
-    t12_feedback_ready after updating ImgSubmission and sending the Glific
+    t12_feedback_ready after updating Submission and sending the Glific
     notification. This handler only fires as a timeout fallback.
     """
     from tap_lms.summer_program.state_machine import t12_feedback_ready
@@ -298,10 +298,10 @@ def handle_feedback_timeout(pe_row):
 
     # Check if feedback arrived but FeedbackConsumer missed the SP hook
     has_feedback = frappe.db.exists(
-        "ImgSubmission",
+        "Submission",
         {
-            "student": pe.student,
-            "batch": pe.batch,
+            "student_id": pe.student,
+            "program_enrollment": pe.name,
             "week": pe.current_week,
             "is_primary": 1,
             "status": "Completed",

@@ -210,6 +210,75 @@ def upload_audio_to_gcs(local_audio_path: str, submission_id: str, original_file
         frappe.logger("submission").error(f"Failed to upload audio to GCS: {str(e)}")
         raise frappe.ValidationError(f"Failed to upload audio to GCS: {str(e)}")
 
+
+def upload_audio_url_to_gcs(audio_url: str, submission_id: str) -> str:
+    """
+    Download audio from an external URL and upload to GCS.
+    Returns the public URL.
+    """
+    try:
+        result = get_gcs_client()
+
+        if result is None:
+            frappe.throw("GCS Storage is not enabled. Enable it in GCS Settings.")
+
+        client, bucket_name = result
+
+        response = requests.get(audio_url, timeout=60)
+        response.raise_for_status()
+
+        parsed_url = urlparse(audio_url)
+        original_filename = os.path.basename(parsed_url.path)
+        content_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+
+        content_type_map = {
+            "audio/mpeg": ".mp3",
+            "audio/wav": ".wav",
+            "audio/ogg": ".ogg",
+            "audio/mp4": ".m4a",
+            "audio/aac": ".aac",
+        }
+        ext_to_content_type = {
+            ".mp3": "audio/mpeg",
+            ".wav": "audio/wav",
+            ".ogg": "audio/ogg",
+            ".opus": "audio/ogg",
+            ".m4a": "audio/mp4",
+            ".aac": "audio/aac",
+        }
+
+        ext = content_type_map.get(content_type)
+        if not ext and original_filename:
+            ext = os.path.splitext(original_filename)[1].lower()
+            content_type = ext_to_content_type.get(ext, "audio/mpeg")
+        if not ext:
+            ext = ".mp3"
+            content_type = "audio/mpeg"
+
+        if not original_filename or "." not in original_filename:
+            original_filename = f"audio{ext}"
+
+        gcs_filename = f"submissions/{submission_id}_{original_filename}"
+
+        bucket = client.bucket(bucket_name)
+        blob = bucket.blob(gcs_filename)
+        blob.upload_from_string(response.content, content_type=content_type)
+
+        public_url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
+
+        frappe.logger("submission").info(
+            f"Audio uploaded to GCS: {audio_url} -> {public_url} (content_type: {content_type})"
+        )
+
+        return public_url
+
+    except requests.exceptions.RequestException as e:
+        frappe.logger("submission").error(f"Failed to download audio from {audio_url}: {str(e)}")
+        raise frappe.ValidationError(f"Failed to download audio: {str(e)}")
+    except Exception as e:
+        frappe.logger("submission").error(f"Failed to upload audio to GCS: {str(e)}")
+        raise frappe.ValidationError(f"Failed to upload audio to GCS: {str(e)}")
+
 def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
     """
     Download video from external URL and upload to GCS.
@@ -293,9 +362,10 @@ def upload_to_gcs(submission_url, submission_name):
     Detect media type (image or video) from the URL extension and upload to GCS.
     Returns the public URL.
     """
-    # Supported image and video extensions
+    # Supported image, video, and audio extensions
     image_exts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'}
     video_exts = {'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv'}
+    audio_exts = {'mp3', 'wav', 'ogg', 'opus', 'm4a', 'aac', 'flac'}
 
     url_without_query = submission_url.split("?", 1)[0].lower()
     if "." in url_without_query:
@@ -304,6 +374,8 @@ def upload_to_gcs(submission_url, submission_name):
             return upload_image_to_gcs(submission_url, submission_name)
         if ext in video_exts:
             return upload_video_to_gcs(submission_url, submission_name)
+        if ext in audio_exts:
+            return upload_audio_url_to_gcs(submission_url, submission_name)
 
 
     # If no extension is detected, default to image upload
@@ -328,10 +400,11 @@ def submit_artwork_internal(api_key, assign_id, name1, glific_id, img_url):
 
     try:
         # Create a new submission first (to get the submission name)
-        submission = frappe.new_doc("ImgSubmission")
+        submission = frappe.new_doc("Submission")
         submission.assign_id = assign_id
         submission.student_id = student_id
-        submission.img_url = img_url  # Store original URL initially
+        submission.submission_type = "image"
+        submission.submission_url = img_url  # Store original URL initially
         submission.status = "Pending"
         submission.insert()
         
@@ -339,7 +412,7 @@ def submit_artwork_internal(api_key, assign_id, name1, glific_id, img_url):
         public_url = upload_to_gcs(img_url, submission.name)
         
         # Update the submission with the GCS URL
-        submission.img_url = public_url
+        submission.submission_url = public_url
         submission.save()
         
         frappe.db.commit()
@@ -401,10 +474,11 @@ def submit_artwork(api_key, assign_id, name1, glific_id, img_url):
 
     try:
         # Create a new submission first (to get the submission name)
-        submission = frappe.new_doc("ImgSubmission")
+        submission = frappe.new_doc("Submission")
         submission.assign_id = assign_id
         submission.student_id = student_id
-        submission.img_url = img_url  # Store original URL initially
+        submission.submission_type = "image"
+        submission.submission_url = img_url  # Store original URL initially
         submission.status = "Pending"
         submission.insert()
         
@@ -412,7 +486,7 @@ def submit_artwork(api_key, assign_id, name1, glific_id, img_url):
         public_url = upload_to_gcs(img_url, submission.name)
         
         # Update the submission with the GCS URL
-        submission.img_url = public_url
+        submission.submission_url = public_url
         submission.save()
         
         frappe.db.commit()
@@ -448,18 +522,19 @@ def submit_artwork(api_key, assign_id, name1, glific_id, img_url):
 def enqueue_submission(submission_id):
     """
     Send submission details to RabbitMQ queue.
-    The img_url now contains the GCS public URL.
+    The submission_url now contains the GCS public URL.
     """
     try:
-        submission = frappe.get_doc("ImgSubmission", submission_id)
+        submission = frappe.get_doc("Submission", submission_id)
         
         # Payload with GCS public URL
         payload = {
             "submission_id": submission.name,
             "assign_id": submission.assign_id,
             "student_id": submission.student_id,
-            "img_url": submission.img_url,  # This is now the GCS public URL
-            # Optional: Add metadata for better detection
+            "submission_type": submission.submission_type,
+            "submission_text": submission.submission_text,
+            "submission_url": submission.submission_url,
             "created_at": str(submission.created_at)
         }
 
@@ -500,7 +575,7 @@ def enqueue_submission(submission_id):
         connection.close()
         
         frappe.logger("submission").info(
-            f"Enqueued submission {submission_id} with GCS URL: {submission.img_url}"
+            f"Enqueued submission {submission_id} with GCS URL: {submission.submission_url}"
         )
     except Exception as e:
         frappe.logger("submission").error(f"Failed to enqueue submission {submission_id}: {str(e)}")
@@ -522,7 +597,7 @@ def img_feedback(api_key, submission_id):
 
     try:
         # Get the submission document
-        submission = frappe.get_doc("ImgSubmission", submission_id)
+        submission = frappe.get_doc("Submission", submission_id)
         
         # Prepare the response based on status
         if submission.status == "Completed":
@@ -656,5 +731,3 @@ def get_student_details(student_id):
         )
         print(e)
         return None
-
-
