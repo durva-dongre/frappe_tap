@@ -76,14 +76,18 @@ def dispatch_pending_actions():
     """
     now = now_datetime()
 
-    # Query overdue PEs. No JOIN to Batch needed — partition is by action type,
-    # not by batch-level feature flag.
-    overdue_pes = frappe.db.sql(
+    # SELECT candidate PEs with FOR UPDATE SKIP LOCKED so multiple parallel
+    # workers can run this loop without contending for the same rows
+    # (architecture §8.1, pattern P-001). The SKIP LOCKED clause makes each
+    # worker take a different slice. We also capture journey_label here so
+    # the atomic claim below can guard against state moving under us.
+    candidates = frappe.db.sql(
         """
         SELECT pe.name, pe.next_action_type, pe.next_action_at,
                pe.batch, pe.student, pe.glific_id,
                pe.resolved_flow_state, pe.current_week,
-               pe.last_escalation_step, pe.current_path
+               pe.last_escalation_step, pe.current_path,
+               pe.journey_label
         FROM `tabProgramEnrollment` pe
         WHERE pe.next_action_at IS NOT NULL
           AND pe.next_action_at <= %s
@@ -91,18 +95,45 @@ def dispatch_pending_actions():
           AND pe.next_action_type != ''
         ORDER BY pe.next_action_at ASC
         LIMIT %s
+        FOR UPDATE SKIP LOCKED
         """,
         (now, PROGRAM_ACTIVE, DISPATCH_BATCH_SIZE),
         as_dict=True,
     )
 
-    if not overdue_pes:
-        return {"dispatched": 0}
+    if not candidates:
+        return {"dispatched": 0, "skipped": 0, "errors": 0}
 
     processed = 0
+    skipped = 0
     errors = 0
 
-    for pe_row in overdue_pes:
+    for pe_row in candidates:
+        # Atomic claim per P-001: clear next_action_at conditionally on the
+        # journey_label still matching what we read. If 0 rows are updated,
+        # another worker (or a flow callback) moved the state under us and
+        # we must NOT dispatch — skip and continue. Postgres-specific
+        # RETURNING NAME is the idempotency primitive; see L-001/L-018.
+        #
+        # Note: architecture §8.1 also calls for `last_dispatched_at = NOW()`
+        # as an audit trail. That column doesn't exist on PE yet — file a
+        # follow-up to add it via DocType UI if dispatcher debugging needs it.
+        # The atomic-claim primitive works without it.
+        claimed = frappe.db.sql(
+            """
+            UPDATE `tabProgramEnrollment`
+            SET next_action_at = NULL
+            WHERE name = %s
+              AND journey_label = %s
+              AND next_action_at IS NOT NULL
+            RETURNING name
+            """,
+            (pe_row.name, pe_row.journey_label),
+        )
+        if not claimed:
+            skipped += 1
+            continue
+
         try:
             _dispatch_single(pe_row)
             processed += 1
@@ -113,13 +144,12 @@ def dispatch_pending_actions():
                 f"(action={pe_row.next_action_type}): {str(e)}",
                 "SP PE Dispatcher",
             )
-            # Clear the action to prevent infinite retry loop
-            _clear_action(pe_row.name)
+            # Action already cleared by the atomic claim above; no retry loop.
 
-    if processed or errors:
+    if processed or errors or skipped:
         frappe.db.commit()
 
-    return {"dispatched": processed, "errors": errors}
+    return {"dispatched": processed, "skipped": skipped, "errors": errors}
 
 
 def _dispatch_single(pe_row):

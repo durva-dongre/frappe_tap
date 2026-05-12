@@ -162,6 +162,9 @@ def _handle_content_delivery(pe, flow_name, status, metadata):
         # Get first escalation step timing from ArchetypeConfig
         step = _get_first_escalation_step(pe)
         t1_content_no_response(pe, step, "flow_callback")
+        # The transition wrote to DB; re-read so the response reflects
+        # post-transition state (next_action_at, next_action_type, etc.).
+        pe.reload()
         return _response(pe, "escalation_scheduled")
 
     # completed — content was delivered, student tapped. Flow ended normally.
@@ -206,6 +209,9 @@ def _handle_feedback_delivery(pe, flow_name, status, metadata):
 
     # T13: feedback_ready → week_completed → schedule week_advancement
     t13_feedback_delivered(pe, "flow_callback")
+    # Re-read so the response reflects post-T13 state (current_week may have
+    # incremented, resolved_flow_state moved to week_completed, etc.).
+    pe.reload()
 
     log_event(pe, "feedback_delivered", trigger_source="flow_callback")
 

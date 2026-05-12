@@ -24,16 +24,41 @@ doc_events = {
     }
 }
 
-fixtures = [
-    {"dt": "SDG Goal", "filters": []},
-]
-
-
 # Scheduled Tasks
+#
+# Daily:
+#   - update_incomplete_stages: legacy onboarding sweep (pre-existing)
+#   - run_daily_actions: SP daily housekeeping (scheduler.py)
+#   - check_auto_activate: SP — auto-activates BPRs whose batch.start_date has
+#                          arrived; seeds next_action_at on PEs so the per-PE
+#                          dispatcher has work. See task #19 for details.
+#
+# Cron:
+#   - */2 * * * *  — pe_dispatcher: per-PE event-driven dispatcher (task #15);
+#                    processes overdue next_action_at, routes by next_action_type
+#   - 0 */2 * * *  — escalation_runner: 6-hour bulk escalation sweep (legacy
+#                    batcher; will eventually be replaced by escalation_batcher
+#                    in collection-mode rollout)
+#   - 0 0 * * 1    — auto_advance_batch_week: weekly Monday sweep that bumps
+#                    Batch.current_calendar_week and unblocks max_allowed_week
+#                    on each PE
 scheduler_events = {
     "daily": [
-        "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages"
-    ]
+        "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages",
+        "tap_lms.summer_program.scheduler.run_daily_actions",
+        "tap_lms.summer_program.batch_activation.check_auto_activate",
+    ],
+    "cron": {
+        "*/2 * * * *": [
+            "tap_lms.summer_program.pe_dispatcher.dispatch_pending_actions",
+        ],
+        "0 */2 * * *": [
+            "tap_lms.summer_program.escalation_runner.run_escalation_check",
+        ],
+        "0 0 * * 1": [
+            "tap_lms.summer_program.batch_admin.auto_advance_batch_week",
+        ],
+    },
 }
 
 # Page configurations
