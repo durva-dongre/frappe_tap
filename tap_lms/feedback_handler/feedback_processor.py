@@ -253,6 +253,7 @@ class FeedbackProcessor:
             "ai_confidence": ai_confidence * 100,
             # Feedback fields
             "grade": grade,
+            "submission_validity": feedback_data.get("submission_validity", ""),
             "overall_feedback": feedback_data.get("overall_feedback", ""),
             "overall_feedback_translated": overall_feedback_translated,
             "translation_language": translation_language,

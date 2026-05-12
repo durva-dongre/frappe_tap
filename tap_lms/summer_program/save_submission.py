@@ -401,9 +401,7 @@ def _build_pe_context(pe):
         "program_enrollment": pe.name,
         "archetype": pe.archetype,
         "experiment_arm": pe.experiment_arm,
-        "expected_submission_type": _to_assessment_submission_type(
-            pe.current_expected_submission_type
-        ),
+        "expected_submission_type": pe.current_expected_submission_type,
         "language": getattr(pe, "language", ""),
         "batch": pe.batch,
         "current_week": pe.current_week,

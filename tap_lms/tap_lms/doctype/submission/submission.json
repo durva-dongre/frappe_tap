@@ -9,6 +9,7 @@
  "engine": "InnoDB",
  "field_order": [
   "assign_id",
+  "student_column_break",
   "student_id",
   "submission_type",
   "submission_text",
@@ -45,13 +46,18 @@
   "program_enrollment",
   "week",
   "escalation_step_at_submit",
-  "is_primary"
+  "is_primary",
+  "submission_validity"
  ],
  "fields": [
   {
    "fieldname": "assign_id",
    "fieldtype": "Data",
    "label": "Assignment ID"
+  },
+  {
+   "fieldname": "student_column_break",
+   "fieldtype": "Column Break"
   },
   {
    "fieldname": "student_id",
@@ -268,11 +274,16 @@
    "fieldname": "is_primary",
    "fieldtype": "Check",
    "label": "Is Primary"
-  }
+  },
+  {
+   "fieldname": "submission_validity",
+   "fieldtype": "Data",
+   "label": "Submission Validity"
+    }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-04-24 00:00:00.000000",
+ "modified": "2026-05-12 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Submission",
