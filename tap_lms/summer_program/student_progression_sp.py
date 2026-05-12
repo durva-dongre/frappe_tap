@@ -74,21 +74,25 @@ def get_weekly_content(student_id, course_level=None):
     """
     student_id = _resolve_student_id(student_id)
     if not student_id:
-        return {"success": False, "error": "Student not found"}
+        return {"success": False, "status": "not_found",
+                "error_detail": "Student not found"}
 
     student = frappe.get_doc("Student", student_id)
     batch, bpr = _get_active_bpr_for_student(student)
     if not batch or not bpr:
-        return {"success": False, "error": "No active Summer Program batch found"}
+        return {"success": False, "status": "no_active_batch",
+                "error_detail": "No active Summer Program batch found"}
 
     if not course_level:
         course_level = _get_course_level_for_student(student, batch)
     if not course_level:
-        return {"success": False, "error": "No course level found for student"}
+        return {"success": False, "status": "no_course_level",
+                "error_detail": "No course level found for student"}
 
     current_week = _get_current_week(batch)
     if current_week <= 0:
-        return {"success": False, "error": "Batch has not started yet"}
+        return {"success": False, "status": "batch_not_started",
+                "error_detail": "Batch has not started yet"}
 
     if current_week > (batch.total_weeks or 0):
         return {"success": True, "status": "program_completed", "week": current_week}
@@ -111,7 +115,8 @@ def get_weekly_content(student_id, course_level=None):
             path = PATH_CORE
 
     if not learning_unit:
-        return {"success": False, "error": f"No content found for week {current_week}"}
+        return {"success": False, "status": "no_content_for_week",
+                "error_detail": f"No content found for week {current_week}"}
 
     # Get content items
     content_items = _get_content_items(learning_unit)
@@ -119,223 +124,70 @@ def get_weekly_content(student_id, course_level=None):
     # Get WeekRule for expected submission type
     week_rule = _get_week_rule(student, batch, current_week)
 
-    # Update/create StudentStageProgress
-    progress = _get_or_create_sp_progress(student_id, course_level, current_week, tier, learning_unit)
+    # Update/create StudentStageProgress (side-effect, return value unused here)
+    _get_or_create_sp_progress(student_id, course_level, current_week, tier, learning_unit)
 
-    return {
+    # Flatten content_items[] to numeric-suffix scalars per
+    # docs/api-standard-glific.md Rule 3. Cap at 10 — log + truncate if exceeded.
+    CONTENT_CAP = 10
+    if len(content_items) > CONTENT_CAP:
+        frappe.log_error(
+            f"get_weekly_content: learning_unit {learning_unit} has "
+            f"{len(content_items)} content items; truncating to {CONTENT_CAP}. "
+            f"Increase the cap or split the LU.",
+            "SP API contract",
+        )
+        content_items = content_items[:CONTENT_CAP]
+
+    response = {
         "success": True,
+        "status": "content_available",
         "student_id": student_id,
         "week": current_week,
         "path": path,
         "tier": tier,
         "learning_unit": learning_unit,
         "learning_unit_name": frappe.db.get_value("LearningUnit", learning_unit, "unit_name"),
-        "content_items": content_items,
-        "expected_submission_type": week_rule.get("expected_submission_type") if week_rule else None,
-        "submission_validation_enabled": week_rule.get("submission_validation_enabled", 0) if week_rule else 0,
+        "expected_submission_type": (week_rule.get("expected_submission_type") if week_rule else None),
+        "submission_validation_enabled": (week_rule.get("submission_validation_enabled", 0) if week_rule else 0),
         "total_weeks": batch.total_weeks,
+        "content_count": len(content_items),
     }
+    for i, item in enumerate(content_items, start=1):
+        response[f"content_{i}_type"] = item.get("content_type")
+        response[f"content_{i}_id"] = item.get("content_id")
+        response[f"content_{i}_name"] = item.get("content_name")
+        response[f"content_{i}_is_optional"] = bool(item.get("is_optional"))
+    return response
 
 
-# ============================================================
-# API 2: RECORD SUBMISSION
-# ============================================================
-
-@frappe.whitelist(allow_guest=False)
-def record_submission(student_id, week=None, submission_type=None, content_id=None, course_level=None):
-    """
-    Record an assignment submission from a student.
-    Called by Glific when student sends back their assignment task
-    (emoji, text, voice note, photo, video, etc.)
-
-    This is the CORE event that drives progression in Summer Program.
-
-    Args:
-        student_id: Student ID, Glific ID, or phone
-        week: Week number (if omitted, uses current batch week)
-        submission_type: What the student submitted (emoji, text_word, voice_note, photo, video, etc.)
-        content_id: Optional assignment/content ID
-        course_level: Optional course level
-
-    Returns:
-        dict with submission result, validation status, points awarded
-    """
-    student_id = _resolve_student_id(student_id)
-    if not student_id:
-        return {"success": False, "error": "Student not found"}
-
-    student = frappe.get_doc("Student", student_id)
-    batch, bpr = _get_active_bpr_for_student(student)
-    if not batch or not bpr:
-        return {"success": False, "error": "No active Summer Program batch found"}
-
-    current_week = cint(week) or _get_current_week(batch)
-
-    # Get WeekRule for validation
-    week_rule = _get_week_rule(student, batch, current_week)
-    validation_enabled = week_rule.get("submission_validation_enabled", 0) if week_rule else 0
-    expected_type = week_rule.get("expected_submission_type") if week_rule else None
-
-    # Validate submission type if validation is enabled
-    is_valid = True
-    if validation_enabled and expected_type and submission_type:
-        is_valid = _validate_submission_type(submission_type, expected_type)
-
-    # Calculate points from escalation step
-    points = _calculate_submission_points(student, batch, bpr, current_week)
-
-    if not course_level:
-        course_level = _get_course_level_for_student(student, batch)
-
-    # Log the submission
-    _log_submission(
-        student_id=student_id,
-        course_level=course_level,
-        week=current_week,
-        submission_type=submission_type,
-        content_id=content_id,
-        is_valid=is_valid,
-        points=points,
-    )
-
-    # Update EngagementState
-    _update_engagement_state(student_id)
-
-    # Update StudentStageProgress
-    if course_level:
-        total_weeks = cint(batch.total_weeks) if batch else 0
-        _mark_week_submitted(student_id, course_level, current_week, total_weeks)
-
-    # Reset escalation tracking for this student/week
-    _reset_escalation(student_id, current_week)
-
-    return {
-        "success": True,
-        "student_id": student_id,
-        "week": current_week,
-        "submission_type": submission_type,
-        "is_valid": is_valid,
-        "validation_enabled": bool(validation_enabled),
-        "expected_type": expected_type,
-        "points_awarded": points,
-    }
-
-
-# ============================================================
-# API 3: GET ESCALATION ACTION
-# ============================================================
-
-@frappe.whitelist(allow_guest=False)
-def get_escalation_action(student_id):
-    """
-    Get the next escalation action for a student who hasn't submitted.
-    Called by the Glific escalation flow to determine what message to send.
-
-    Returns the escalation step details (message_type, points_awarded)
-    or indicates no escalation needed (student already submitted).
-
-    Args:
-        student_id: Student ID, Glific ID, or phone
-
-    Returns:
-        dict with escalation step info or skip indicator
-    """
-    student_id = _resolve_student_id(student_id)
-    if not student_id:
-        return {"success": False, "error": "Student not found"}
-
-    student = frappe.get_doc("Student", student_id)
-    batch, bpr = _get_active_bpr_for_student(student)
-    if not batch or not bpr:
-        return {"success": False, "error": "No active batch"}
-
-    current_week = _get_current_week(batch)
-
-    # Check if student already submitted this week
-    if _has_submitted_this_week(student_id, current_week):
-        return {
-            "success": True,
-            "action": "skip",
-            "reason": "already_submitted",
-            "week": current_week,
-        }
-
-    # Get current escalation position
-    escalation_step = _get_next_escalation_step(student, batch, current_week)
-
-    if not escalation_step:
-        return {
-            "success": True,
-            "action": "skip",
-            "reason": "escalation_exhausted",
-            "week": current_week,
-        }
-
-    # Record that this escalation step was sent
-    _record_escalation_step(student_id, current_week, escalation_step)
-
-    return {
-        "success": True,
-        "action": "escalate",
-        "week": current_week,
-        "escalation_order": escalation_step.get("escalation_order"),
-        "message_type": escalation_step.get("message_type"),
-        "points_if_submit_now": escalation_step.get("points_awarded", 0),
-    }
-
-
-# ============================================================
-# API 4: GET STUDENT SP STATUS
-# ============================================================
-
-@frappe.whitelist(allow_guest=False)
-def get_student_sp_overview(student_id):
-    """
-    Get comprehensive Summer Program status for a student.
-    Called by Glific for status check flows or by admin dashboard.
-
-    Returns:
-        dict with week progress, submission history, path, archetype info
-    """
-    student_id = _resolve_student_id(student_id)
-    if not student_id:
-        return {"success": False, "error": "Student not found"}
-
-    student = frappe.get_doc("Student", student_id)
-    batch, bpr = _get_active_bpr_for_student(student)
-    if not batch:
-        return {"success": False, "error": "No active batch"}
-
-    current_week = _get_current_week(batch) if batch else 0
-    total_weeks = batch.total_weeks or 0
-
-    # Submission history per week
-    submissions = _get_submission_history(student_id, total_weeks)
-
-    # Engagement state
-    engagement = frappe.db.get_value(
-        "EngagementState",
-        {"student": student_id},
-        ["last_activity_date", "current_streak", "completion_rate"],
-        as_dict=True,
-    )
-
-    # Count submitted weeks
-    weeks_submitted = sum(1 for w in submissions if w.get("submitted"))
-
-    return {
-        "success": True,
-        "student_id": student_id,
-        "archetype": student.archetype,
-        "experiment_arm": student.experiment_arm,
-        "current_week": current_week,
-        "total_weeks": total_weeks,
-        "weeks_submitted": weeks_submitted,
-        "submission_rate": round(weeks_submitted / max(current_week, 1) * 100, 1),
-        "current_path": _resolve_path(student, batch, bpr, current_week) if bpr else None,
-        "submissions": submissions,
-        "engagement": engagement,
-    }
+# ════════════════════════════════════════════════════════════
+# REMOVED: record_submission, get_escalation_action, get_student_sp_overview
+# ════════════════════════════════════════════════════════════
+# Three legacy whitelisted endpoints removed on 2026-05-11:
+#
+#   - record_submission        → superseded by `save_submission` (does strictly
+#                                more: state machine T3/T7/T22, atomic primary
+#                                claim, idempotency, AI feedback pipeline,
+#                                GCS upload, state-aware terminal/paused guard)
+#   - get_escalation_action    → superseded by the per-PE dispatcher (#15) +
+#                                state_machine T1/T2/T4 + escalation_runner cron
+#   - get_student_sp_overview  → superseded by `get_student_state` (in
+#                                program_enrollment_api.py) + admin dashboard
+#                                APIs in summer_program.api
+#
+# Verified zero callers across the codebase before deletion (grep against
+# app/tap_lms turned up only the function definitions themselves). All three
+# were missing from the Glific reference doc (`docs/glific-api-reference-v1.md`),
+# and the live SP enrollment + submission flow does not depend on them.
+#
+# If any external caller (Glific flow, dashboard, ad-hoc API consumer) still
+# hits these paths, they will now get a 404. That's intentional — we'd rather
+# fail loud than silently accept submissions that don't transition state.
+#
+# Some helpers (_log_submission, _validate_submission_type, _reset_escalation,
+# _get_next_escalation_step, _record_escalation_step, _has_submitted_this_week,
+# _get_submission_history) MAY now be orphaned. Audit + remove in a follow-up.
 
 
 # ============================================================
@@ -367,41 +219,91 @@ def get_next_content(student_id, course_level=None):
         dict with content_available / quiz_in_progress / stage_complete /
         course_complete status plus content details.
     """
+    # ASSESSMENT_CAP — must match get_content_details for consistency.
+    # `assessment_<i>_id` is CRITICAL — it's the assignment_id Glific passes
+    # to save_submission. Do NOT drop these.
+    ASSESSMENT_CAP = 5
+
+    def _flat_content_response(item, content_index, total_in_unit, position_kwargs,
+                                new_learning_unit=False):
+        """Build the flat content_available response (helper to avoid
+        duplicating the same flat-shape logic across the two LU variants)."""
+        assessments = _get_video_assessments(item["content_type"], item["content_id"]) or []
+        if len(assessments) > ASSESSMENT_CAP:
+            frappe.log_error(
+                f"{item['content_type']} {item['content_id']} has "
+                f"{len(assessments)} assessments; truncating to {ASSESSMENT_CAP}.",
+                "SP API contract",
+            )
+            assessments = assessments[:ASSESSMENT_CAP]
+
+        resp = {
+            "success": True,
+            "status": "content_available",
+            "student_id": student_id,
+            "has_active_quiz": False,
+            "new_learning_unit": new_learning_unit,
+            "course_level": course_level,
+            # position.* flattened
+            "position_week": position_kwargs["week"],
+            "position_tier": position_kwargs["tier"],
+            "position_learning_unit": position_kwargs["learning_unit"],
+            "position_learning_unit_name": position_kwargs.get("learning_unit_name"),
+            "position_content_index": content_index,
+            "position_is_remedial": position_kwargs["is_remedial"],
+            "position_path": position_kwargs["path"],
+            # content.* flattened
+            "content_type": item["content_type"],
+            "content_id": item["content_id"],
+            "content_name": item["content_name"],
+            "content_order": content_index + 1,
+            "content_total_in_unit": total_in_unit,
+            "content_is_optional": bool(item.get("is_optional")),
+            # assessments[] flattened — assessment_<i>_id is the assignment_id
+            # input to save_submission. Critical path.
+            "assessment_count": len(assessments),
+        }
+        for i, a in enumerate(assessments, start=1):
+            resp[f"assessment_{i}_type"] = a.get("assessment_type")
+            resp[f"assessment_{i}_id"] = a.get("assessment_id")
+        return resp
+
     try:
         student_id = _resolve_student_id(student_id)
         if not student_id:
-            return {"success": False, "error": "Student not found"}
+            return {"success": False, "status": "not_found",
+                    "error_detail": "Student not found"}
 
         student = frappe.get_doc("Student", student_id)
         batch, bpr = _get_active_bpr_for_student(student)
         if not batch or not bpr:
-            return {"success": False, "error": "No active Summer Program batch found"}
+            return {"success": False, "status": "no_active_batch",
+                    "error_detail": "No active Summer Program batch found"}
 
         if not course_level:
             course_level = _get_course_level_for_student(student, batch)
         if not course_level:
-            return {"success": False, "error": "No course level found for student"}
+            return {"success": False, "status": "no_course_level",
+                    "error_detail": "No course level found for student"}
 
         calendar_week = _get_current_week(batch)
         if calendar_week <= 0:
-            return {"success": False, "error": "Batch has not started yet"}
+            return {"success": False, "status": "batch_not_started",
+                    "error_detail": "Batch has not started yet"}
 
         # Determine effective week: student may be ahead of or behind calendar
         current_week = _get_effective_week(student, batch, calendar_week)
 
         # Check content blocking: if student didn't submit previous week,
         # they can't access current week content (escalation handles follow-up).
-        # Grace period: students get SUBMISSION_GRACE_HOURS into the new week
-        # to still submit for the previous week before being blocked.
         if current_week > 1:
             prev_submission = _get_submission_validity(student.name, current_week - 1)
             if not prev_submission["submitted"]:
-                # Check if we're still within the grace period
                 if not _is_within_grace_period(batch, current_week):
                     return {
                         "success": True,
                         "status": "content_blocked",
-                        "message": f"Please complete your Week {current_week - 1} submission first.",
+                        "user_message": f"Please complete your Week {current_week - 1} submission first.",
                         "student_id": student_id,
                         "blocked_reason": "missing_previous_submission",
                         "pending_week": current_week - 1,
@@ -415,7 +317,6 @@ def get_next_content(student_id, course_level=None):
         else:
             tier = TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
 
-        # Get or create progress
         learning_unit = _get_learning_unit(course_level, current_week, tier)
         if not learning_unit and path == PATH_REMEDIAL:
             tier = TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
@@ -423,7 +324,8 @@ def get_next_content(student_id, course_level=None):
             path = PATH_CORE
 
         if not learning_unit:
-            return {"success": False, "error": f"No content found for week {current_week}"}
+            return {"success": False, "status": "no_content_for_week",
+                    "error_detail": f"No content found for week {current_week}"}
 
         progress = _get_or_create_sp_progress(student_id, course_level, current_week, tier, learning_unit)
         progress_data = frappe.db.get_value(
@@ -440,29 +342,25 @@ def get_next_content(student_id, course_level=None):
             return {
                 "success": True,
                 "status": "course_complete",
-                "message": "You have completed the program.",
+                "user_message": "You have completed the program.",
                 "student_id": student_id,
             }
 
-        # Check for active quiz
+        # Check for active quiz — flat shape per Rules 2 + 3.
         if progress_data.get("active_quiz_attempt"):
             return {
                 "success": True,
                 "status": "quiz_in_progress",
                 "student_id": student_id,
-                "position": {
-                    "week": cint(progress_data["current_week"]),
-                    "tier": progress_data["current_tier"],
-                    "learning_unit": progress_data["stage"],
-                    "is_remedial": bool(progress_data.get("is_on_remedial")),
-                    "path": path,
-                },
-                "content": {
-                    "type": "Quiz",
-                    "id": progress_data.get("active_content_id"),
-                },
                 "has_active_quiz": True,
                 "quiz_attempt_id": progress_data["active_quiz_attempt"],
+                "position_week": cint(progress_data["current_week"]),
+                "position_tier": progress_data["current_tier"],
+                "position_learning_unit": progress_data["stage"],
+                "position_is_remedial": bool(progress_data.get("is_on_remedial")),
+                "position_path": path,
+                "content_type": "Quiz",
+                "content_id": progress_data.get("active_content_id"),
             }
 
         # Ensure progress points to correct LU for current week/path
@@ -496,36 +394,19 @@ def get_next_content(student_id, course_level=None):
             })
             frappe.db.commit()
 
-            content_resp = {
-                "type": item["content_type"],
-                "id": item["content_id"],
-                "name": item["content_name"],
-                "order": current_index + 1,
-                "total_in_unit": len(content_items),
-                "is_optional": item.get("is_optional"),
-            }
-            # If VideoClass, include linked assessments (type + id)
-            assessments = _get_video_assessments(item["content_type"], item["content_id"])
-            if assessments:
-                content_resp["assessments"] = assessments
-
-            return {
-                "success": True,
-                "status": "content_available",
-                "student_id": student_id,
-                "position": {
+            return _flat_content_response(
+                item=item,
+                content_index=current_index,
+                total_in_unit=len(content_items),
+                position_kwargs={
                     "week": cint(progress_data["current_week"]),
                     "tier": progress_data["current_tier"],
                     "learning_unit": progress_data["stage"],
                     "learning_unit_name": lu_info["name"] if lu_info else None,
-                    "content_index": current_index,
                     "is_remedial": bool(progress_data.get("is_on_remedial")),
                     "path": path,
                 },
-                "content": content_resp,
-                "has_active_quiz": False,
-                "course_level": course_level,
-            }
+            )
 
         # Current LU exhausted — try next LU in same week/tier
         next_lu = _get_next_learning_unit(course_level, current_week, tier, progress_data["stage"])
@@ -545,37 +426,20 @@ def get_next_content(student_id, course_level=None):
             if content_items:
                 item = content_items[0]
                 lu_info = _get_learning_unit_info(next_lu)
-
-                content_resp = {
-                    "type": item["content_type"],
-                    "id": item["content_id"],
-                    "name": item["content_name"],
-                    "order": 1,
-                    "total_in_unit": len(content_items),
-                    "is_optional": item.get("is_optional"),
-                }
-                assessments = _get_video_assessments(item["content_type"], item["content_id"])
-                if assessments:
-                    content_resp["assessments"] = assessments
-
-                return {
-                    "success": True,
-                    "status": "content_available",
-                    "student_id": student_id,
-                    "position": {
+                return _flat_content_response(
+                    item=item,
+                    content_index=0,
+                    total_in_unit=len(content_items),
+                    position_kwargs={
                         "week": current_week,
                         "tier": tier,
                         "learning_unit": next_lu,
                         "learning_unit_name": lu_info["name"] if lu_info else None,
-                        "content_index": 0,
                         "is_remedial": tier == REMEDIAL_TIER,
                         "path": path,
                     },
-                    "content": content_resp,
-                    "has_active_quiz": False,
-                    "new_learning_unit": True,
-                    "course_level": course_level,
-                }
+                    new_learning_unit=True,
+                )
 
         # Week complete — check if programme finished
         total_weeks = batch.total_weeks or 0
@@ -588,25 +452,17 @@ def get_next_content(student_id, course_level=None):
             return {
                 "success": True,
                 "status": "course_complete",
-                "message": "Congratulations! You have completed the program.",
+                "user_message": "Congratulations! You have completed the program.",
                 "student_id": student_id,
                 "completed_week": current_week,
             }
 
-        # Week complete but more weeks remain.
-        # Student can advance if:
-        #   1. They have submitted this week's assignment
-        #   2. The next week doesn't exceed calendar_week + 1 (max 1 week ahead)
-        #   3. The next week doesn't exceed total_weeks
-        # If they already consumed the next calendar week's content early,
-        # they are PAUSED until the corresponding calendar week arrives.
+        # Week complete but more weeks remain — see comments inline.
         this_week_submitted = _has_submitted_week(student.name, current_week)
         next_week = current_week + 1
         max_allowed_week = min(calendar_week + 1, total_weeks)
 
         if this_week_submitted and next_week <= max_allowed_week:
-            # Student finished all content AND submitted — advance to next week
-            # Update progress to next week so _get_effective_week picks it up
             frappe.db.set_value("StudentStageProgress", progress_data["name"], {
                 "current_week": next_week,
                 "current_content_index": 0,
@@ -619,7 +475,7 @@ def get_next_content(student_id, course_level=None):
             return {
                 "success": True,
                 "status": "stage_complete",
-                "message": f"Week {current_week} complete! Moving to Week {next_week}.",
+                "user_message": f"Week {current_week} complete! Moving to Week {next_week}.",
                 "student_id": student_id,
                 "completed_week": current_week,
                 "next_week": next_week,
@@ -629,11 +485,10 @@ def get_next_content(student_id, course_level=None):
             }
 
         if this_week_submitted and next_week > max_allowed_week:
-            # Student is ahead of the calendar — paused until next calendar week
             return {
                 "success": True,
                 "status": "stage_complete",
-                "message": f"Week {current_week} complete! New content will be available in Week {next_week}.",
+                "user_message": f"Week {current_week} complete! New content will be available in Week {next_week}.",
                 "student_id": student_id,
                 "completed_week": current_week,
                 "can_advance": False,
@@ -649,7 +504,7 @@ def get_next_content(student_id, course_level=None):
         return {
             "success": True,
             "status": "stage_complete",
-            "message": f"Week {current_week} complete! Submit your assignment to continue.",
+            "user_message": f"Week {current_week} complete! Submit your assignment to continue.",
             "student_id": student_id,
             "completed_week": current_week,
             "can_advance": False,
@@ -660,7 +515,7 @@ def get_next_content(student_id, course_level=None):
 
     except Exception as e:
         frappe.log_error(f"get_next_content error: {str(e)}", "SP Progression API")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "status": "error", "error_detail": str(e)}
 
 
 # ============================================================
@@ -691,19 +546,38 @@ def get_content_details(content_type, content_id, language=None):
     """
     try:
         if not content_type or not content_id:
-            return {"success": False, "error": "content_type and content_id are required"}
+            return {"success": False, "status": "invalid_input",
+                    "error_detail": "content_type and content_id are required"}
 
         if content_type not in VALID_CONTENT_TYPES:
-            return {"success": False, "error": f"Invalid content_type: {content_type}"}
+            return {"success": False, "status": "invalid_content_type",
+                    "error_detail": f"Invalid content_type: {content_type}"}
 
         if not frappe.db.exists(content_type, content_id):
-            return {"success": False, "error": f"{content_type} not found: {content_id}"}
+            return {"success": False, "status": "not_found",
+                    "error_detail": f"{content_type} not found: {content_id}"}
 
         doc = frappe.get_doc(content_type, content_id)
 
         if content_type == "VideoClass":
+            # Flatten `assessments` array using numeric-suffix expansion per
+            # docs/api-standard-glific.md Rule 3. `assessment_<i>_id` is CRITICAL —
+            # it's the assignment_id that Glific passes to save_submission when
+            # the student submits after watching the video. Do NOT drop this.
+            # Cap at 5 (videos typically have 1 assessment, max 2-3).
+            assessments = _get_video_assessments("VideoClass", content_id) or []
+            ASSESSMENT_CAP = 5
+            if len(assessments) > ASSESSMENT_CAP:
+                frappe.log_error(
+                    f"VideoClass {content_id} has {len(assessments)} assessments; "
+                    f"truncating to {ASSESSMENT_CAP}.",
+                    "SP API contract",
+                )
+                assessments = assessments[:ASSESSMENT_CAP]
+
             result = {
                 "success": True,
+                "status": "video_class",
                 "content_type": "VideoClass",
                 "content_id": content_id,
                 "name": doc.video_name,
@@ -714,8 +588,12 @@ def get_content_details(content_type, content_id, language=None):
                 "duration": str(doc.duration) if doc.duration else None,
                 "description": doc.description,
                 "translated": False,
-                "assessments": _get_video_assessments("VideoClass", content_id),
+                "language": "",
+                "assessment_count": len(assessments),
             }
+            for i, a in enumerate(assessments, start=1):
+                result[f"assessment_{i}_type"] = a.get("assessment_type")
+                result[f"assessment_{i}_id"] = a.get("assessment_id")
             if language and hasattr(doc, 'video_translations'):
                 for trans in doc.video_translations:
                     if trans.language == language:
@@ -733,6 +611,7 @@ def get_content_details(content_type, content_id, language=None):
             question_count = len(doc.questions) if hasattr(doc, 'questions') else 0
             return {
                 "success": True,
+                "status": "quiz",
                 "content_type": "Quiz",
                 "content_id": content_id,
                 "name": getattr(doc, 'quiz_name', content_id),
@@ -744,6 +623,7 @@ def get_content_details(content_type, content_id, language=None):
         elif content_type == "NoteContent":
             return {
                 "success": True,
+                "status": "note_content",
                 "content_type": "NoteContent",
                 "content_id": content_id,
                 "name": getattr(doc, 'note_name', content_id),
@@ -753,6 +633,7 @@ def get_content_details(content_type, content_id, language=None):
         elif content_type == "Assignment":
             return {
                 "success": True,
+                "status": "assignment",
                 "content_type": "Assignment",
                 "content_id": content_id,
                 "name": getattr(doc, 'assignment_name', content_id),
@@ -763,6 +644,7 @@ def get_content_details(content_type, content_id, language=None):
         elif content_type == "CourseProject":
             return {
                 "success": True,
+                "status": "course_project",
                 "content_type": "CourseProject",
                 "content_id": content_id,
                 "name": getattr(doc, 'project_name', content_id),
@@ -772,6 +654,7 @@ def get_content_details(content_type, content_id, language=None):
         # TextMessageContent, VoiceNoteContent, ParentCallConfig — minimal
         return {
             "success": True,
+            "status": "generic_content",
             "content_type": content_type,
             "content_id": content_id,
             "name": _get_content_display_name(content_type, content_id),
@@ -779,7 +662,7 @@ def get_content_details(content_type, content_id, language=None):
 
     except Exception as e:
         frappe.log_error(f"get_content_details error: {str(e)}", "SP Progression API")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "status": "error", "error_detail": str(e)}
 
 
 # ============================================================
@@ -806,14 +689,17 @@ def complete_content(student_id, course_level, content_type, content_id):
     """
     try:
         if not all([student_id, course_level, content_type, content_id]):
-            return {"success": False, "error": "All parameters required"}
+            return {"success": False, "status": "invalid_input",
+                    "error_detail": "All parameters required"}
 
         if content_type == "Quiz":
-            return {"success": False, "error": "Use start_quiz and submit_answer for Quiz content"}
+            return {"success": False, "status": "wrong_endpoint",
+                    "error_detail": "Use start_quiz and submit_answer for Quiz content"}
 
         student_id = _resolve_student_id(student_id)
         if not student_id:
-            return {"success": False, "error": "Student not found"}
+            return {"success": False, "status": "not_found",
+                    "error_detail": "Student not found"}
 
         progress_data = frappe.db.get_value(
             "StudentStageProgress",
@@ -825,20 +711,23 @@ def complete_content(student_id, course_level, content_type, content_id):
         )
 
         if not progress_data:
-            return {"success": False, "error": "No progress record found. Call get_next_content first."}
+            return {"success": False, "status": "no_progress",
+                    "error_detail": "No progress record found. Call get_next_content first."}
 
         # Validate content matches current position
         content_items = _get_content_items(progress_data["stage"])
         current_index = cint(progress_data["current_content_index"])
 
         if current_index >= len(content_items):
-            return {"success": False, "error": "No content at current position"}
+            return {"success": False, "status": "no_content_at_position",
+                    "error_detail": "No content at current position"}
 
         current_item = content_items[current_index]
         if current_item["content_id"] != content_id:
             return {
                 "success": False,
-                "error": f"Content mismatch. Expected: {current_item['content_id']}, Got: {content_id}",
+                "status": "content_mismatch",
+                "error_detail": f"Content mismatch. Expected: {current_item['content_id']}, Got: {content_id}",
             }
 
         # Calculate time spent
@@ -878,11 +767,19 @@ def complete_content(student_id, course_level, content_type, content_id):
 
     except Exception as e:
         frappe.log_error(f"complete_content error: {str(e)}", "SP Progression API")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "status": "error", "error_detail": str(e)}
 
 
 def _advance_to_next_content(progress_data, course_level):
-    """Move to next content item within LU, or next LU, or signal week complete."""
+    """Move to next content item within LU, or next LU, or signal week complete.
+
+    Returns a flat dict per docs/api-standard-glific.md (Rules 2 + 3):
+      - status: "next_content" | "next_learning_unit" | "week_complete"
+      - next-content fields flattened to next_content_type / next_content_id /
+        next_content_name / next_content_order (no nested object)
+      - progress fields flattened to progress_completed / progress_total /
+        progress_percentage
+    """
     current_index = cint(progress_data["current_content_index"])
     new_index = current_index + 1
     content_items = _get_content_items(progress_data["stage"])
@@ -902,19 +799,15 @@ def _advance_to_next_content(progress_data, course_level):
         next_item = content_items[new_index]
         return {
             "success": True,
-            "action": "next_content",
-            "message": "Content completed!",
-            "next_content": {
-                "type": next_item["content_type"],
-                "id": next_item["content_id"],
-                "name": next_item["content_name"],
-                "order": new_index + 1,
-            },
-            "progress": {
-                "completed": new_index,
-                "total": len(content_items),
-                "percentage": round((new_index / len(content_items)) * 100, 1),
-            },
+            "status": "next_content",
+            "user_message": "Content completed!",
+            "next_content_type": next_item["content_type"],
+            "next_content_id": next_item["content_id"],
+            "next_content_name": next_item["content_name"],
+            "next_content_order": new_index + 1,
+            "progress_completed": new_index,
+            "progress_total": len(content_items),
+            "progress_percentage": round((new_index / len(content_items)) * 100, 1),
         }
 
     # Current LU exhausted — try next LU in same week/tier
@@ -939,23 +832,21 @@ def _advance_to_next_content(progress_data, course_level):
 
         return {
             "success": True,
-            "action": "next_learning_unit",
-            "message": "Learning Unit completed!",
+            "status": "next_learning_unit",
+            "user_message": "Learning Unit completed!",
             "new_learning_unit": next_lu,
             "new_learning_unit_name": lu_info["name"] if lu_info else None,
-            "next_content": {
-                "type": first_content["content_type"],
-                "id": first_content["content_id"],
-                "name": first_content["content_name"],
-                "order": 1,
-            } if first_content else None,
+            "next_content_type": first_content["content_type"] if first_content else None,
+            "next_content_id": first_content["content_id"] if first_content else None,
+            "next_content_name": first_content["content_name"] if first_content else None,
+            "next_content_order": 1 if first_content else 0,
         }
 
     # Week complete
     return {
         "success": True,
-        "action": "week_complete",
-        "message": f"Week {current_week} content complete!",
+        "status": "week_complete",
+        "user_message": f"Week {current_week} content complete!",
         "completed_week": current_week,
     }
 
@@ -985,14 +876,17 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
     """
     try:
         if not all([student_id, course_level, quiz_id]):
-            return {"success": False, "error": "student_id, course_level, and quiz_id required"}
+            return {"success": False, "status": "invalid_input",
+                    "error_detail": "student_id, course_level, and quiz_id required"}
 
         student_id = _resolve_student_id(student_id)
         if not student_id:
-            return {"success": False, "error": "Student not found"}
+            return {"success": False, "status": "not_found",
+                    "error_detail": "Student not found"}
 
         if not frappe.db.exists("Quiz", quiz_id):
-            return {"success": False, "error": f"Quiz not found: {quiz_id}"}
+            return {"success": False, "status": "quiz_not_found",
+                    "error_detail": f"Quiz not found: {quiz_id}"}
 
         progress_data = frappe.db.get_value(
             "StudentStageProgress",
@@ -1003,7 +897,8 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
         )
 
         if not progress_data:
-            return {"success": False, "error": "No progress record. Call get_next_content first."}
+            return {"success": False, "status": "no_progress",
+                    "error_detail": "No progress record. Call get_next_content first."}
 
         # Resume existing in-progress attempt
         if progress_data.get("active_quiz_attempt"):
@@ -1015,7 +910,8 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
         quiz_doc = frappe.get_doc("Quiz", quiz_id)
         questions = _get_quiz_questions(quiz_doc)
         if not questions:
-            return {"success": False, "error": "Quiz has no questions"}
+            return {"success": False, "status": "empty_quiz",
+                    "error_detail": "Quiz has no questions"}
 
         prev_attempts = frappe.db.count("StudentQuizAttempt", {
             "student": student_id, "quiz": quiz_id, "course_level": course_level,
@@ -1057,32 +953,31 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
         frappe.db.commit()
 
         first_q = _get_question_details(questions[0].question, language)
+        # Flat shape per docs/api-standard-glific.md (Rules 2 + 3): no nested
+        # question/options objects. Glific reads `question_text`, `option_a`,
+        # etc. directly. Question is at index 1 (1-based).
         return {
             "success": True,
             "status": "quiz_started",
-            "message": "Quiz started! Good luck!",
+            "user_message": "Quiz started! Good luck!",
             "quiz_attempt_id": attempt.name,
             "quiz_name": attempt.quizname,
             "total_questions": len(questions),
             "passing_score": attempt.passing_score,
-            "question": {
-                "index": 1,
-                "id": questions[0].question,
-                "text": first_q.get("question"),
-                "type": first_q.get("question_type", "Multiple Choice"),
-                "options": {
-                    "A": first_q.get("option_a"),
-                    "B": first_q.get("option_b"),
-                    "C": first_q.get("option_c"),
-                    "D": first_q.get("option_d"),
-                },
-                "correct_option": first_q.get("correct_option"),
-            },
+            "question_index": 1,
+            "question_id": questions[0].question,
+            "question_text": first_q.get("question"),
+            "question_type": first_q.get("question_type", "Multiple Choice"),
+            "option_a": first_q.get("option_a"),
+            "option_b": first_q.get("option_b"),
+            "option_c": first_q.get("option_c"),
+            "option_d": first_q.get("option_d"),
+            "correct_option": first_q.get("correct_option"),
         }
 
     except Exception as e:
         frappe.log_error(f"start_quiz error: {str(e)}", "SP Progression API")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "status": "error", "error_detail": str(e)}
 
 
 def _resume_quiz(attempt, progress_data, language=None):
@@ -1113,28 +1008,25 @@ def _resume_quiz(attempt, progress_data, language=None):
     q_details = _get_question_details(q_row.question, language)
     correct_so_far = sum(1 for a in attempt.answers if a.is_correct)
 
+    # Flat shape per docs/api-standard-glific.md (Rules 2 + 3).
     return {
         "success": True,
         "status": "quiz_resumed",
-        "message": f"Welcome back! Continuing from question {next_index}.",
+        "user_message": f"Welcome back! Continuing from question {next_index}.",
         "quiz_attempt_id": attempt.name,
         "quiz_name": attempt.quizname,
         "total_questions": attempt.total_questions,
         "questions_answered": len(attempt.answers),
         "correct_so_far": correct_so_far,
-        "question": {
-            "index": next_index,
-            "id": q_row.question,
-            "text": q_details.get("question"),
-            "type": q_details.get("question_type", "Multiple Choice"),
-            "options": {
-                "A": q_details.get("option_a"),
-                "B": q_details.get("option_b"),
-                "C": q_details.get("option_c"),
-                "D": q_details.get("option_d"),
-            },
-            "correct_option": q_details.get("correct_option"),
-        },
+        "question_index": next_index,
+        "question_id": q_row.question,
+        "question_text": q_details.get("question"),
+        "question_type": q_details.get("question_type", "Multiple Choice"),
+        "option_a": q_details.get("option_a"),
+        "option_b": q_details.get("option_b"),
+        "option_c": q_details.get("option_c"),
+        "option_d": q_details.get("option_d"),
+        "correct_option": q_details.get("correct_option"),
     }
 
 
@@ -1168,27 +1060,34 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=
     """
     try:
         if not all([student_id, quiz_attempt_id, question_index, answer]):
-            return {"success": False, "error": "All parameters required"}
+            return {"success": False, "status": "invalid_input",
+                    "error_detail": "All parameters required"}
 
         question_index = cint(question_index)
         answer = answer.strip().upper()
         if answer not in OPTION_LETTERS:
-            return {"success": False, "error": "Invalid answer. Must be A, B, C, or D"}
+            return {"success": False, "status": "invalid_answer",
+                    "error_detail": "Invalid answer. Must be A, B, C, or D"}
 
         student_id = _resolve_student_id(student_id)
         if not student_id:
-            return {"success": False, "error": "Student not found"}
+            return {"success": False, "status": "not_found",
+                    "error_detail": "Student not found"}
 
         if not frappe.db.exists("StudentQuizAttempt", quiz_attempt_id):
-            return {"success": False, "error": f"Quiz attempt not found: {quiz_attempt_id}"}
+            return {"success": False, "status": "attempt_not_found",
+                    "error_detail": f"Quiz attempt not found: {quiz_attempt_id}"}
 
         attempt = frappe.get_doc("StudentQuizAttempt", quiz_attempt_id)
         if attempt.student != student_id:
-            return {"success": False, "error": "Attempt does not belong to this student"}
+            return {"success": False, "status": "wrong_student",
+                    "error_detail": "Attempt does not belong to this student"}
         if attempt.status != "in_progress":
-            return {"success": False, "error": "Quiz attempt is not in progress"}
+            return {"success": False, "status": "attempt_not_in_progress",
+                    "error_detail": "Quiz attempt is not in progress"}
         if question_index < 1 or question_index > attempt.total_questions:
-            return {"success": False, "error": f"Invalid question_index. Must be 1-{attempt.total_questions}"}
+            return {"success": False, "status": "invalid_question_index",
+                    "error_detail": f"Invalid question_index. Must be 1-{attempt.total_questions}"}
 
         quiz_doc = frappe.get_doc("Quiz", attempt.quiz)
         questions = _get_quiz_questions(quiz_doc)
@@ -1251,40 +1150,36 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=
         next_q_row = questions[question_index]  # 0-based → next question
         next_q = _get_question_details(next_q_row.question, language)
 
+        # Flat shape per docs/api-standard-glific.md (Rules 2 + 3):
+        #   - answer_result.* → answered_question_*, was_correct, time_spent_seconds
+        #   - progress.* → progress_answered, progress_total, progress_correct, progress_percentage
+        #   - question.* + nested options.* → question_*, option_a..option_d
         return {
             "success": True,
-            "action": "next_question",
-            "answer_result": {
-                "question_index": question_index,
-                "selected_answer": answer,
-                "correct_answer": correct_option,
-                "was_correct": is_correct,
-                "time_spent_seconds": time_spent,
-            },
-            "progress": {
-                "answered": question_index,
-                "total": attempt.total_questions,
-                "correct": attempt.correct_answers,
-                "percentage": round((question_index / attempt.total_questions) * 100, 1),
-            },
-            "question": {
-                "index": question_index + 1,
-                "id": next_q_row.question,
-                "text": next_q.get("question"),
-                "type": next_q.get("question_type", "Multiple Choice"),
-                "options": {
-                    "A": next_q.get("option_a"),
-                    "B": next_q.get("option_b"),
-                    "C": next_q.get("option_c"),
-                    "D": next_q.get("option_d"),
-                },
-                "correct_option": next_q.get("correct_option"),
-            },
+            "status": "next_question",
+            "answered_question_index": question_index,
+            "selected_answer": answer,
+            "correct_answer": correct_option,
+            "was_correct": is_correct,
+            "time_spent_seconds": time_spent,
+            "progress_answered": question_index,
+            "progress_total": attempt.total_questions,
+            "progress_correct": attempt.correct_answers,
+            "progress_percentage": round((question_index / attempt.total_questions) * 100, 1),
+            "question_index": question_index + 1,
+            "question_id": next_q_row.question,
+            "question_text": next_q.get("question"),
+            "question_type": next_q.get("question_type", "Multiple Choice"),
+            "option_a": next_q.get("option_a"),
+            "option_b": next_q.get("option_b"),
+            "option_c": next_q.get("option_c"),
+            "option_d": next_q.get("option_d"),
+            "correct_option": next_q.get("correct_option"),
         }
 
     except Exception as e:
         frappe.log_error(f"submit_answer error: {str(e)}", "SP Progression API")
-        return {"success": False, "error": str(e)}
+        return {"success": False, "status": "error", "error_detail": str(e)}
 
 
 def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
@@ -1362,39 +1257,46 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
         time_spent=total_time,
     )
 
-    # Build base response
+    # Build base response — flat per docs/api-standard-glific.md (Rules 2 + 3).
+    # Note: removed boolean `quiz_passed` field that previously collided with
+    # the `status` enum value ("quiz_passed" / "quiz_failed"). The status enum
+    # already conveys pass/fail unambiguously; flows read it via Split-by-Expression.
     last_ans = attempt.answers[-1] if attempt.answers else None
     response = {
         "success": True,
-        "action": "quiz_passed" if passed else "quiz_failed",
-        "answer_result": {
-            "question_index": attempt.total_questions,
-            "selected_answer": last_ans.selected_option if last_ans else None,
-            "correct_answer": last_ans.correct_option if last_ans else None,
-            "was_correct": bool(last_ans.is_correct) if last_ans else False,
-            "time_spent_seconds": last_ans.time_spent_seconds if last_ans else 0,
-        },
-        "quiz_result": {
-            "score": round(score, 1),
-            "correct": correct_count,
-            "total": total,
-            "passed": passed,
-            "passing_score": attempt.passing_score,
-            "time_spent_seconds": total_time,
-        },
+        "status": "quiz_passed" if passed else "quiz_failed",
+        "user_message": "Great job! Quiz passed!" if passed
+                        else "Quiz complete. Let's continue with the next content.",
+        # answer_result.* flattened
+        "answered_question_index": attempt.total_questions,
+        "selected_answer": last_ans.selected_option if last_ans else None,
+        "correct_answer": last_ans.correct_option if last_ans else None,
+        "was_correct": bool(last_ans.is_correct) if last_ans else False,
+        "time_spent_seconds": last_ans.time_spent_seconds if last_ans else 0,
+        # quiz_result.* flattened with quiz_ prefix to avoid colliding with
+        # next-content fields injected below
+        "quiz_score": round(score, 1),
+        "quiz_correct": correct_count,
+        "quiz_total": total,
+        "quiz_passing_score": attempt.passing_score,
+        "quiz_time_spent_seconds": total_time,
     }
 
-    # Progression: same for both Core and Remedial paths
-    # Quiz pass/fail → advance to next content or week_complete
+    # Progression: same for both Core and Remedial paths.
+    # Quiz pass/fail → advance to next content or week_complete.
     # Path routing (Core vs Remedial) is determined solely by assignment
     # submission validity, not quiz results.
+    #
+    # _advance_to_next_content returns a flat dict with `status` and
+    # next-content fields. Merge into our response, but our outer `status`
+    # ("quiz_passed" / "quiz_failed") and `user_message` win — Glific reads
+    # those for the quiz outcome and reads `next_action_status` for what to
+    # do next (the merged child's status enum). The renamed key avoids the
+    # confusion of a "next_action" key holding what is actually a status string.
     next_action = _advance_to_next_content(progress_data, course_level)
     next_action.pop("success", None)
-    response["next_action"] = next_action.pop("action", "next_content")
-    if passed:
-        response["message"] = "Great job! Quiz passed!"
-    else:
-        response["message"] = "Quiz complete. Let's continue with the next content."
+    response["next_action_status"] = next_action.pop("status", "next_content")
+    next_action.pop("user_message", None)  # quiz outcome msg wins over next-content msg
     response.update(next_action)
 
     return response
