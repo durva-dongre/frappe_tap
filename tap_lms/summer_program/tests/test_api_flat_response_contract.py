@@ -45,6 +45,72 @@ def assert_flat_response(response, *, allow_none=True):
         )
 
 
+class TestGlificResponseDecorator(unittest.TestCase):
+    """The @glific_response decorator writes the wrapped function's return
+    dict to frappe.local.response and returns None.
+
+    Endpoints in student_progression_sp.py use this decorator (per task #69)
+    so Glific reads `@results.webhook.<field>` directly instead of going
+    through `@results.webhook.message.<field>`. Endpoint tests in this file
+    call the underlying function via `.__wrapped__` to bypass the decorator
+    and assert the dict structure; this class proves the decorator's own
+    contract."""
+
+    def test_decorator_writes_dict_to_frappe_local_response(self):
+        from tap_lms.summer_program.utils import glific_response
+
+        @glific_response
+        def my_endpoint():
+            return {"success": True, "status": "ok", "field": "value"}
+
+        # Patch frappe.local at the module the decorator imports from
+        with patch("tap_lms.summer_program.utils.frappe") as mock_frappe:
+            mock_response = {}
+            mock_frappe.local.response = mock_response
+
+            result = my_endpoint()
+
+            # Decorator returns None — Frappe will set response.message = None
+            self.assertIsNone(result)
+            # The endpoint's dict landed in frappe.local.response
+            self.assertEqual(mock_response, {"success": True, "status": "ok", "field": "value"})
+
+    def test_decorator_handles_none_return(self):
+        """If the endpoint returns None (e.g. it wrote to local.response
+        directly already), the decorator is a no-op — no write attempt."""
+        from tap_lms.summer_program.utils import glific_response
+
+        @glific_response
+        def my_endpoint():
+            return None
+
+        with patch("tap_lms.summer_program.utils.frappe") as mock_frappe:
+            mock_response = {}
+            mock_frappe.local.response = mock_response
+
+            result = my_endpoint()
+
+            self.assertIsNone(result)
+            self.assertEqual(mock_response, {})
+
+    def test_decorator_preserves_wrapped_function_signature(self):
+        """`__wrapped__` lets tests bypass the decorator to inspect the raw
+        return value. functools.wraps preserves docstring + name too."""
+        from tap_lms.summer_program.utils import glific_response
+
+        @glific_response
+        def my_endpoint(a, b):
+            """An endpoint."""
+            return {"sum": a + b}
+
+        self.assertTrue(hasattr(my_endpoint, "__wrapped__"))
+        # Direct call via __wrapped__ returns the raw dict
+        self.assertEqual(my_endpoint.__wrapped__(2, 3), {"sum": 5})
+        # Docstring and name preserved
+        self.assertEqual(my_endpoint.__name__, "my_endpoint")
+        self.assertEqual(my_endpoint.__doc__, "An endpoint.")
+
+
 class TestFlatResponsePredicate(unittest.TestCase):
     """Sanity tests for the predicate itself."""
 
@@ -127,7 +193,7 @@ class TestStartQuizFlatShape(unittest.TestCase):
         # The function does pe.insert(); make sure insert is a no-op on attempt
         attempt.insert = MagicMock()
 
-        resp = api.start_quiz("STU-001", "CL-1", "Q1")
+        resp = api.start_quiz.__wrapped__("STU-001", "CL-1", "Q1")
         assert_flat_response(resp)
         self.assertTrue(resp["success"])
         self.assertEqual(resp["status"], "quiz_started")
@@ -191,7 +257,7 @@ class TestSubmitAnswerFlatShape(unittest.TestCase):
             },
         ]
 
-        resp = api.submit_answer("STU-001", "QA-1", 1, "A")
+        resp = api.submit_answer.__wrapped__("STU-001", "QA-1", 1, "A")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "next_question")
         self.assertEqual(resp["question_index"], 2)
@@ -217,7 +283,7 @@ class TestGetContentDetailsFlatShape(unittest.TestCase):
         doc.video_translations = []
         mock_frappe.get_doc.return_value = doc
 
-        resp = api.get_content_details("VideoClass", "VC-1")
+        resp = api.get_content_details.__wrapped__("VideoClass", "VC-1")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "video_class")
         self.assertNotIn("assessments", resp,
@@ -235,7 +301,7 @@ class TestGetContentDetailsFlatShape(unittest.TestCase):
         doc.time_limit = None
         mock_frappe.get_doc.return_value = doc
 
-        resp = api.get_content_details("Quiz", "Q1")
+        resp = api.get_content_details.__wrapped__("Quiz", "Q1")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "quiz")
         self.assertEqual(resp["total_questions"], 3)
@@ -312,7 +378,7 @@ class TestErrorPathFlatShape(unittest.TestCase):
         from tap_lms.summer_program import student_progression_sp as api
 
         # Missing required params → invalid_input
-        resp = api.start_quiz("", "", "")
+        resp = api.start_quiz.__wrapped__("", "", "")
         assert_flat_response(resp)
         self.assertFalse(resp["success"])
         self.assertEqual(resp["status"], "invalid_input")
@@ -330,7 +396,7 @@ class TestErrorPathFlatShape(unittest.TestCase):
         from tap_lms.summer_program import student_progression_sp as api
 
         mock_resolve.return_value = None
-        resp = api.start_quiz("STU-???", "CL-1", "Q1")
+        resp = api.start_quiz.__wrapped__("STU-???", "CL-1", "Q1")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "not_found")
         self.assertNotIn("error", resp)
@@ -343,7 +409,7 @@ class TestErrorPathFlatShape(unittest.TestCase):
         from tap_lms.summer_program import student_progression_sp as api
 
         # Answer not in A/B/C/D → invalid_answer
-        resp = api.submit_answer("STU-1", "QA-1", 1, "Z")
+        resp = api.submit_answer.__wrapped__("STU-1", "QA-1", 1, "Z")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "invalid_answer")
         self.assertNotIn("error", resp)
@@ -352,7 +418,7 @@ class TestErrorPathFlatShape(unittest.TestCase):
     def test_get_content_details_invalid_content_type(self, mock_frappe):
         from tap_lms.summer_program import student_progression_sp as api
 
-        resp = api.get_content_details("NotARealType", "X-1")
+        resp = api.get_content_details.__wrapped__("NotARealType", "X-1")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "invalid_content_type")
         self.assertNotIn("error", resp)
@@ -362,7 +428,7 @@ class TestErrorPathFlatShape(unittest.TestCase):
         from tap_lms.summer_program import student_progression_sp as api
 
         mock_frappe.db.exists.return_value = False
-        resp = api.get_content_details("Quiz", "MISSING-Q")
+        resp = api.get_content_details.__wrapped__("Quiz", "MISSING-Q")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "not_found")
         self.assertNotIn("error", resp)
@@ -484,7 +550,7 @@ class TestGetWeeklyContentFlatShape(unittest.TestCase):
         mock_frappe.get_doc.return_value = MagicMock()
         mock_frappe.db.get_value.return_value = "Week 1: Basics"
 
-        resp = api.get_weekly_content("STU-001")
+        resp = api.get_weekly_content.__wrapped__("STU-001")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "content_available")
         self.assertEqual(resp["content_count"], 2)
@@ -525,7 +591,7 @@ class TestGetContentDetailsAssessmentsPreserved(unittest.TestCase):
             {"assessment_type": "CourseProject", "assessment_id": "CP-002"},
         ]
 
-        resp = api.get_content_details("VideoClass", "VC-1")
+        resp = api.get_content_details.__wrapped__("VideoClass", "VC-1")
         assert_flat_response(resp)
         self.assertEqual(resp["assessment_count"], 2)
         self.assertEqual(resp["assessment_1_type"], "Assignment")
@@ -557,7 +623,7 @@ class TestGetContentDetailsAssessmentsPreserved(unittest.TestCase):
 
         mock_assessments.return_value = None  # no assessments
 
-        resp = api.get_content_details("VideoClass", "VC-1")
+        resp = api.get_content_details.__wrapped__("VideoClass", "VC-1")
         assert_flat_response(resp)
         self.assertEqual(resp["assessment_count"], 0)
         # No assessment_<i>_* keys when count is 0
@@ -619,7 +685,7 @@ class TestGetNextContentFlatShape(unittest.TestCase):
             "course_context": "CL-1",
         }
 
-        resp = api.get_next_content("STU-001")
+        resp = api.get_next_content.__wrapped__("STU-001")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "quiz_in_progress")
         # Flattened position.* (was the user-reported nesting)
@@ -700,7 +766,7 @@ class TestGetNextContentFlatShape(unittest.TestCase):
             {"assessment_type": "Assignment", "assessment_id": "ASN-W1-001"},
         ]
 
-        resp = api.get_next_content("STU-001")
+        resp = api.get_next_content.__wrapped__("STU-001")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "content_available")
         # Flattened position
