@@ -875,51 +875,6 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
         and first question details.
     """
     try:
-        # Temporary hardcoded payload for testing the all-questions response shape.
-        return {
-            "success": True,
-            "status": "quiz_started",
-            "user_message": "Quiz started! Good luck!",
-            "quiz_attempt_id": "SQA-TEST-0001",
-            "quiz_name": "Week 1 Quiz",
-            "total_questions": 3,
-            "passing_score": 60.0,
-            "questions": [
-                {
-                    "question_index": 1,
-                    "question_id": "QQ-TEST-0001",
-                    "question_text": "What is 2 + 2?",
-                    "question_type": "Multiple Choice",
-                    "option_a": "2",
-                    "option_b": "3",
-                    "option_c": "4",
-                    "option_d": "5",
-                    "correct_option": "C",
-                },
-                {
-                    "question_index": 2,
-                    "question_id": "QQ-TEST-0002",
-                    "question_text": "Which number is even?",
-                    "question_type": "Multiple Choice",
-                    "option_a": "7",
-                    "option_b": "9",
-                    "option_c": "11",
-                    "option_d": "12",
-                    "correct_option": "D",
-                },
-                {
-                    "question_index": 3,
-                    "question_id": "QQ-TEST-0003",
-                    "question_text": "What comes after 10?",
-                    "question_type": "Multiple Choice",
-                    "option_a": "9",
-                    "option_b": "10",
-                    "option_c": "11",
-                    "option_d": "12",
-                    "correct_option": "C",
-                },
-            ],
-        }
 
         if not all([student_id, course_level, quiz_id]):
             return {"success": False, "status": "invalid_input",
