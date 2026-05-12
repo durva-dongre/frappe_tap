@@ -1,0 +1,724 @@
+"""
+Tests for the Glific flat-map response contract.
+
+Per docs/api-standard-glific.md (Rules 2 + 3): every whitelisted endpoint that
+Glific consumes must return a flat dict — every value must be a scalar
+(string, int, float, bool, None). No nested dicts. No lists.
+
+These tests do NOT execute the full business logic of each endpoint (that's
+covered by integration tests on the bench). They mock the minimum needed to
+reach the return statement and assert the response shape complies with the
+contract.
+
+Reference: docs/api-standard-glific.md sections 2, 3, 6.
+"""
+import unittest
+from unittest.mock import patch, MagicMock
+
+
+# ════════════════════════════════════════════════════════════
+# Flat-response predicate (the contract this test file enforces)
+# ════════════════════════════════════════════════════════════
+
+
+def assert_flat_response(response, *, allow_none=True):
+    """Assert a response dict has only scalar values (no nested dicts or lists).
+
+    Allowed value types: str, int, float, bool, None (or None disallowed
+    per allow_none).
+
+    Raises AssertionError with the offending key on first violation.
+    """
+    assert isinstance(response, dict), (
+        f"Response must be a dict; got {type(response).__name__}"
+    )
+    SCALAR_TYPES = (str, int, float, bool)
+    for key, value in response.items():
+        if value is None:
+            assert allow_none, f"Field '{key}' is None and allow_none=False"
+            continue
+        # bool is a subclass of int — both pass the SCALAR_TYPES check
+        assert isinstance(value, SCALAR_TYPES), (
+            f"Field '{key}' is not a scalar — got {type(value).__name__} "
+            f"({value!r}). Flatten via numeric-suffix expansion (see "
+            f"docs/api-standard-glific.md Rule 3)."
+        )
+
+
+class TestFlatResponsePredicate(unittest.TestCase):
+    """Sanity tests for the predicate itself."""
+
+    def test_flat_dict_passes(self):
+        assert_flat_response({"a": "x", "b": 1, "c": True, "d": None})
+
+    def test_nested_dict_fails(self):
+        with self.assertRaises(AssertionError) as ctx:
+            assert_flat_response({"a": "x", "options": {"A": "1"}})
+        self.assertIn("options", str(ctx.exception))
+        self.assertIn("dict", str(ctx.exception))
+
+    def test_list_fails(self):
+        with self.assertRaises(AssertionError) as ctx:
+            assert_flat_response({"a": "x", "items": ["a", "b"]})
+        self.assertIn("items", str(ctx.exception))
+        self.assertIn("list", str(ctx.exception))
+
+    def test_none_can_be_disallowed(self):
+        with self.assertRaises(AssertionError):
+            assert_flat_response({"a": None}, allow_none=False)
+
+
+# ════════════════════════════════════════════════════════════
+# Endpoint shape contracts — assert each endpoint's return paths
+# produce a flat response dict
+# ════════════════════════════════════════════════════════════
+
+
+class TestStartQuizFlatShape(unittest.TestCase):
+    """start_quiz must produce flat responses for new + resume variants."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_question_details")
+    @patch("tap_lms.summer_program.student_progression_sp._get_quiz_questions")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_new_quiz_response_is_flat(
+        self, mock_frappe, mock_resolve, mock_get_questions, mock_get_q_details
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = "STU-001"
+        mock_frappe.db.exists.return_value = True
+        mock_frappe.db.get_value.return_value = {
+            "name": "PROG-1",
+            "stage": "LU-1",
+            "current_week": 1,
+            "current_tier": "Basic",
+            "current_content_index": 0,
+            "is_on_remedial": 0,
+            "active_quiz_attempt": None,
+        }
+        mock_frappe.db.count.return_value = 0
+
+        # Quiz doc
+        quiz_doc = MagicMock()
+        quiz_doc.quiz_name = "Q1"
+        quiz_doc.passing_score = 60
+        # Question rows
+        q_row = MagicMock()
+        q_row.question = "QN001"
+        mock_get_questions.return_value = [q_row]
+        mock_get_q_details.return_value = {
+            "question": "What is X?",
+            "question_type": "Multiple Choice",
+            "option_a": "A",
+            "option_b": "B",
+            "option_c": "C",
+            "option_d": "D",
+            "correct_option": "A",
+        }
+
+        # frappe.get_doc returns the quiz_doc for "Quiz" lookup, then attempt
+        attempt = MagicMock()
+        attempt.name = "QA-1"
+        attempt.quizname = "Q1"
+        attempt.passing_score = 60
+        mock_frappe.get_doc.side_effect = [quiz_doc, attempt]
+
+        # The function does pe.insert(); make sure insert is a no-op on attempt
+        attempt.insert = MagicMock()
+
+        resp = api.start_quiz("STU-001", "CL-1", "Q1")
+        assert_flat_response(resp)
+        self.assertTrue(resp["success"])
+        self.assertEqual(resp["status"], "quiz_started")
+        # Spot-check the flattened option fields
+        self.assertEqual(resp["option_a"], "A")
+        self.assertEqual(resp["question_index"], 1)
+
+
+class TestSubmitAnswerFlatShape(unittest.TestCase):
+    """submit_answer must produce flat responses for both 'next_question'
+    and 'quiz complete' variants."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_question_details")
+    @patch("tap_lms.summer_program.student_progression_sp._get_quiz_questions")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_next_question_response_is_flat(
+        self, mock_frappe, mock_resolve, mock_get_questions, mock_get_q_details
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = "STU-001"
+        mock_frappe.db.exists.return_value = True
+
+        attempt = MagicMock()
+        attempt.student = "STU-001"
+        attempt.status = "in_progress"
+        attempt.total_questions = 3
+        attempt.quiz = "Q1"
+        attempt.question_started_at = None
+        attempt.started_at = None
+        attempt.answers = []
+        attempt.correct_answers = 0
+        attempt.student_progress = None
+        attempt.append = MagicMock()
+        attempt.save = MagicMock()
+
+        quiz_doc = MagicMock()
+        mock_frappe.get_doc.side_effect = [attempt, quiz_doc]
+
+        q1 = MagicMock()
+        q1.question = "QN001"
+        q2 = MagicMock()
+        q2.question = "QN002"
+        mock_get_questions.return_value = [q1, q2, MagicMock()]
+
+        mock_get_q_details.side_effect = [
+            {  # current question details
+                "correct_option": "A",
+                "option_a": "A", "option_b": "B",
+                "option_c": "C", "option_d": "D",
+                "question": "Q1?",
+                "question_type": "Multiple Choice",
+            },
+            {  # next question details
+                "correct_option": "B",
+                "option_a": "W", "option_b": "X",
+                "option_c": "Y", "option_d": "Z",
+                "question": "Q2?",
+                "question_type": "Multiple Choice",
+            },
+        ]
+
+        resp = api.submit_answer("STU-001", "QA-1", 1, "A")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "next_question")
+        self.assertEqual(resp["question_index"], 2)
+        self.assertEqual(resp["option_b"], "X")
+
+
+class TestGetContentDetailsFlatShape(unittest.TestCase):
+    """get_content_details has 6 content-type branches; all must be flat.
+    `assessments` array (was the only nested field) was dropped in this refactor."""
+
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_video_class_response_is_flat(self, mock_frappe):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_frappe.db.exists.return_value = True
+        doc = MagicMock()
+        doc.video_name = "V1"
+        doc.video_youtube_url = "https://youtu.be/x"
+        doc.video_plio_url = None
+        doc.video_file = None
+        doc.duration = 300
+        doc.description = "..."
+        doc.video_translations = []
+        mock_frappe.get_doc.return_value = doc
+
+        resp = api.get_content_details("VideoClass", "VC-1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "video_class")
+        self.assertNotIn("assessments", resp,
+                         "assessments[] array must not be in flat response")
+
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_quiz_response_is_flat(self, mock_frappe):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_frappe.db.exists.return_value = True
+        doc = MagicMock()
+        doc.questions = [MagicMock(), MagicMock(), MagicMock()]
+        doc.quiz_name = "Q1"
+        doc.passing_score = 60
+        doc.time_limit = None
+        mock_frappe.get_doc.return_value = doc
+
+        resp = api.get_content_details("Quiz", "Q1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "quiz")
+        self.assertEqual(resp["total_questions"], 3)
+        self.assertNotIn("questions", resp,
+                         "questions[] array must not be in flat response — "
+                         "use start_quiz to walk through questions")
+
+
+class TestAdvanceToNextContentFlatShape(unittest.TestCase):
+    """_advance_to_next_content is the helper called by complete_content and
+    _complete_quiz_sp. All 3 variants (next_content, next_learning_unit,
+    week_complete) must be flat."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_content_items")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_next_content_variant_is_flat(self, mock_frappe, mock_items):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_items.return_value = [
+            {"content_type": "VideoClass", "content_id": "VC-1", "content_name": "Vid 1", "is_optional": 0},
+            {"content_type": "Quiz", "content_id": "Q1", "content_name": "Quiz 1", "is_optional": 0},
+        ]
+
+        progress = {
+            "name": "PROG-1",
+            "current_content_index": 0,
+            "current_week": 1,
+            "current_tier": "Basic",
+            "stage": "LU-1",
+        }
+        resp = api._advance_to_next_content(progress, "CL-1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "next_content")
+        # Spot-check the flattened next_content_* fields
+        self.assertEqual(resp["next_content_type"], "Quiz")
+        self.assertEqual(resp["next_content_id"], "Q1")
+        self.assertEqual(resp["progress_completed"], 1)
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_next_learning_unit")
+    @patch("tap_lms.summer_program.student_progression_sp._get_content_items")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_week_complete_variant_is_flat(
+        self, mock_frappe, mock_items, mock_next_lu
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_items.return_value = [
+            {"content_type": "VideoClass", "content_id": "VC-1", "content_name": "Vid 1", "is_optional": 0},
+        ]
+        mock_next_lu.return_value = None  # no more LUs
+
+        progress = {
+            "name": "PROG-1",
+            "current_content_index": 0,
+            "current_week": 1,
+            "current_tier": "Basic",
+            "stage": "LU-1",
+        }
+        resp = api._advance_to_next_content(progress, "CL-1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "week_complete")
+        self.assertEqual(resp["completed_week"], 1)
+
+
+class TestErrorPathFlatShape(unittest.TestCase):
+    """Per Rule 6: every error path must also be flat AND use the
+    status + error_detail envelope (not the legacy `error` key)."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_start_quiz_validation_error_uses_status_envelope(
+        self, mock_frappe, mock_resolve
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        # Missing required params → invalid_input
+        resp = api.start_quiz("", "", "")
+        assert_flat_response(resp)
+        self.assertFalse(resp["success"])
+        self.assertEqual(resp["status"], "invalid_input")
+        self.assertIn("error_detail", resp)
+        self.assertNotIn(
+            "error", resp,
+            "legacy 'error' key must not appear — use 'error_detail'",
+        )
+
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_start_quiz_student_not_found_uses_status_envelope(
+        self, mock_frappe, mock_resolve
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = None
+        resp = api.start_quiz("STU-???", "CL-1", "Q1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "not_found")
+        self.assertNotIn("error", resp)
+
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_submit_answer_invalid_answer_uses_status_envelope(
+        self, mock_frappe, mock_resolve
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        # Answer not in A/B/C/D → invalid_answer
+        resp = api.submit_answer("STU-1", "QA-1", 1, "Z")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "invalid_answer")
+        self.assertNotIn("error", resp)
+
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_get_content_details_invalid_content_type(self, mock_frappe):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        resp = api.get_content_details("NotARealType", "X-1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "invalid_content_type")
+        self.assertNotIn("error", resp)
+
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_get_content_details_not_found(self, mock_frappe):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_frappe.db.exists.return_value = False
+        resp = api.get_content_details("Quiz", "MISSING-Q")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "not_found")
+        self.assertNotIn("error", resp)
+
+
+class TestAdvanceToNextLearningUnitFlatShape(unittest.TestCase):
+    """H3 follow-up: cover the `next_learning_unit` variant of
+    _advance_to_next_content (the case where current LU is exhausted but
+    another LU exists for the same week/tier)."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_learning_unit_info")
+    @patch("tap_lms.summer_program.student_progression_sp._get_next_learning_unit")
+    @patch("tap_lms.summer_program.student_progression_sp._get_content_items")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_next_learning_unit_variant_is_flat(
+        self, mock_frappe, mock_items, mock_next_lu, mock_lu_info
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        # Current LU has 1 item; new_index would be 1 == len → no more items
+        # in current LU. _get_next_learning_unit returns a new LU.
+        mock_items.side_effect = [
+            # First call: items in current LU (1 item, current_content_index = 0)
+            [{"content_type": "VideoClass", "content_id": "VC-1",
+              "content_name": "Vid 1", "is_optional": 0}],
+            # Second call: items in the NEXT LU (for first_content lookup)
+            [{"content_type": "Quiz", "content_id": "Q1",
+              "content_name": "Quiz 1", "is_optional": 0}],
+        ]
+        mock_next_lu.return_value = "LU-2"
+        mock_lu_info.return_value = {"name": "Learning Unit 2"}
+
+        progress = {
+            "name": "PROG-1",
+            "current_content_index": 0,
+            "current_week": 1,
+            "current_tier": "Basic",
+            "stage": "LU-1",
+        }
+        resp = api._advance_to_next_content(progress, "CL-1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "next_learning_unit")
+        self.assertEqual(resp["new_learning_unit"], "LU-2")
+        self.assertEqual(resp["new_learning_unit_name"], "Learning Unit 2")
+        # Flattened next_content_* fields
+        self.assertEqual(resp["next_content_type"], "Quiz")
+        self.assertEqual(resp["next_content_id"], "Q1")
+        self.assertEqual(resp["next_content_order"], 1)
+
+
+class TestCompleteQuizSpRenames(unittest.TestCase):
+    """B1 regression: verify _complete_quiz_sp no longer has a `quiz_passed`
+    boolean field colliding with the `status` enum, and uses
+    `next_action_status` instead of the ambiguous `next_action` key."""
+
+    def test_quiz_passed_bool_field_removed(self):
+        """The boolean `quiz_passed` field was removed because it collided
+        with the status enum value "quiz_passed" / "quiz_failed". Flows
+        branch on status, not on the bool field."""
+        from tap_lms.summer_program import student_progression_sp as api
+        import inspect
+        source = inspect.getsource(api._complete_quiz_sp)
+        # The string "quiz_passed" appears in the status enum value but NOT
+        # as a key holding a bool. Check that there's no `"quiz_passed": passed`
+        # in the response-build code.
+        self.assertNotIn(
+            '"quiz_passed": passed',
+            source,
+            "Boolean quiz_passed field should be removed — it collides with "
+            "the status enum value 'quiz_passed'. Branch on status instead.",
+        )
+
+    def test_next_action_renamed_to_next_action_status(self):
+        from tap_lms.summer_program import student_progression_sp as api
+        import inspect
+        source = inspect.getsource(api._complete_quiz_sp)
+        self.assertIn(
+            'response["next_action_status"]',
+            source,
+            "The merged child status should be assigned to next_action_status, "
+            "not the ambiguous next_action key.",
+        )
+
+
+class TestGetWeeklyContentFlatShape(unittest.TestCase):
+    """get_weekly_content must produce a flat response where content_items[]
+    is expanded to content_<i>_type / content_<i>_id / etc."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_or_create_sp_progress")
+    @patch("tap_lms.summer_program.student_progression_sp._get_week_rule")
+    @patch("tap_lms.summer_program.student_progression_sp._get_content_items")
+    @patch("tap_lms.summer_program.student_progression_sp._get_learning_unit")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_path")
+    @patch("tap_lms.summer_program.student_progression_sp._get_current_week")
+    @patch("tap_lms.summer_program.student_progression_sp._get_course_level_for_student")
+    @patch("tap_lms.summer_program.student_progression_sp._get_active_bpr_for_student")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_content_items_flattened_to_suffixed_keys(
+        self, mock_frappe, mock_resolve, mock_bpr, mock_cl,
+        mock_week, mock_path, mock_lu, mock_items, mock_wr, mock_progress,
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = "STU-001"
+        batch = MagicMock()
+        batch.total_weeks = 8
+        bpr = MagicMock()
+        mock_bpr.return_value = (batch, bpr)
+        mock_cl.return_value = "CL-1"
+        mock_week.return_value = 1
+        mock_path.return_value = "Core"
+        mock_lu.return_value = "LU-1"
+        mock_items.return_value = [
+            {"content_type": "VideoClass", "content_id": "VC-1", "content_name": "Vid", "is_optional": 0},
+            {"content_type": "Quiz", "content_id": "Q1", "content_name": "Quiz", "is_optional": 0},
+        ]
+        mock_wr.return_value = {"expected_submission_type": "photo", "submission_validation_enabled": 1}
+        mock_frappe.get_doc.return_value = MagicMock()
+        mock_frappe.db.get_value.return_value = "Week 1: Basics"
+
+        resp = api.get_weekly_content("STU-001")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "content_available")
+        self.assertEqual(resp["content_count"], 2)
+        self.assertEqual(resp["content_1_type"], "VideoClass")
+        self.assertEqual(resp["content_1_id"], "VC-1")
+        self.assertEqual(resp["content_2_type"], "Quiz")
+        # The old nested key must NOT appear
+        self.assertNotIn("content_items", resp,
+                         "content_items[] array must not be in flat response")
+
+
+class TestGetContentDetailsAssessmentsPreserved(unittest.TestCase):
+    """Critical regression: get_content_details for VideoClass MUST return
+    `assessment_<i>_id` because that's the assignment_id Glific passes to
+    save_submission. Dropping it (an earlier mistake) broke the submission flow."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_video_assessments")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_video_class_includes_assessment_ids_as_flat_suffixed_keys(
+        self, mock_frappe, mock_assessments
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_frappe.db.exists.return_value = True
+        doc = MagicMock()
+        doc.video_name = "V1"
+        doc.video_youtube_url = "https://youtu.be/x"
+        doc.video_plio_url = None
+        doc.video_file = None
+        doc.duration = 300
+        doc.description = "..."
+        doc.video_translations = []
+        mock_frappe.get_doc.return_value = doc
+
+        # Simulate 2 assessments linked to the video
+        mock_assessments.return_value = [
+            {"assessment_type": "Assignment", "assessment_id": "ASN-001"},
+            {"assessment_type": "CourseProject", "assessment_id": "CP-002"},
+        ]
+
+        resp = api.get_content_details("VideoClass", "VC-1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["assessment_count"], 2)
+        self.assertEqual(resp["assessment_1_type"], "Assignment")
+        self.assertEqual(resp["assessment_1_id"], "ASN-001",
+                         "assignment_id is the input to save_submission — "
+                         "MUST be preserved as a top-level flat key.")
+        self.assertEqual(resp["assessment_2_type"], "CourseProject")
+        self.assertEqual(resp["assessment_2_id"], "CP-002")
+        # And the array form is GONE
+        self.assertNotIn("assessments", resp)
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_video_assessments")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_video_class_no_assessments_returns_zero_count(
+        self, mock_frappe, mock_assessments
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_frappe.db.exists.return_value = True
+        doc = MagicMock()
+        doc.video_name = "V1"
+        doc.video_youtube_url = None
+        doc.video_plio_url = None
+        doc.video_file = None
+        doc.duration = None
+        doc.description = ""
+        doc.video_translations = []
+        mock_frappe.get_doc.return_value = doc
+
+        mock_assessments.return_value = None  # no assessments
+
+        resp = api.get_content_details("VideoClass", "VC-1")
+        assert_flat_response(resp)
+        self.assertEqual(resp["assessment_count"], 0)
+        # No assessment_<i>_* keys when count is 0
+        self.assertNotIn("assessment_1_id", resp)
+
+
+class TestGetNextContentFlatShape(unittest.TestCase):
+    """Task #68 — `get_next_content` previously returned nested `position` and
+    `content` objects (plus `assessments[]` array inside content) for 3 variants
+    (quiz_in_progress, content_available current LU, content_available next LU).
+    All flattened now."""
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_or_create_sp_progress")
+    @patch("tap_lms.summer_program.student_progression_sp._get_learning_unit")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_path")
+    @patch("tap_lms.summer_program.student_progression_sp._get_effective_week")
+    @patch("tap_lms.summer_program.student_progression_sp._get_current_week")
+    @patch("tap_lms.summer_program.student_progression_sp._get_course_level_for_student")
+    @patch("tap_lms.summer_program.student_progression_sp._get_active_bpr_for_student")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_quiz_in_progress_variant_is_flat(
+        self, mock_frappe, mock_resolve, mock_bpr, mock_cl, mock_week,
+        mock_effective, mock_path, mock_lu, mock_progress,
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = "STU-001"
+        student = MagicMock()
+        student.name = "STU-001"
+        batch = MagicMock()
+        batch.total_weeks = 8
+        bpr = MagicMock()
+        mock_frappe.get_doc.return_value = student
+        mock_bpr.return_value = (batch, bpr)
+        mock_cl.return_value = "CL-1"
+        mock_week.return_value = 1
+        mock_effective.return_value = 1
+        mock_path.return_value = "Core"
+        mock_lu.return_value = "LU-1"
+        mock_progress.return_value = "PROG-1"
+
+        # Progress data has an active quiz attempt
+        mock_frappe.db.get_value.return_value = {
+            "name": "PROG-1",
+            "student": "STU-001",
+            "stage": "Understanding Money-Basic-0",
+            "status": "in_progress",
+            "current_week": 1,
+            "current_tier": "Basic",
+            "current_content_index": 0,
+            "is_on_remedial": 0,
+            "remedial_attempts": 0,
+            "active_content_type": "Quiz",
+            "active_content_id": "BasicQuiz_Quiz_B-basic",
+            "content_started_at": None,
+            "active_quiz_attempt": "2rscijc6nd",
+            "question_started_at": None,
+            "course_context": "CL-1",
+        }
+
+        resp = api.get_next_content("STU-001")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "quiz_in_progress")
+        # Flattened position.* (was the user-reported nesting)
+        self.assertEqual(resp["position_week"], 1)
+        self.assertEqual(resp["position_tier"], "Basic")
+        self.assertEqual(resp["position_learning_unit"], "Understanding Money-Basic-0")
+        self.assertFalse(resp["position_is_remedial"])
+        self.assertEqual(resp["position_path"], "Core")
+        # Flattened content.*
+        self.assertEqual(resp["content_type"], "Quiz")
+        self.assertEqual(resp["content_id"], "BasicQuiz_Quiz_B-basic")
+        # Other top-level fields preserved
+        self.assertTrue(resp["has_active_quiz"])
+        self.assertEqual(resp["quiz_attempt_id"], "2rscijc6nd")
+        # Nested keys MUST be absent
+        self.assertNotIn("position", resp)
+        self.assertNotIn("content", resp)
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_video_assessments")
+    @patch("tap_lms.summer_program.student_progression_sp._get_learning_unit_info")
+    @patch("tap_lms.summer_program.student_progression_sp._get_content_items")
+    @patch("tap_lms.summer_program.student_progression_sp._get_or_create_sp_progress")
+    @patch("tap_lms.summer_program.student_progression_sp._get_learning_unit")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_path")
+    @patch("tap_lms.summer_program.student_progression_sp._get_effective_week")
+    @patch("tap_lms.summer_program.student_progression_sp._get_current_week")
+    @patch("tap_lms.summer_program.student_progression_sp._get_course_level_for_student")
+    @patch("tap_lms.summer_program.student_progression_sp._get_active_bpr_for_student")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_content_available_variant_flat_with_assessments(
+        self, mock_frappe, mock_resolve, mock_bpr, mock_cl, mock_week,
+        mock_effective, mock_path, mock_lu, mock_progress,
+        mock_items, mock_lu_info, mock_assessments,
+    ):
+        """content_available for a VideoClass with linked assessments — the
+        most-used variant. assessment_<i>_id must be flat and present."""
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = "STU-001"
+        student = MagicMock()
+        student.name = "STU-001"
+        batch = MagicMock()
+        batch.total_weeks = 8
+        bpr = MagicMock()
+        mock_frappe.get_doc.return_value = student
+        mock_bpr.return_value = (batch, bpr)
+        mock_cl.return_value = "CL-1"
+        mock_week.return_value = 1
+        mock_effective.return_value = 1
+        mock_path.return_value = "Core"
+        mock_lu.return_value = "LU-1"
+        mock_progress.return_value = "PROG-1"
+
+        mock_frappe.db.get_value.return_value = {
+            "name": "PROG-1",
+            "student": "STU-001",
+            "stage": "LU-1",
+            "status": "in_progress",
+            "current_week": 1,
+            "current_tier": "Basic",
+            "current_content_index": 0,
+            "is_on_remedial": 0,
+            "remedial_attempts": 0,
+            "active_content_type": None,
+            "active_content_id": None,
+            "content_started_at": None,
+            "active_quiz_attempt": None,
+            "question_started_at": None,
+            "course_context": "CL-1",
+        }
+        mock_items.return_value = [
+            {"content_type": "VideoClass", "content_id": "VC-1",
+             "content_name": "Vid 1", "is_optional": 0},
+        ]
+        mock_lu_info.return_value = {"name": "LU 1: Money Basics"}
+        mock_assessments.return_value = [
+            {"assessment_type": "Assignment", "assessment_id": "ASN-W1-001"},
+        ]
+
+        resp = api.get_next_content("STU-001")
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "content_available")
+        # Flattened position
+        self.assertEqual(resp["position_week"], 1)
+        self.assertEqual(resp["position_learning_unit_name"], "LU 1: Money Basics")
+        # Flattened content
+        self.assertEqual(resp["content_type"], "VideoClass")
+        self.assertEqual(resp["content_id"], "VC-1")
+        self.assertEqual(resp["content_order"], 1)
+        # Flattened assessments — assignment_id preserved as flat key
+        self.assertEqual(resp["assessment_count"], 1)
+        self.assertEqual(resp["assessment_1_type"], "Assignment")
+        self.assertEqual(resp["assessment_1_id"], "ASN-W1-001")
+        # No nested objects
+        self.assertNotIn("position", resp)
+        self.assertNotIn("content", resp)
+        self.assertNotIn("assessments", resp)
+
+
+if __name__ == "__main__":
+    unittest.main()
