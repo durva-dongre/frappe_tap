@@ -40,32 +40,46 @@ def reactivate_student(student_id):
     Args:
         student_id: Student name, glific_id, or phone
 
-    Returns:
-        dict with reactivation result, new state, current path
+    Response (via frappe.local.response per docs/api-standard-glific.md Rule 1):
+        Flat dict with `success` + `status` + reactivation details.
+        Does NOT return — writes directly to local.response so Glific reads
+        @results.webhook.<field> without the `message.` envelope.
     """
     student_id = _resolve_student(student_id)
     if not student_id:
-        return {"success": False, "error": "Student not found"}
+        frappe.local.response.update({
+            "success": False, "status": "not_found",
+            "error_detail": "Student not found",
+        })
+        return
 
     pe = get_active_pe(student_id)
     if not pe:
-        return {"success": False, "error": "No active ProgramEnrollment"}
+        frappe.local.response.update({
+            "success": False, "status": "no_active_enrollment",
+            "error_detail": "No active ProgramEnrollment",
+        })
+        return
 
     # Must be in a paused state
     if pe.program_status != PROGRAM_PAUSED:
-        return {
+        frappe.local.response.update({
             "success": False,
-            "error": "Student is not paused",
+            "status": "not_paused",
+            "error_detail": "Student is not paused",
             "program_status": pe.program_status,
             "resolved_flow_state": pe.resolved_flow_state,
-        }
+        })
+        return
 
     if pe.resolved_flow_state in TERMINAL_STATES:
-        return {
+        frappe.local.response.update({
             "success": False,
-            "error": "Student in terminal state",
+            "status": "terminal_state",
+            "error_detail": "Student in terminal state",
             "resolved_flow_state": pe.resolved_flow_state,
-        }
+        })
+        return
 
     # ── Handle paused_no_activity ───────────────────────────
     if pe.resolved_flow_state == STATE_PAUSED_NO_ACTIVITY:
@@ -78,14 +92,15 @@ def reactivate_student(student_id):
                   details={"reactivation_type": "message", "path": pe.current_path})
 
         frappe.db.commit()
-        return {
+        frappe.local.response.update({
             "success": True,
             "status": "reactivated",
             "resolved_flow_state": pe.resolved_flow_state,
             "current_path": pe.current_path,
             "current_week": pe.current_week,
             "pause_count": pe.pause_count,
-        }
+        })
+        return
 
     # ── Handle paused_binge ─────────────────────────────────
     if pe.resolved_flow_state == STATE_PAUSED_BINGE:
@@ -101,28 +116,31 @@ def reactivate_student(student_id):
                       details={"reactivation_type": "binge_eligible"})
 
             frappe.db.commit()
-            return {
+            frappe.local.response.update({
                 "success": True,
                 "status": "reactivated",
                 "resolved_flow_state": pe.resolved_flow_state,
                 "current_week": pe.current_week,
-            }
+            })
+            return
         else:
             # Still binge-limited — can't resume yet
-            return {
+            frappe.local.response.update({
                 "success": True,
                 "status": "still_paused",
                 "reason": "binge_limit",
                 "current_week": pe.current_week,
                 "max_allowed_week": max_allowed,
                 "resolved_flow_state": pe.resolved_flow_state,
-            }
+            })
+            return
 
-    return {
+    frappe.local.response.update({
         "success": False,
-        "error": "Unhandled pause state",
+        "status": "unhandled_pause_state",
+        "error_detail": "Unhandled pause state",
         "resolved_flow_state": pe.resolved_flow_state,
-    }
+    })
 
 
 def _resolve_student(identifier):
