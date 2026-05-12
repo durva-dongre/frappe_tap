@@ -159,6 +159,41 @@ def save_submission(student_id, assignment_id, submission, week=None):
     )
 
 
+@frappe.whitelist(allow_guest=True)
+def get_submission_feedback(submission_id):
+    """
+    Get feedback for a summer-program submission.
+
+    Args:
+        submission_id: Submission document ID
+
+    Returns:
+        dict with submission status. Completed submissions include feedback fields.
+    """
+    try:
+        submission = frappe.get_doc("Submission", submission_id)
+
+        if submission.status == "Completed":
+            return {
+                "status": submission.status,
+                "overall_feedback": submission.overall_feedback,
+                "overall_feedback_translated": submission.overall_feedback_translated,
+                "audio_feedback_url": submission.audio_feedback_url,
+            }
+
+        return {"status": submission.status}
+
+    except frappe.DoesNotExistError:
+        return {"error": "Submission not found"}
+
+    except Exception as e:
+        frappe.log_error(
+            f"Error checking submission feedback: {str(e)}",
+            "Submission Feedback Error",
+        )
+        return {"error": "An error occurred while checking submission feedback"}
+
+
 # ════════════════════════════════════════════════════════════
 # ATOMIC PRIMARY CLAIM
 # ════════════════════════════════════════════════════════════

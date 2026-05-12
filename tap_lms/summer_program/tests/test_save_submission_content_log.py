@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 def _import_save_submission_with_stubs():
     frappe = MagicMock()
+    frappe.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+    frappe.whitelist = _frappe_whitelist
     frappe_utils = types.ModuleType("frappe.utils")
     frappe_utils.now_datetime = MagicMock(return_value="2026-05-12 10:00:00")
     frappe_utils.today = MagicMock(return_value="2026-05-12")
@@ -27,6 +29,16 @@ def _import_save_submission_with_stubs():
     sys.modules["tap_lms.summer_program.event_log"] = event_log
     sys.modules.pop("tap_lms.summer_program.save_submission", None)
     return importlib.import_module("tap_lms.summer_program.save_submission")
+
+
+def _frappe_whitelist(fn=None, **kwargs):
+    if fn:
+        return fn
+
+    def decorator(func):
+        return func
+
+    return decorator
 
 
 class TestSaveSubmissionContentLogBridge(unittest.TestCase):
@@ -99,6 +111,69 @@ class TestSaveSubmissionContentLogBridge(unittest.TestCase):
         self.assertTrue(_is_expected_submission_type("video", "photo_video_artefact"))
         self.assertTrue(_is_expected_submission_type("text", "voice_note_text_summary"))
         self.assertFalse(_is_expected_submission_type("image", "voice_note_text_summary"))
+
+
+class TestGetSubmissionFeedback(unittest.TestCase):
+    def test_completed_submission_returns_feedback_fields(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.status = "Completed"
+        submission.overall_feedback = "Good work"
+        submission.overall_feedback_translated = "Good work translated"
+        submission.audio_feedback_url = "https://example.com/audio.mp3"
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.get_doc.return_value = submission
+
+            response = save_submission.get_submission_feedback("SUB-001")
+
+        mock_frappe.get_doc.assert_called_once_with("Submission", "SUB-001")
+        self.assertEqual(response, {
+            "status": "Completed",
+            "overall_feedback": "Good work",
+            "overall_feedback_translated": "Good work translated",
+            "audio_feedback_url": "https://example.com/audio.mp3",
+        })
+
+    def test_pending_submission_returns_status_only(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.status = "Processing"
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.get_doc.return_value = submission
+
+            response = save_submission.get_submission_feedback("SUB-001")
+
+        self.assertEqual(response, {"status": "Processing"})
+
+    def test_missing_submission_returns_not_found_error(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+            mock_frappe.get_doc.side_effect = mock_frappe.DoesNotExistError()
+
+            response = save_submission.get_submission_feedback("SUB-MISSING")
+
+        self.assertEqual(response, {"error": "Submission not found"})
+
+    def test_unexpected_error_is_logged(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+            mock_frappe.get_doc.side_effect = RuntimeError("database unavailable")
+
+            response = save_submission.get_submission_feedback("SUB-001")
+
+        self.assertEqual(
+            response,
+            {"error": "An error occurred while checking submission feedback"},
+        )
+        mock_frappe.log_error.assert_called_once()
 
 
 if __name__ == "__main__":
