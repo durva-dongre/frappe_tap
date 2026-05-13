@@ -283,7 +283,7 @@ def  _select_message_for_flow(rule, flow_type):
         if message:
             return {
                 "message_variant": variant,
-                "message": message,
+                "message": _strip_html_text(message),
                 "message_url": rule.get(audio_field),
             }
 
@@ -292,6 +292,13 @@ def  _select_message_for_flow(rule, flow_type):
         "message": None,
         "message_url": None,
     }
+
+
+def _strip_html_text(value):
+    if not value:
+        return value
+    from frappe.utils import strip_html_tags
+    return strip_html_tags(value).strip()
 
 
 def _error_response(status, student_id, error_detail, pe=None, **kwargs):

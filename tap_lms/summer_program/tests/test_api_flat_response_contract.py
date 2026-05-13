@@ -696,6 +696,63 @@ class TestGetContentDetailsAssessmentsPreserved(unittest.TestCase):
         )
         mock_unguided.assert_called_once_with("STU-001", assessments, None)
 
+    @patch("tap_lms.summer_program.student_progression_sp.get_active_pe")
+    @patch("tap_lms.summer_program.student_progression_sp.resolve_student")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_video_unguided_message_strips_text_editor_html(
+        self, mock_frappe, mock_resolve, mock_get_active_pe
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = "STU-001"
+        pe = MagicMock()
+        pe.current_expected_submission_type = "emoji"
+        pe.language = "Hindi"
+        mock_get_active_pe.return_value = pe
+
+        row = MagicMock()
+        row.unguided_text = (
+            '<div class="ql-editor read-mode"><p>If you feel confident about '
+            "the activity, send us any emoji of your choice</p></div>"
+        )
+        row.unguided_text_audio = "https://example.com/audio.mp3"
+        mock_frappe.get_all.return_value = [row]
+
+        resp = api._get_video_unguided_submission_message(
+            "STU-001",
+            [{"assessment_type": "Assignment", "assessment_id": "ASN-001"}],
+        )
+
+        self.assertEqual(
+            resp["unguided_text"],
+            "If you feel confident about the activity, send us any emoji of your choice",
+        )
+        self.assertEqual(resp["unguided_text_url"], "https://example.com/audio.mp3")
+
+
+class TestCustomSubmissionMessages(unittest.TestCase):
+    def test_select_message_for_flow_strips_text_editor_html(self):
+        from tap_lms.summer_program import custom_messages
+
+        rule = {
+            "unguided_text": (
+                '<div class="ql-editor read-mode"><p>If you feel confident about '
+                "the activity, send us any emoji of your choice</p></div>"
+            ),
+            "unguided_text_audio": "https://example.com/audio.mp3",
+            "guided_text": None,
+            "guided_text_audio": None,
+        }
+
+        resp = custom_messages._select_message_for_flow(rule, "main")
+
+        self.assertEqual(resp["message_variant"], "unguided")
+        self.assertEqual(
+            resp["message"],
+            "If you feel confident about the activity, send us any emoji of your choice",
+        )
+        self.assertEqual(resp["message_url"], "https://example.com/audio.mp3")
+
 
 class TestGetNextContentFlatShape(unittest.TestCase):
     """Task #68 — `get_next_content` previously returned nested `position` and

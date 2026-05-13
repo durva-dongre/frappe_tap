@@ -1892,9 +1892,16 @@ def _get_video_unguided_submission_message(student_id, assessments, language=Non
         return response
 
     return {
-        "unguided_text": rows[0].unguided_text,
+        "unguided_text": _strip_html_text(rows[0].unguided_text),
         "unguided_text_url": rows[0].unguided_text_audio,
     }
+
+
+def _strip_html_text(value):
+    if not value:
+        return value
+    from frappe.utils import strip_html_tags
+    return strip_html_tags(value).strip()
 
 
 def _get_next_learning_unit(course_level, week_no, tier, after_lu):
