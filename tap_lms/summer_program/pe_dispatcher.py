@@ -36,17 +36,15 @@ from tap_lms.summer_program.constants import (
     ACTION_ESCALATION,
     ACTION_FEEDBACK_TIMEOUT,
     ACTION_WEEK_ADVANCEMENT,
-    ACTION_GRACE_REMINDER,
     ACTION_GRACE_CHECK,
-    ACTION_RE_ENGAGEMENT,
     ACTION_PAUSE_CHECK,
     ACTION_FLOW_FIELD_MAP,
     STATE_NORMAL_CONTENT, STATE_NORMAL_ESCALATION,
     STATE_REMEDIAL_CONTENT, STATE_REMEDIAL_ESCALATION,
     STATE_SUBMITTED_AWAITING,
     STATE_GRACE_WAITING, STATE_WEEK_COMPLETED,
-    STATE_PAUSED_NO_ACTIVITY, STATE_PAUSED_BINGE,
-    GRACE_REMINDER_DAYS,
+    STATE_PAUSED_BINGE,
+    CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
 )
 from tap_lms.summer_program.event_log import log_event
 
@@ -214,11 +212,22 @@ def handle_content_delivery(pe_row):
 
 def handle_escalation(pe_row):
     """
-    Handler: escalation
+    Handler: escalation (CR-003 channel-aware)
 
-    Determines which escalation step to fire, triggers SP_Escalation flow,
-    and schedules the next escalation step (or transitions to grace/remedial
-    if all steps exhausted).
+    Determines which escalation step to fire, pushes the per-step contact
+    fields to Glific (escalation_order + escalation_type), then branches on
+    the step's `escalation_type`:
+
+    - help_note_a / help_note_b / voice_note → fire SP_Escalation flow.
+      Glific reads the two contact fields and routes per-channel content.
+    - parent_call → enqueue Vocallabs job, SKIP SP_Escalation entirely.
+      The Glific flow is not involved in this branch; the call is placed
+      via the Vocallabs 3-step API in summer_program/vocallabs.py.
+
+    Step exhaustion routes per the existing T5 / T6 / T11 split (preserved
+    from pre-CR-003). The grace clock is NOT armed here — it was already
+    armed at week start (T0 / T19); these transitions just flip the state
+    label and let the existing `grace_check` scheduler tick handle expiry.
     """
     from tap_lms.summer_program.state_machine import (
         t2_start_escalation, t4_next_escalation_step,
@@ -246,9 +255,10 @@ def handle_escalation(pe_row):
     next_step = current_step + 1
 
     if next_step > len(steps):
-        # All steps exhausted — transition to grace or remedial
+        # All steps exhausted — transition to grace or remedial.
+        # CR-003: the grace clock is already armed at the week start; T5/T11
+        # preserve it. T6 (zero-activity → remedial) is unchanged.
         if state in (STATE_NORMAL_CONTENT, STATE_NORMAL_ESCALATION):
-            # Check if student had any activity this week
             if pe.submission_count and pe.submission_count > 0:
                 t5_escalation_to_grace(pe, "dispatcher")
             else:
@@ -259,11 +269,30 @@ def handle_escalation(pe_row):
             _clear_action(pe_row.name)
         return
 
-    # Fire escalation step
+    # ── Fire escalation step (CR-003 branch on escalation_type) ─────
     step_config = steps[next_step - 1]
     next_hours = step_config.get("hours_after_previous", 24)
+    escalation_type = step_config.get("escalation_type") or "help_note_a"
 
-    # Transition to escalation state + schedule next
+    # CR-003 §"Escalation flow — new semantics" step 3:
+    # Push escalation_order + escalation_type to Glific BEFORE any flow
+    # trigger or Vocallabs enqueue. This is the contract the updated
+    # SP_Escalation flow reads from to pick its per-channel branch.
+    # Failure to push is logged but does not block the dispatcher — the
+    # next state-transition's _enqueue_contact_field_sync will re-sync
+    # escalation_order, and the next handle_escalation tick will push
+    # escalation_type again on its branch.
+    if pe.glific_id:
+        _push_escalation_contact_fields(
+            pe.glific_id, pe.name, pe.student,
+            escalation_order=next_step,
+            escalation_type=escalation_type,
+        )
+
+    # Transition to escalation state + schedule next step.
+    # Note: t2/t4/t8/t10 do NOT fire Glific themselves — they just bump
+    # last_escalation_step and schedule next_action_at. The flow trigger
+    # (or Vocallabs enqueue) happens below, after the state transition.
     if state == STATE_NORMAL_CONTENT:
         t2_start_escalation(pe, next_step, "dispatcher")
     elif state == STATE_NORMAL_ESCALATION:
@@ -276,10 +305,65 @@ def handle_escalation(pe_row):
         _clear_action(pe_row.name)
         return
 
-    # Trigger SP_Escalation flow
+    # ── Channel branch ─────────────────────────────────────────────
+    if escalation_type == "parent_call":
+        # Resolve ParentCallConfig and enqueue Vocallabs call. Skip
+        # SP_Escalation entirely — Glific is not involved for parent calls.
+        # The Vocallabs module handles its own retry/DLQ; the dispatcher
+        # tick continues without waiting on the actual call.
+        frappe.enqueue(
+            "tap_lms.summer_program.vocallabs.initiate_parent_call",
+            queue="long",
+            timeout=300,
+            enqueue_after_commit=True,
+            pe_name=pe.name,
+            escalation_step=step_config,
+        )
+        log_event(pe, "escalation_sent", trigger_source="dispatcher",
+                  details={"step": next_step, "escalation_type": "parent_call"})
+        return
+
+    # Text or voice-note channels → fire SP_Escalation flow.
     flow_id = _get_flow_id(pe_row.batch, ACTION_ESCALATION)
     if flow_id and pe.glific_id:
         _trigger_flow(flow_id, pe.glific_id, pe.name, "escalation")
+
+
+def _push_escalation_contact_fields(glific_id, pe_name, student_id,
+                                    escalation_order, escalation_type):
+    """Push escalation_order + escalation_type to Glific via the same async
+    retry+DLQ pipeline used by transition syncs (pattern P-007 / L-015).
+
+    Reusing _sync_contact_fields_job keeps both pushes (the per-transition
+    full-cache push and this per-step delta push) going through one retry
+    machinery. We only push the two CR-003 fields here so the call is
+    cheap and targeted — Glific's update_contact_fields is per-field
+    idempotent, so partial pushes are safe.
+    """
+    fields = {
+        CF_ESCALATION_ORDER: str(escalation_order),
+        CF_ESCALATION_TYPE: str(escalation_type or ""),
+    }
+    try:
+        frappe.enqueue(
+            "tap_lms.summer_program.state_machine._sync_contact_fields_job",
+            queue="short",
+            timeout=30,
+            enqueue_after_commit=True,
+            glific_id=str(glific_id),
+            fields=fields,
+            pe_name=pe_name,
+            retry_count=0,
+            student_id=student_id,
+        )
+    except Exception as e:
+        # Don't crash the dispatcher tick if the queue is briefly down —
+        # log and continue. The Glific contact cache will catch up on the
+        # next state-transition sync.
+        frappe.log_error(
+            f"CR-003 escalation contact-field enqueue failed for PE {pe_name}: {e}",
+            "SP Escalation Contact Field Sync",
+        )
 
 
 def handle_feedback_timeout(pe_row):
@@ -385,92 +469,59 @@ def handle_week_advancement(pe_row):
         t14_week_advance(pe, next_week, week_rule, "dispatcher")
 
 
-def handle_grace_reminder(pe_row):
-    """
-    Handler: grace_reminder
-
-    Sends a grace period reminder to the student and schedules the next
-    reminder or grace_check (expiry).
-    """
-    from tap_lms.summer_program.state_machine import t17b_grace_reminder
-
-    pe = frappe.get_doc("ProgramEnrollment", pe_row.name)
-
-    if pe.resolved_flow_state != STATE_GRACE_WAITING:
-        _clear_action(pe_row.name)
-        return
-
-    # Determine which reminder index we're at
-    reminder_index = _get_current_reminder_index(pe)
-
-    # Fire the transition (schedules next reminder or grace_check)
-    t17b_grace_reminder(pe, reminder_index, "dispatcher")
-
-    # Trigger SP_Grace_Reminder flow
-    flow_id = _get_flow_id(pe.batch, ACTION_GRACE_REMINDER)
-    if flow_id and pe.glific_id:
-        _trigger_flow(flow_id, pe.glific_id, pe.name, "grace_reminder")
-
-
 def handle_grace_check(pe_row):
     """
-    Handler: grace_check
+    Handler: grace_check (CR-003 — direct drop)
 
-    Grace window has expired. If student still hasn't submitted,
-    transition to paused_no_activity (T18).
+    Grace window has expired. CR-003 §"Grace window — new semantics":
+    if the student hasn't submitted (weekly_submission_done = 0) the PE
+    transitions directly to STATE_PROGRAM_DROPPED via t17_grace_expired.
+    No paused_no_activity hop, no re-engagement loop — that's all deleted
+    in this CR.
+
+    If the student DID submit during the window (weekly_submission_done = 1)
+    and we somehow land here (a race or a stale scheduler row), the handler
+    is a no-op — clear the action and trust the existing state.
+
+    Defensive: if `resolved_flow_state` is not grace_waiting (student moved
+    via T17 grace submission already), no-op as well.
     """
-    from tap_lms.summer_program.state_machine import t18_grace_expired
+    from tap_lms.summer_program.state_machine import t17_grace_expired
 
     pe = frappe.get_doc("ProgramEnrollment", pe_row.name)
 
+    # Student already moved out of grace_waiting (submission landed → T17
+    # transitioned them, or they were dropped by an admin). No-op.
     if pe.resolved_flow_state != STATE_GRACE_WAITING:
-        # Student submitted during grace → already moved
         _clear_action(pe_row.name)
         return
 
-    # Grace expired — pause the student
-    t18_grace_expired(pe, "dispatcher")
-
-    # Trigger re-engagement flow will be handled by handle_re_engagement
-    # (T18 sets next_action_type = re_engagement with 3-day delay)
-
-
-def handle_re_engagement(pe_row):
-    """
-    Handler: re_engagement
-
-    Sends a re-engagement message to a paused student.
-    If max re-engagement attempts reached, auto-drop (T23).
-    """
-    from tap_lms.summer_program.state_machine import t24_admin_drop
-
-    pe = frappe.get_doc("ProgramEnrollment", pe_row.name)
-
-    if pe.resolved_flow_state not in (STATE_PAUSED_NO_ACTIVITY,):
-        # Student already reactivated or dropped
+    # CR-003 + CR-002 v2: if weekly_submission_done is set, the student
+    # submitted within the window. Don't drop — clear the action and let
+    # the next T19 (week advance) re-arm the clock.
+    if pe.weekly_submission_done:
         _clear_action(pe_row.name)
         return
 
-    re_count = pe.re_engagement_count or 0
-    max_attempts = 3  # After 3 attempts, auto-drop
-
-    if re_count >= max_attempts:
-        # Auto-drop — T23/T24
-        t24_admin_drop(pe, "dispatcher")
-        log_event(pe, "auto_dropped", trigger_source="dispatcher",
-                  details={"reason": "re_engagement_exhausted", "attempts": re_count})
+    # Defensive: if the clock hasn't actually expired yet, re-schedule the
+    # tick for the proper expiry time rather than dropping early. Should
+    # match exactly under normal scheduling but absorbs minor clock skew.
+    now = now_datetime()
+    if pe.grace_window_end_at and get_datetime(pe.grace_window_end_at) > now:
+        pe.next_action_at = pe.grace_window_end_at
+        pe.next_action_type = ACTION_GRACE_CHECK
+        pe.save(ignore_permissions=True)
         return
 
-    # Trigger SP_Paused_Reengagement flow
-    flow_id = _get_flow_id(pe.batch, ACTION_RE_ENGAGEMENT)
-    if flow_id and pe.glific_id:
-        _trigger_flow(flow_id, pe.glific_id, pe.name, "re_engagement")
+    # Clock expired AND no submission this week → drop.
+    t17_grace_expired(pe, "dispatcher")
 
-    # Schedule next re-engagement attempt in 3 days
-    pe.re_engagement_count = re_count + 1
-    pe.next_action_at = add_to_date(now_datetime(), days=3)
-    pe.next_action_type = ACTION_RE_ENGAGEMENT
-    pe.save(ignore_permissions=True)
+
+# CR-003: handle_re_engagement and handle_grace_reminder removed.
+# Re-engagement is now inbound-only (SP_Incoming_Router routes a rejoin path
+# when program_status = 'dropped'); the backend no longer reaches out to
+# paused students. Grace reminders are also gone — the escalation steps
+# within the week ARE the reminders.
 
 
 def handle_pause_check(pe_row):
@@ -511,10 +562,14 @@ HANDLER_MAP = {
     ACTION_ESCALATION: handle_escalation,
     ACTION_FEEDBACK_TIMEOUT: handle_feedback_timeout,
     ACTION_WEEK_ADVANCEMENT: handle_week_advancement,
-    ACTION_GRACE_REMINDER: handle_grace_reminder,
     ACTION_GRACE_CHECK: handle_grace_check,
-    ACTION_RE_ENGAGEMENT: handle_re_engagement,
     ACTION_PAUSE_CHECK: handle_pause_check,
+    # CR-003: handle_re_engagement and handle_grace_reminder removed.
+    # Legacy PEs with next_action_type IN ('re_engagement', 'grace_reminder')
+    # are nulled by the migration patch (cr_003.grace_and_reengagement); any
+    # post-migration row that somehow holds these values falls through to
+    # the "Unknown action_type" branch in _dispatch_single which logs and
+    # clears the action defensively.
 }
 
 
@@ -587,21 +642,6 @@ def _get_week_rule(pe, batch, week):
         return config
     except Exception:
         return None
-
-
-def _get_current_reminder_index(pe):
-    """Determine which grace reminder we're on based on elapsed days."""
-    if not pe.grace_window_start:
-        return 0
-
-    from frappe.utils import date_diff
-    days_elapsed = date_diff(now_datetime(), pe.grace_window_start)
-
-    for i, day in enumerate(GRACE_REMINDER_DAYS):
-        if days_elapsed <= day:
-            return max(0, i - 1)
-
-    return len(GRACE_REMINDER_DAYS) - 1
 
 
 def _get_next_week_open_date(batch, target_week):

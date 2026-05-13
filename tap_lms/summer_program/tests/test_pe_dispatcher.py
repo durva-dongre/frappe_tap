@@ -33,9 +33,8 @@ from tap_lms.summer_program.constants import (
     ACTION_CONTENT_DELIVERY,
     ACTION_ESCALATION,
     ACTION_FEEDBACK_TIMEOUT,
-    ACTION_GRACE_REMINDER,
+    ACTION_GRACE_CHECK,
     ACTION_PAUSE_CHECK,
-    ACTION_RE_ENGAGEMENT,
     ACTION_WEEK_ADVANCEMENT,
     BPR_ACTIVE,
     BPR_COLLECTIONS_READY,
@@ -53,6 +52,11 @@ from tap_lms.summer_program.constants import (
     STATE_WEEK_COMPLETED,
     VALIDATION_PASSED,
 )
+# CR-003: ACTION_GRACE_REMINDER and ACTION_RE_ENGAGEMENT removed from the
+# constants module. The tests that exercised handle_grace_reminder /
+# handle_re_engagement / t17b_grace_reminder have been deleted; the
+# `test_journey_label_changes_skip_dispatch` test below has been retargeted
+# to use ACTION_GRACE_CHECK which is the live grace action post-CR-003.
 
 
 # ════════════════════════════════════════════════════════════
@@ -325,8 +329,12 @@ class TestPeDispatcher(FrappeTestCase):
         """If journey_label changes between SELECT and the atomic claim, the
         atomic UPDATE returns 0 rows and the handler is NOT invoked.
         Same primitive as test_atomic_claim_prevents_double_dispatch but
-        framed against a different action type to confirm the guard isn't
-        action-type-specific."""
+        framed against a different action type (grace_check) to confirm the
+        guard isn't action-type-specific.
+
+        CR-003: retargeted from the retired ACTION_GRACE_REMINDER to
+        ACTION_GRACE_CHECK — the live grace-window scheduler action.
+        """
         from tap_lms.summer_program import pe_dispatcher
 
         s = _ensure_student("31")
@@ -334,7 +342,7 @@ class TestPeDispatcher(FrappeTestCase):
             self.batch_name,
             s,
             add_to_date(now_datetime(), minutes=-5),
-            ACTION_GRACE_REMINDER,
+            ACTION_GRACE_CHECK,
             resolved_flow_state=STATE_GRACE_WAITING,
             journey_label=LABEL_GRACE_WINDOW,
             enrollment_suffix="G1",
@@ -347,8 +355,8 @@ class TestPeDispatcher(FrappeTestCase):
         def fake_grace(pe_row):
             called.append(pe_row.name)
 
-        original = pe_dispatcher.HANDLER_MAP[ACTION_GRACE_REMINDER]
-        pe_dispatcher.HANDLER_MAP[ACTION_GRACE_REMINDER] = fake_grace
+        original = pe_dispatcher.HANDLER_MAP[ACTION_GRACE_CHECK]
+        pe_dispatcher.HANDLER_MAP[ACTION_GRACE_CHECK] = fake_grace
 
         real_sql = frappe.db.sql
         first_select = {"seen": False}
@@ -371,7 +379,7 @@ class TestPeDispatcher(FrappeTestCase):
             with patch.object(frappe.db, "sql", side_effect=maybe_race):
                 pe_dispatcher.dispatch_pending_actions()
         finally:
-            pe_dispatcher.HANDLER_MAP[ACTION_GRACE_REMINDER] = original
+            pe_dispatcher.HANDLER_MAP[ACTION_GRACE_CHECK] = original
 
         # Handler must NOT have been called.
         self.assertEqual(called, [])
@@ -482,37 +490,11 @@ class TestPeDispatcherHandlers(FrappeTestCase):
         )
         self.assertEqual(new_count, 2)
 
-    def test_handle_grace_reminder_picks_correct_day(self):
-        """A PE 7 days into grace should produce reminder_index = 0 (the first
-        reminder bucket in GRACE_REMINDER_DAYS = [7, 11, 13]).
-
-        The handler delegates index calculation to _get_current_reminder_index;
-        we assert the index returned for a 7-day-elapsed PE is 0 OR the value
-        the implementation chose for day 7. Either is acceptable as long as
-        the function returns a non-negative integer < len(GRACE_REMINDER_DAYS)."""
-        from tap_lms.summer_program import pe_dispatcher
-
-        s = _ensure_student("61")
-        pe_name = _make_pe(
-            self.batch_name,
-            s,
-            add_to_date(now_datetime(), minutes=-1),
-            ACTION_GRACE_REMINDER,
-            resolved_flow_state=STATE_GRACE_WAITING,
-            journey_label=LABEL_GRACE_WINDOW,
-            enrollment_suffix="GR1",
-            glific_id="glific-disp-GR1",
-            grace_window_start=add_to_date(now_datetime(), days=-7),
-        )
-
-        pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        idx = pe_dispatcher._get_current_reminder_index(pe)
-
-        # Index must be in valid range; for 7 days elapsed (== GRACE_REMINDER_DAYS[0])
-        # the implementation returns max(0, 0 - 1) == 0.
-        self.assertGreaterEqual(idx, 0)
-        from tap_lms.summer_program.constants import GRACE_REMINDER_DAYS
-        self.assertLess(idx, len(GRACE_REMINDER_DAYS))
+    # CR-003: test_handle_grace_reminder_picks_correct_day removed.
+    # The handle_grace_reminder dispatcher and _get_current_reminder_index
+    # helper are deleted; grace reminders are gone in favor of per-step
+    # escalations within the week. Coverage for the new grace_check handler
+    # lives in test_grace_logic.py.
 
     def test_handle_pause_check_resumes_when_calendar_advances(self):
         """A binge-paused PE on week 2 should resume to normal_content_delivery
@@ -614,16 +596,15 @@ class TestPeDispatcherHandlers(FrappeTestCase):
             update_modified=False,
         )
 
-    def test_handle_grace_check_calls_t18_when_still_in_grace(self):
+    def test_handle_grace_check_calls_t17_when_still_in_grace(self):
         """A PE whose grace_check timer fires while still in grace_waiting
-        must invoke t18_grace_expired. If the student submitted during grace
-        and moved out of the state, the handler should no-op (clear action,
-        skip transition).
+        must invoke t17_grace_expired (CR-003 renamed from t18). If the
+        student submitted during grace and moved out of the state, the
+        handler should no-op (clear action, skip transition).
 
-        This handler is the CR-001 entry point — currently t18 pauses the
-        student; per CR-001 it will route directly to program_dropped once
-        task #33 ships. Either way, the dispatcher's job is to invoke t18
-        when the timer fires, which is what this test locks in."""
+        CR-003: the t17 function now routes directly to program_dropped
+        with drop_reason='grace_expired'. The paused_no_activity hop
+        and re-engagement loop are gone."""
         from tap_lms.summer_program import pe_dispatcher
         from tap_lms.summer_program.constants import ACTION_GRACE_CHECK
 
@@ -642,7 +623,7 @@ class TestPeDispatcherHandlers(FrappeTestCase):
         )
 
         with patch(
-            "tap_lms.summer_program.state_machine.t18_grace_expired"
+            "tap_lms.summer_program.state_machine.t17_grace_expired"
         ) as fake_t18:
             row = frappe._dict({
                 "name": pe_name,
@@ -668,7 +649,7 @@ class TestPeDispatcherHandlers(FrappeTestCase):
         )
 
         with patch(
-            "tap_lms.summer_program.state_machine.t18_grace_expired"
+            "tap_lms.summer_program.state_machine.t17_grace_expired"
         ) as fake_t18_b:
             row = frappe._dict({
                 "name": pe_name_2,

@@ -9,12 +9,15 @@ Called by:
   - SP_Content_Delivery (on timeout → no_response, on completion)
   - SP_Escalation (on completion)
   - SP_Feedback_Delivery (on completion → triggers week_completed → week_advancement)
-  - SP_Grace_Entry / SP_Grace_Reminder (on completion)
-  - SP_Paused_Reengagement (on completion)
+  - SP_Grace_Entry (on completion)
   - SP_Paused_Binge (on completion)
   - SP_Program_Complete (on completion)
   - SP_Submission (on completion)
-  # SP_Week_Summary callback removed per CR-002 v2 — flow path is vestigial.
+
+CR-003: SP_Grace_Reminder and SP_Paused_Reengagement entries removed.
+Grace reminders are gone (escalation steps within the week ARE the reminders).
+Re-engagement is now inbound-only via SP_Incoming_Router (Glific routes a
+rejoin path when program_status='dropped').
 """
 import frappe
 from frappe import _
@@ -25,7 +28,7 @@ from tap_lms.summer_program.constants import (
     STATE_REMEDIAL_CONTENT, STATE_REMEDIAL_ESCALATION,
     STATE_SUBMITTED_AWAITING, STATE_FEEDBACK_READY,
     STATE_GRACE_WAITING, STATE_WEEK_COMPLETED,
-    STATE_PAUSED_NO_ACTIVITY, STATE_PAUSED_BINGE,
+    STATE_PAUSED_BINGE,
     PROGRAM_ACTIVE,
     ACTION_ESCALATION, ACTION_CONTENT_DELIVERY,
     TERMINAL_STATES,
@@ -132,10 +135,12 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
 def _get_handler(flow_name, status):
     """Route to specific handler based on flow name and status.
 
-    CR-002 v2: `SP_Week_Summary` entry removed. The flow path is vestigial —
-    no Frappe code path schedules it, and the Glific-side flow is being
-    deleted in coordination with Himani. `_handle_info_flow` remains in use
-    by `SP_Program_Complete`.
+    CR-002 v2: `SP_Week_Summary` entry removed (vestigial flow path).
+    CR-003: `SP_Grace_Reminder` and `SP_Paused_Reengagement` entries removed
+    (flows deleted in coordination with Himani — grace reminders are gone and
+    re-engagement is inbound-only). `_handle_info_flow` remains in use by
+    `SP_Program_Complete`. `_handle_grace_flow` now only fires for
+    `SP_Grace_Entry`.
     """
     handlers = {
         "SP_Content_Delivery": _handle_content_delivery,
@@ -143,8 +148,6 @@ def _get_handler(flow_name, status):
         "SP_Feedback_Delivery": _handle_feedback_delivery,
         "SP_Submission": _handle_submission_flow,
         "SP_Grace_Entry": _handle_grace_flow,
-        "SP_Grace_Reminder": _handle_grace_flow,
-        "SP_Paused_Reengagement": _handle_reengagement,
         "SP_Paused_Binge": _handle_binge_info,
         "SP_Program_Complete": _handle_info_flow,
     }
@@ -235,8 +238,14 @@ def _handle_submission_flow(pe, flow_name, status, metadata):
 
 def _handle_grace_flow(pe, flow_name, status, metadata):
     """
-    Handle SP_Grace_Entry / SP_Grace_Reminder completion.
-    If student submitted during wait node, save_submission already cleared grace.
+    Handle SP_Grace_Entry completion.
+
+    CR-003: the SP_Grace_Reminder Glific flow is deleted (the per-week
+    grace cadence is driven by escalation steps inside the week, not by
+    a separate reminder flow). SP_Grace_Entry callbacks still need a
+    no-op acknowledgement so the Glific flow sees a 200 response and
+    closes cleanly — if the student submitted during the flow's wait node,
+    save_submission already cleared the grace state via T17.
     """
     pe.save(ignore_permissions=True)
     return _response(
@@ -246,22 +255,8 @@ def _handle_grace_flow(pe, flow_name, status, metadata):
     )
 
 
-def _handle_reengagement(pe, flow_name, status, metadata):
-    """
-    Handle SP_Paused_Reengagement completion.
-    No state change — student must send a NEW message to reactivate.
-    """
-    pe.re_engagement_count = (pe.re_engagement_count or 0) + 1
-    pe.save(ignore_permissions=True)
-
-    log_event(pe, "re_engagement_attempt", trigger_source="flow_callback",
-              details={"attempt": pe.re_engagement_count})
-
-    return _response(
-        pe,
-        "reengagement_delivered",
-        re_engagement_count=pe.re_engagement_count,
-    )
+# CR-003: _handle_reengagement deleted along with the SP_Paused_Reengagement
+# flow. Re-engagement is now inbound-only via SP_Incoming_Router.
 
 
 def _handle_binge_info(pe, flow_name, status, metadata):

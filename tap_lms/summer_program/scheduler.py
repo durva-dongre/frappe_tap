@@ -20,8 +20,6 @@ from tap_lms.summer_program.constants import (
     BPR_ACTIVE,
     ACTION_CONTENT_DELIVERY,
     ACTION_ESCALATION,
-    ACTION_REENGAGEMENT,
-    ACTION_GRACE_REMINDER,
     ACTION_FLOW_FIELD_MAP,
     COLLECTION_ACTIONS,
     PER_STUDENT_ACTIONS,
@@ -29,6 +27,11 @@ from tap_lms.summer_program.constants import (
     ARCHETYPE_FENCE_SITTER,
     PROGRAM_PAUSED,
 )
+# CR-003: ACTION_REENGAGEMENT and ACTION_GRACE_REMINDER removed from constants.
+# _run_reengagement and _run_grace_notifications were the daily-scheduler
+# entry points that consumed those action types; both functions are deleted
+# from this file (re-engagement is now inbound-only; grace reminders are
+# replaced by per-week escalation steps).
 from tap_lms.summer_program.glific_extensions import start_group_flow
 
 
@@ -70,12 +73,14 @@ def _process_bpr_actions(bpr, batch):
     # Escalation: for Dormant and Fence Sitter collections
     _run_escalation(bpr)
 
-    # Re-engagement: for Dormant students who haven't responded
-    _run_reengagement(bpr)
+    # CR-003: proactive re-engagement removed. Dropped students are
+    # re-engaged via SP_Incoming_Router when they send an inbound
+    # message; the backend does not push re-engagement nudges.
 
     # ── Per-student actions ──────────────────────────────
-    # Grace notification: students in grace period
-    _run_grace_notifications(bpr, batch, grace_days)
+    # CR-003: proactive grace notifications removed. The per-week
+    # escalation steps within the active week ARE the reminders;
+    # grace expiry is policed by handle_grace_check in pe_dispatcher.
 
     # Program complete: when batch reaches total_weeks
     if current_week and total_weeks and current_week > total_weeks:
@@ -143,84 +148,17 @@ def _run_escalation(bpr):
                 )
 
 
-def _run_reengagement(bpr):
-    """
-    Run re-engagement flow on Dormant collections.
-    """
-    flow_id = bpr.reengagement_flow
-    if not flow_id:
-        return
-
-    for collection in bpr.pg_collections:
-        if collection.archetype == ARCHETYPE_DORMANT:
-            try:
-                start_group_flow(flow_id, collection.glific_group_id)
-                frappe.logger().info(
-                    f"Reengagement: flow {flow_id} on {collection.collection_label}"
-                )
-            except Exception as e:
-                frappe.log_error(
-                    f"Reengagement error: {collection.collection_label}: {str(e)}",
-                    "SP Scheduler Reengagement",
-                )
+# CR-003: _run_reengagement removed — re-engagement is now inbound-only via
+# SP_Incoming_Router when the student sends a message and program_status =
+# 'dropped'. The backend never reaches out to dropped students.
+#
+# CR-003: _run_grace_notifications removed — the per-week escalation steps
+# inside the active week ARE the reminders. handle_grace_check in
+# pe_dispatcher fires once at grace_window_end_at; on expiry the PE drops
+# directly to program_dropped (no proactive grace notification flow).
 
 
 # ── Per-Student Actions ─────────────────────────────────────
-
-
-def _run_grace_notifications(bpr, batch, grace_days):
-    """
-    Send grace notifications to students who are in the grace period.
-    Grace = student hasn't submitted in grace_days consecutive days.
-    """
-    flow_id = bpr.grace_notification_flow
-    if not flow_id or not grace_days:
-        return
-
-    # Find students who haven't had activity in grace_days
-    # and belong to this batch
-    student_ids = _get_students_for_bpr(bpr)
-    if not student_ids:
-        return
-
-    # Postgres-correct date arithmetic:
-    #   (CURRENT_DATE - es.last_activity_date)::int  →  whole-day delta
-    #   = ANY(%s) with a Python list  →  portable, robust empty-list handling
-    # See lessons L-002 (no DATEDIFF/CURDATE) and L-005 (no IN %s tuple form).
-    grace_students = frappe.db.sql(
-        """
-        SELECT s.name, s.glific_id
-        FROM `tabStudent` s
-        LEFT JOIN `tabEngagementState` es ON es.student = s.name
-        WHERE s.name = ANY(%s)
-          AND s.glific_id IS NOT NULL
-          AND s.glific_id != ''
-          AND es.last_activity_date IS NOT NULL
-          AND (CURRENT_DATE - es.last_activity_date)::int >= %s
-          AND (CURRENT_DATE - es.last_activity_date)::int < %s
-        """,
-        (list(student_ids), grace_days, grace_days + 3),  # notify once in a 3-day window
-        as_dict=True,
-    )
-
-    for student in grace_students:
-        try:
-            start_contact_flow(
-                str(flow_id),
-                str(student.glific_id),
-                {"grace_days": str(grace_days)},
-            )
-        except Exception as e:
-            frappe.log_error(
-                f"Grace notification error for {student.name}: {str(e)}",
-                "SP Scheduler Grace",
-            )
-
-    if grace_students:
-        frappe.logger().info(
-            f"Grace notifications sent to {len(grace_students)} students "
-            f"for BPR {bpr.name}"
-        )
 
 
 def _run_program_complete(bpr, batch):

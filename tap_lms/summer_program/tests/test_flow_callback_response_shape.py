@@ -130,17 +130,10 @@ class TestAllHandlerResponses(unittest.TestCase):
         self._assert_v3_shape(resp)
         self.assertEqual(resp["in_grace_window"], 1)
 
-    def test_reengagement_handler_returns_v3_shape(self):
-        from tap_lms.summer_program.flow_callback import _handle_reengagement
-        pe = _make_pe()
-        pe.save = MagicMock()
-        pe.re_engagement_count = 2
-        # log_event needs the pe to have a `name` attribute
-        pe.name = "PE-TEST-001"
-        with patch("tap_lms.summer_program.flow_callback.log_event"):
-            resp = _handle_reengagement(pe, "SP_Paused_Reengagement", "completed", {})
-        self._assert_v3_shape(resp)
-        self.assertEqual(resp["re_engagement_count"], 3)
+    # CR-003: test_reengagement_handler_returns_v3_shape removed.
+    # _handle_reengagement was deleted along with the SP_Paused_Reengagement
+    # Glific flow. Re-engagement is now inbound-only via SP_Incoming_Router;
+    # there's no Frappe callback to test.
 
     def test_binge_info_handler_returns_v3_shape(self):
         from tap_lms.summer_program.flow_callback import _handle_binge_info
