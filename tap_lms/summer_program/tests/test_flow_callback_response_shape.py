@@ -151,13 +151,31 @@ class TestAllHandlerResponses(unittest.TestCase):
         self.assertEqual(resp["action"], "binge_info_delivered")
 
     def test_info_flow_handler_returns_v3_shape(self):
-        """Covers SP_Week_Summary and SP_Program_Complete."""
+        """Covers SP_Program_Complete (SP_Week_Summary removed per CR-002 v2)."""
         from tap_lms.summer_program.flow_callback import _handle_info_flow
         pe = _make_pe()
         pe.save = MagicMock()
-        resp = _handle_info_flow(pe, "SP_Week_Summary", "completed", {})
+        resp = _handle_info_flow(pe, "SP_Program_Complete", "completed", {})
         self._assert_v3_shape(resp)
         self.assertEqual(resp["action"], "info_delivered")
+
+
+class TestSpWeekSummaryRemoved(unittest.TestCase):
+    """CR-002 v2 §"Remove SP_Week_Summary flow end-to-end" — guard that the
+    flow_name is no longer recognized by _get_handler.
+
+    Glific-side flow deletion is coordinated with Himani; this guard catches
+    any accidental re-introduction in the Frappe handler map.
+    """
+
+    def test_sp_week_summary_handler_removed(self):
+        from tap_lms.summer_program.flow_callback import _get_handler
+        self.assertIsNone(
+            _get_handler("SP_Week_Summary", "completed"),
+            "SP_Week_Summary handler must be removed per CR-002 v2. "
+            "If you're re-adding it, also restore _handle_info_flow binding "
+            "and the Glific-side flow.",
+        )
 
 
 if __name__ == "__main__":

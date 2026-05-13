@@ -12,9 +12,9 @@ Called by:
   - SP_Grace_Entry / SP_Grace_Reminder (on completion)
   - SP_Paused_Reengagement (on completion)
   - SP_Paused_Binge (on completion)
-  - SP_Week_Summary (on completion)
   - SP_Program_Complete (on completion)
   - SP_Submission (on completion)
+  # SP_Week_Summary callback removed per CR-002 v2 — flow path is vestigial.
 """
 import frappe
 from frappe import _
@@ -130,7 +130,13 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
 
 
 def _get_handler(flow_name, status):
-    """Route to specific handler based on flow name and status."""
+    """Route to specific handler based on flow name and status.
+
+    CR-002 v2: `SP_Week_Summary` entry removed. The flow path is vestigial —
+    no Frappe code path schedules it, and the Glific-side flow is being
+    deleted in coordination with Himani. `_handle_info_flow` remains in use
+    by `SP_Program_Complete`.
+    """
     handlers = {
         "SP_Content_Delivery": _handle_content_delivery,
         "SP_Escalation": _handle_escalation,
@@ -140,7 +146,6 @@ def _get_handler(flow_name, status):
         "SP_Grace_Reminder": _handle_grace_flow,
         "SP_Paused_Reengagement": _handle_reengagement,
         "SP_Paused_Binge": _handle_binge_info,
-        "SP_Week_Summary": _handle_info_flow,
         "SP_Program_Complete": _handle_info_flow,
     }
     return handlers.get(flow_name)

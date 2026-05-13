@@ -22,7 +22,8 @@
   "video_translations",
   "additional_files",
   "estimated_duration",
-  "assessments"
+  "assessments",
+  "points"
  ],
  "fields": [
   {
@@ -106,11 +107,17 @@
    "fieldtype": "Table",
    "label": "Assessments",
    "options": "AssessmentList"
+  },
+  {
+   "default": "10",
+   "fieldname": "points",
+   "fieldtype": "Int",
+   "label": "Points"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-19 14:26:05.192008",
+ "modified": "2026-05-13 15:14:52.134217",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "VideoClass",

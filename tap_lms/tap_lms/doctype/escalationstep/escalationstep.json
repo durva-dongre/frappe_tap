@@ -7,7 +7,7 @@
  "engine": "InnoDB",
  "field_order": [
   "escalation_order",
-  "message_type",
+  "escalation_type",
   "points_awarded",
   "hours_after_previous",
   "is_active"
@@ -18,15 +18,6 @@
    "fieldtype": "Int",
    "in_list_view": 1,
    "label": "Escalation Order",
-   "reqd": 1
-  },
-  {
-   "description": "Drives Glific template selection within SP_Escalation flow.",
-   "fieldname": "message_type",
-   "fieldtype": "Select",
-   "in_list_view": 1,
-   "label": "Message Type",
-   "options": "help_note_a\nhelp_note_b\nreminder\nmotivational\nurgent",
    "reqd": 1
   },
   {
@@ -47,12 +38,21 @@
    "fieldname": "is_active",
    "fieldtype": "Check",
    "label": "Is Active"
+  },
+  {
+   "description": "Drives Glific template selection within SP_Escalation flow.",
+   "fieldname": "escalation_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Escalation Type",
+   "options": "help_note_a\nhelp_note_b\nvoice_note\nparent_call",
+   "reqd": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-05-01 13:19:27.368049",
+ "modified": "2026-05-12 17:25:53.840586",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "EscalationStep",

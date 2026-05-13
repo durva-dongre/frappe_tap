@@ -38,6 +38,11 @@ from tap_lms.summer_program.constants import (
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
     CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
+    # CR-002 v2 — 8 new gamification contact fields
+    CF_TOTAL_ACTIVITY_POINTS, CF_WEEKLY_ACTIVITY_POINTS,
+    CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
+    CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
+    CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
     GLIFIC_SYNC_MAX_RETRIES, GLIFIC_SYNC_RETRY_LOG_TITLE, GLIFIC_SYNC_DLQ_LOG_TITLE,
     TIER_BY_WEEK, DEFAULT_TIER,
 )
@@ -105,6 +110,18 @@ def _enqueue_contact_field_sync(pe):
         CF_EXPECTED_SUBMISSION: pe.current_expected_submission_type or "",
         CF_LAST_ESCALATION_STEP: str(pe.last_escalation_step or 0),
         CF_SUBMISSION_COUNT: str(pe.submission_count or 0),
+        # ── CR-002 v2: 8 new gamification fields ──
+        # Pushed alongside the existing fields so the cache size on Glific is
+        # 26 after this CR (28 after CR-003 also ships escalation_order/type).
+        # `weekly_video_done` is intentionally NOT included — internal-only.
+        CF_TOTAL_ACTIVITY_POINTS: str(pe.total_activity_points or 0),
+        CF_WEEKLY_ACTIVITY_POINTS: str(pe.weekly_activity_points or 0),
+        CF_TOTAL_QUIZ_POINTS: str(pe.total_quiz_points or 0),
+        CF_WEEKLY_QUIZ_POINTS: str(pe.weekly_quiz_points or 0),
+        CF_TOTAL_SUBMISSION_POINTS: str(pe.total_submission_points or 0),
+        CF_WEEKLY_SUBMISSION_POINTS: str(pe.weekly_submission_points or 0),
+        CF_SPECIAL_GEMS: str(pe.special_gems or 0),
+        CF_WEEKLY_SUBMISSION_DONE: str(int(pe.weekly_submission_done or 0)),
     }
     frappe.enqueue(
         "tap_lms.summer_program.state_machine._sync_contact_fields_job",
@@ -257,12 +274,25 @@ def t2_start_escalation(pe, step_number=1, trigger_source="scheduler"):
 
 # ── T3: Submission during escalation ──────────────────────
 def t3_escalation_submission(pe, points=0, trigger_source="flow_callback"):
-    """T3: normal_escalation → submitted_awaiting_feedback."""
+    """T3: normal_escalation → submitted_awaiting_feedback.
+
+    CR-002 v2: extends the existing updates dict to bump the new submission
+    counters (`total_submission_points`, `weekly_submission_points`), set the
+    sticky `weekly_submission_done` flag, and increment `current_streak` and
+    `special_gems` — all in the same atomic save. Streak/gems increment AT
+    SUBMISSION TIME, not deferred to T19.
+    """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
+        # CR-002 v2: submission-points split + streak/gems/sticky flag
+        "total_submission_points": (pe.total_submission_points or 0) + points,
+        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        "weekly_submission_done": 1,
+        "current_streak": (pe.current_streak or 0) + 1,
+        "special_gems": (pe.special_gems or 0) + 1,
         "next_action_at": add_to_date(now_datetime(), hours=FEEDBACK_TIMEOUT_HOURS),
         "next_action_type": ACTION_FEEDBACK_TIMEOUT,
     })
@@ -313,12 +343,25 @@ def t6_escalation_to_remedial(pe, week_rule=None, trigger_source="scheduler"):
 
 # ── T7: First submission (Core, from content delivery) ────
 def t7_core_submission(pe, points=0, trigger_source="flow_callback"):
-    """T7: normal_content_delivery → submitted_awaiting_feedback."""
+    """T7: normal_content_delivery → submitted_awaiting_feedback.
+
+    CR-002 v2: extends the existing updates dict to bump the new submission
+    counters (`total_submission_points`, `weekly_submission_points`), set the
+    sticky `weekly_submission_done` flag, and increment `current_streak` and
+    `special_gems` — all in the same atomic save. Streak/gems increment AT
+    SUBMISSION TIME, not deferred to T19.
+    """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
+        # CR-002 v2: submission-points split + streak/gems/sticky flag
+        "total_submission_points": (pe.total_submission_points or 0) + points,
+        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        "weekly_submission_done": 1,
+        "current_streak": (pe.current_streak or 0) + 1,
+        "special_gems": (pe.special_gems or 0) + 1,
         "next_action_at": add_to_date(now_datetime(), hours=FEEDBACK_TIMEOUT_HOURS),
         "next_action_type": ACTION_FEEDBACK_TIMEOUT,
     })
@@ -334,12 +377,25 @@ def t8_start_remedial_escalation(pe, step_number=1, trigger_source="scheduler"):
 
 # ── T9: Remedial submission ──────────────────────────────
 def t9_remedial_submission(pe, points=0, trigger_source="flow_callback"):
-    """T9: remedial_content_delivery → submitted_awaiting_feedback."""
+    """T9: remedial_content_delivery → submitted_awaiting_feedback.
+
+    CR-002 v2: extends the existing updates dict to bump the new submission
+    counters (`total_submission_points`, `weekly_submission_points`), set the
+    sticky `weekly_submission_done` flag, and increment `current_streak` and
+    `special_gems` — all in the same atomic save. Streak/gems increment AT
+    SUBMISSION TIME, not deferred to T19.
+    """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
+        # CR-002 v2: submission-points split + streak/gems/sticky flag
+        "total_submission_points": (pe.total_submission_points or 0) + points,
+        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        "weekly_submission_done": 1,
+        "current_streak": (pe.current_streak or 0) + 1,
+        "special_gems": (pe.special_gems or 0) + 1,
         "next_action_at": add_to_date(now_datetime(), hours=FEEDBACK_TIMEOUT_HOURS),
         "next_action_type": ACTION_FEEDBACK_TIMEOUT,
     })
@@ -398,10 +454,56 @@ def t13_feedback_delivered(pe, trigger_source="flow_callback"):
     })
 
 
-# ── T14: Week advance (normal) ──────────────────────────
+# ── T14 / T19: Week advance (normal) ────────────────────
+#
+# Naming note: this function is named `t14_week_advance` for historical
+# reasons; the architecture-doc vocabulary calls it T19. CR-002 v2 keeps
+# the function name (per CR §"T19 week-advance — extended" — do NOT rename).
+#
+# CR-003 coordination note (DO NOT REMOVE THIS COMMENT BLOCK):
+#   CR-003 will append grace re-arm logic AFTER the weekly reset and
+#   BEFORE schedule-next-content. If both CRs land, the merged write
+#   order is:
+#     streak/gem compute → weekly reset → path reset → grace re-arm
+#     → schedule next content.
+#   Code-reviewers and the CR-003 author should grep for this string.
 def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
-    """T14: week_completed → normal_content_delivery (next week)."""
+    """T19: week_completed → normal_content_delivery (next week).
+
+    CR-002 v2 extends T19 in two phases:
+
+    Phase 1 — compute streak/gem update from the two sticky weekly flags:
+        if `weekly_video_done = 1 AND weekly_submission_done = 0`:
+            current_streak → 0
+            special_gems   → max(0, special_gems - 1)
+        else:
+            both unchanged.
+
+    Phase 2 — reset all weekly_* counters and both sticky flags to 0,
+    advance the week, and write the streak/gem values computed in Phase 1.
+    `total_*` counters are NEVER reset (cumulative across program).
+
+    Gem floor is enforced in Python (`max(0, ...)`) because the value is
+    computed before the UPDATE. SQL `GREATEST(0, ...)` is not needed — the
+    value is plain-int by the time we write it.
+    """
     tier = TIER_BY_WEEK.get(new_week, DEFAULT_TIER)
+
+    # ── Phase 1: streak/gem compute (CR-002 v2) ─────────────
+    was_assigned = bool(pe.weekly_video_done)
+    did_submit = bool(pe.weekly_submission_done)
+    streak_update = pe.current_streak or 0
+    gems_update = pe.special_gems or 0
+    if was_assigned and not did_submit:
+        # Penalty branch: streak resets, gem decremented (floored at 0).
+        streak_update = 0
+        gems_update = max(0, gems_update - 1)
+    # else: streak/gems unchanged. Either:
+    #   - Nothing was assigned (no video) → no penalty for not submitting.
+    #   - Student submitted → streak/gems already incremented at submission
+    #     time inside the T7/T9/T17 transitions.
+
+    # ── Phase 2: build the reset update dict ────────────────
     updates = {
         "journey_label": LABEL_WEEK_ADVANCED,
         "current_week": new_week,
@@ -415,6 +517,16 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         "grace_window_end_at": None,
         "next_action_at": now_datetime(),
         "next_action_type": ACTION_CONTENT_DELIVERY,
+        # CR-002 v2: apply streak/gem update + reset all weeklies + flags
+        "current_streak": streak_update,
+        "special_gems": gems_update,
+        "weekly_activity_points": 0,
+        "weekly_quiz_points": 0,
+        "weekly_submission_points": 0,
+        "weekly_submission_done": 0,
+        "weekly_video_done": 0,
+        # NOTE: total_activity_points, total_quiz_points,
+        # total_submission_points, total_points are NEVER reset (E10).
     }
     if week_rule:
         updates["current_expected_submission_type"] = week_rule.get("expected_submission_type", "")
@@ -449,7 +561,14 @@ def t16_program_completed(pe, trigger_source="scheduler"):
 
 # ── T17: Grace submission ───────────────────────────────
 def t17_grace_submission(pe, points=0, trigger_source="flow_callback"):
-    """T17: grace_waiting → submitted_awaiting_feedback."""
+    """T17: grace_waiting → submitted_awaiting_feedback.
+
+    CR-002 v2: extends the existing updates dict to bump the new submission
+    counters (`total_submission_points`, `weekly_submission_points`), set the
+    sticky `weekly_submission_done` flag, and increment `current_streak` and
+    `special_gems` — all in the same atomic save. Streak/gems increment AT
+    SUBMISSION TIME, not deferred to T19.
+    """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "in_grace_window": 0,
@@ -458,6 +577,12 @@ def t17_grace_submission(pe, points=0, trigger_source="flow_callback"):
         "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
+        # CR-002 v2: submission-points split + streak/gems/sticky flag
+        "total_submission_points": (pe.total_submission_points or 0) + points,
+        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        "weekly_submission_done": 1,
+        "current_streak": (pe.current_streak or 0) + 1,
+        "special_gems": (pe.special_gems or 0) + 1,
         "next_action_at": add_to_date(now_datetime(), hours=FEEDBACK_TIMEOUT_HOURS),
         "next_action_type": ACTION_FEEDBACK_TIMEOUT,
     })

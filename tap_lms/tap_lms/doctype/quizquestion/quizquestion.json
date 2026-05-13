@@ -12,6 +12,7 @@
   "question_type",
   "options",
   "points",
+  "failed_points",
   "correct_option",
   "explanation",
   "hint",
@@ -65,11 +66,17 @@
    "fieldname": "question",
    "fieldtype": "Small Text",
    "label": "Question"
+  },
+  {
+   "default": "0",
+   "fieldname": "failed_points",
+   "fieldtype": "Int",
+   "label": "Failed Points"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-23 16:23:24.563434",
+ "modified": "2026-05-13 15:15:38.710271",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "QuizQuestion",

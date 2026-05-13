@@ -30,6 +30,7 @@ from frappe.utils import now_datetime, get_datetime, add_to_date
 from tap_lms.summer_program.constants import (
     BPR_ACTIVE,
     PROGRAM_ACTIVE,
+    PROGRAM_PAUSED,
     TERMINAL_STATES,
     ACTION_CONTENT_DELIVERY,
     ACTION_ESCALATION,
@@ -64,7 +65,8 @@ def dispatch_pending_actions():
 
     Finds all PEs where:
       - next_action_at <= now
-      - program_status is active (not paused/completed/dropped)
+      - program_status is active OR paused (paused PEs need pause_check
+        / re_engagement handlers to be reachable; B3 fix)
       - next_action_type is a per-PE individual-timer action
 
     Routes each PE to the appropriate handler based on next_action_type.
@@ -81,6 +83,11 @@ def dispatch_pending_actions():
     # (architecture §8.1, pattern P-001). The SKIP LOCKED clause makes each
     # worker take a different slice. We also capture journey_label here so
     # the atomic claim below can guard against state moving under us.
+    #
+    # program_status filter includes both ACTIVE and PAUSED so paused-state
+    # handlers (handle_pause_check for binge-resume, handle_re_engagement)
+    # are reachable. Earlier ACTIVE-only filter excluded them entirely (B3).
+    # PG `= ANY(%s)` with a list parameter per L-005 (avoid IN-tuple).
     candidates = frappe.db.sql(
         """
         SELECT pe.name, pe.next_action_type, pe.next_action_at,
@@ -91,13 +98,13 @@ def dispatch_pending_actions():
         FROM `tabProgramEnrollment` pe
         WHERE pe.next_action_at IS NOT NULL
           AND pe.next_action_at <= %s
-          AND pe.program_status = %s
+          AND pe.program_status = ANY(%s)
           AND pe.next_action_type != ''
         ORDER BY pe.next_action_at ASC
         LIMIT %s
         FOR UPDATE SKIP LOCKED
         """,
-        (now, PROGRAM_ACTIVE, DISPATCH_BATCH_SIZE),
+        (now, [PROGRAM_ACTIVE, PROGRAM_PAUSED], DISPATCH_BATCH_SIZE),
         as_dict=True,
     )
 

@@ -47,7 +47,16 @@
   "delivery_failure_count",
   "re_engagement_count",
   "last_flow_triggered",
-  "last_flow_triggered_at"
+  "last_flow_triggered_at",
+  "total_activity_points",
+  "weekly_activity_points",
+  "total_quiz_points",
+  "weekly_quiz_points",
+  "total_submission_points",
+  "weekly_submission_points",
+  "special_gems",
+  "weekly_submission_done",
+  "weekly_video_done"
  ],
  "fields": [
   {
@@ -305,11 +314,65 @@
    "fieldname": "delivery_monitoring_section",
    "fieldtype": "Section Break",
    "label": "Delivery Monitoring"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_activity_points",
+   "fieldtype": "Int",
+   "label": "Total Activity Points"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekly_activity_points",
+   "fieldtype": "Int",
+   "label": "Weekly Activity Points"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_quiz_points",
+   "fieldtype": "Int",
+   "label": "Total Quiz Points"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekly_quiz_points",
+   "fieldtype": "Int",
+   "label": "Weekly Quiz Points"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_submission_points",
+   "fieldtype": "Int",
+   "label": "Total Submission Points"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekly_submission_points",
+   "fieldtype": "Int",
+   "label": "Weekly Submission Points"
+  },
+  {
+   "default": "0",
+   "fieldname": "special_gems",
+   "fieldtype": "Int",
+   "label": "Special Gems"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekly_submission_done",
+   "fieldtype": "Check",
+   "label": "Weekly Submission Done"
+  },
+  {
+   "default": "0",
+   "fieldname": "weekly_video_done",
+   "fieldtype": "Check",
+   "label": "Weekly Video Done"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 19:59:10.722383",
+ "modified": "2026-05-13 15:22:49.160933",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEnrollment",

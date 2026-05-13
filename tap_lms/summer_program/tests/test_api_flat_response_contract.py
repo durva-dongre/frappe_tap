@@ -786,5 +786,79 @@ class TestGetNextContentFlatShape(unittest.TestCase):
         self.assertNotIn("assessments", resp)
 
 
+class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
+    """CR-002 v2 §"API surface": get_student_state response must include the 8
+    new gamification fields at top level (flat-map per
+    docs/api-standard-glific.md Rule 1) so SP_Incoming_Router can read
+    @results.webhook.<field> as a fallback when contact-field cache is stale.
+
+    `weekly_video_done` is intentionally NOT in the response — it's an
+    internal-only flag the streak/gem state machine uses; Glific never sees it.
+    """
+
+    EXPECTED_NEW_FIELDS = {
+        "total_activity_points",
+        "weekly_activity_points",
+        "total_quiz_points",
+        "weekly_quiz_points",
+        "total_submission_points",
+        "weekly_submission_points",
+        "special_gems",
+        "weekly_submission_done",
+    }
+
+    @patch("tap_lms.summer_program.program_enrollment_api._resolve_student")
+    @patch("tap_lms.summer_program.program_enrollment_api.frappe")
+    def test_response_includes_all_eight_new_fields_and_is_flat(
+        self, mock_frappe, mock_resolve,
+    ):
+        from tap_lms.summer_program import program_enrollment_api as api
+
+        mock_resolve.return_value = "STU-001"
+
+        # Mock PE data — include the 8 new fields plus a sample of existing.
+        pe_data = {
+            "name": "PE-1", "batch": "BATCH-1", "program_type": "Summer",
+            "archetype": "Submitter", "experiment_arm": "default",
+            "resolved_flow_state": "normal_content_delivery",
+            "journey_label": "content_delivered", "program_status": "active",
+            "current_week": 1, "current_path": "Core", "current_tier": "Basic",
+            "total_points": 50, "current_streak": 2, "in_grace_window": 0,
+            "grace_window_end_at": None,
+            "current_expected_submission_type": "photo",
+            "submission_count": 1, "last_escalation_step": 0,
+            "course_level": "CL-1", "language": "English", "glific_id": "G-1",
+            # CR-002 v2 fields
+            "total_activity_points": 20, "weekly_activity_points": 10,
+            "total_quiz_points": 5, "weekly_quiz_points": 5,
+            "total_submission_points": 25, "weekly_submission_points": 25,
+            "special_gems": 1, "weekly_submission_done": 1,
+        }
+        mock_frappe.db.get_value.return_value = pe_data
+
+        # Capture writes to frappe.local.response
+        captured = {}
+        mock_frappe.local.response = captured
+
+        api.get_student_state("STU-001")
+
+        # All 8 new fields appear at top level
+        for fld in self.EXPECTED_NEW_FIELDS:
+            self.assertIn(
+                fld, captured,
+                f"get_student_state response missing CR-002 v2 field '{fld}'",
+            )
+
+        # `weekly_video_done` is internal-only and MUST NOT leak to the response
+        self.assertNotIn(
+            "weekly_video_done", captured,
+            "weekly_video_done is an internal sticky flag — it must never be "
+            "exposed via get_student_state or the Glific contact-field push.",
+        )
+
+        # Flat-map contract: every value is a scalar, no nested dicts or lists
+        assert_flat_response(captured)
+
+
 if __name__ == "__main__":
     unittest.main()

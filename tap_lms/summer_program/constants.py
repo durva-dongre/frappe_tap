@@ -176,7 +176,12 @@ VALIDATION_FAILED = "failed"
 
 
 # ── Glific Contact Field Keys ─────────────────────────────
-# These are the 18 contact field names set on Glific contacts
+# These are the 26 contact field names set on Glific contacts.
+# CR-002 v2 expands the baseline from 18 to 26 by adding the 8 gamification
+# fields below (activity/quiz/submission points split + special_gems +
+# weekly_submission_done sticky flag). `weekly_video_done` is intentionally
+# NOT added — it is an internal-only state-machine flag and is never pushed
+# to Glific (see CR-002 v2 §"Five gamification dimensions on PE").
 CF_STUDENT_ID = "student_id"
 CF_BATCH_ID = "batch_id"
 CF_ARCHETYPE = "archetype"
@@ -195,6 +200,20 @@ CF_COURSE_LEVEL = "course_level"
 CF_STUDENT_NAME = "student_name"
 CF_LAST_ESCALATION_STEP = "last_escalation_step"
 CF_SUBMISSION_COUNT = "submission_count"
+
+# ── CR-002 v2 gamification fields ─────────────────────────
+# 8 new contact fields pushed alongside the existing 18 (cache size 26 after
+# this CR; 28 after CR-003 also ships escalation_order + escalation_type).
+# Glific gamification rendering reads these directly via @contact.<field_name>;
+# per L-008 the names are public contract — do not rename.
+CF_TOTAL_ACTIVITY_POINTS = "total_activity_points"
+CF_WEEKLY_ACTIVITY_POINTS = "weekly_activity_points"
+CF_TOTAL_QUIZ_POINTS = "total_quiz_points"
+CF_WEEKLY_QUIZ_POINTS = "weekly_quiz_points"
+CF_TOTAL_SUBMISSION_POINTS = "total_submission_points"
+CF_WEEKLY_SUBMISSION_POINTS = "weekly_submission_points"
+CF_SPECIAL_GEMS = "special_gems"
+CF_WEEKLY_SUBMISSION_DONE = "weekly_submission_done"
 
 
 # ── Glific sync retry policy (pattern P-007 / lesson L-015) ───
