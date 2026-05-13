@@ -25,7 +25,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Expected Submission Type",
-   "options": "emoji\ntext_word\nvoice_note\nphoto\nvideo\nphoto_video_artefact\nvoice_note_text_summary",
+   "options": "emoji\nword_text_voice\nsummary_text_voice\nimage\nvideo\nphoto_video_artefact",
    "reqd": 1
   },
   {

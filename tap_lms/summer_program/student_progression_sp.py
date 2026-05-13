@@ -20,7 +20,9 @@ from frappe.utils import (
     add_days, add_to_date,
 )
 
-from tap_lms.summer_program.utils import glific_response
+from tap_lms.summer_program.custom_messages import EXPECTED_SUBMISSION_LABELS
+from tap_lms.summer_program.state_machine import get_active_pe
+from tap_lms.summer_program.utils import glific_response, resolve_student
 
 
 def _time_diff_in_seconds(dt1, dt2):
@@ -528,7 +530,7 @@ def get_next_content(student_id, course_level=None):
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def get_content_details(content_type, content_id, language=None):
+def get_content_details(content_type, content_id, language=None, student_id=None):
     """
     Get detailed information about a specific content item.
     Returns type-specific payload:
@@ -545,6 +547,9 @@ def get_content_details(content_type, content_id, language=None):
         content_type: DocType name (VideoClass, Quiz, etc.)
         content_id: Document name
         language: Optional language code for translation lookup
+        student_id: Optional student identifier. When provided for VideoClass,
+            includes unguided submission text fields for the student's active
+            enrollment.
 
     Returns:
         dict with type-specific content details
@@ -610,6 +615,12 @@ def get_content_details(content_type, content_id, language=None):
                         result["translated"] = True
                         result["language"] = language
                         break
+            if student_id:
+                unguided = _get_video_unguided_submission_message(
+                    student_id, assessments, language
+                )
+                result["unguided_text"] = unguided.get("unguided_text")
+                result["unguided_text_url"] = unguided.get("unguided_text_url")
             return result
 
         elif content_type == "Quiz":
@@ -1824,6 +1835,58 @@ def _get_video_assessments(content_type, content_id):
         return None
     return [{"assessment_type": r.assessment_type, "assessment_id": r.assessment}
             for r in rows if r.assessment]
+
+
+def _get_video_unguided_submission_message(student_id, assessments, language=None):
+    """Return unguided submission copy for a video's assignment, when resolvable."""
+    response = {"unguided_text": None, "unguided_text_url": None}
+
+    student_id = resolve_student(student_id)
+    if not student_id:
+        return response
+
+    pe = get_active_pe(student_id)
+    if not pe:
+        return response
+
+    submission_labels = EXPECTED_SUBMISSION_LABELS.get(
+        pe.current_expected_submission_type
+    )
+    if not submission_labels:
+        return response
+
+    message_language = language or pe.language
+    if not message_language:
+        return response
+
+    assignment_id = None
+    for assessment in assessments or []:
+        if assessment.get("assessment_type") == "Assignment":
+            assignment_id = assessment.get("assessment_id")
+            break
+
+    if not assignment_id:
+        return response
+
+    rows = frappe.get_all(
+        "Assignment Submission Rule",
+        filters={
+            "parent": assignment_id,
+            "parenttype": "Assignment",
+            "submission_label": ["in", submission_labels],
+            "language": message_language,
+        },
+        fields=["unguided_text", "unguided_text_audio"],
+        order_by="display_order asc, idx asc",
+        limit_page_length=1,
+    )
+    if not rows:
+        return response
+
+    return {
+        "unguided_text": rows[0].unguided_text,
+        "unguided_text_url": rows[0].unguided_text_audio,
+    }
 
 
 def _get_next_learning_unit(course_level, week_no, tier, after_lu):

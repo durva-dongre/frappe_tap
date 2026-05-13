@@ -6,8 +6,8 @@ Covers:
     counter bumps and `weekly_submission_done` sticky flag.
   - T19 (`t14_week_advance`) restructured to compute streak/gem updates from
     sticky flags before resetting weeklies.
-  - `_enqueue_contact_field_sync` extended to push 8 new gamification fields
-    (cache size 26 total, 18 existing + 8 new). `weekly_video_done` is NOT
+  - `_enqueue_contact_field_sync` extended to push gamification fields
+    (cache size 27 total, 18 existing + 9 gamification). `weekly_video_done` is NOT
     pushed.
 
 Tests in this file:
@@ -17,7 +17,7 @@ Tests in this file:
   4. test_t19_streak_reset_when_assigned_no_submit
   5. test_t19_streak_unchanged_when_not_assigned
   6. test_t19_gem_floored_at_zero
-  7. test_sync_contact_fields_pushes_26_fields (18 + 8 new gamification)
+  7. test_sync_contact_fields_pushes_gamification_fields
 """
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -97,6 +97,7 @@ def _make_pe(
     weekly_submission_points=0,
     weekly_activity_points=0,
     weekly_quiz_points=0,
+    bonus_quiz_points=0,
     total_activity_points=0,
     total_quiz_points=0,
 ):
@@ -120,6 +121,7 @@ def _make_pe(
     pe.weekly_submission_points = weekly_submission_points
     pe.weekly_activity_points = weekly_activity_points
     pe.weekly_quiz_points = weekly_quiz_points
+    pe.bonus_quiz_points = bonus_quiz_points
     pe.total_activity_points = total_activity_points
     pe.total_quiz_points = total_quiz_points
     pe.insert(ignore_permissions=True)
@@ -348,11 +350,11 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
 
 
 # ════════════════════════════════════════════════════════════
-# Contact-field sync — 18 + 8 = 26 fields
+# Contact-field sync — existing gamification fields plus bonus_quiz_points
 # ════════════════════════════════════════════════════════════
 
 class TestSyncContactFieldsExtended(FrappeTestCase):
-    """`_enqueue_contact_field_sync` must include the 8 CR-002 v2 gamification
+    """`_enqueue_contact_field_sync` must include the CR-002 v2 gamification
     fields alongside the existing 18 (NB: 18 of which 11 are state-mutating
     and re-synced per-transition; 7 are immutable post-enrollment and live
     only in the enrollment-time push)."""
@@ -363,12 +365,12 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         cls.batch_name = _ensure_batch()
 
     @patch("tap_lms.summer_program.state_machine.frappe.enqueue")
-    def test_sync_contact_fields_pushes_26_fields(self, mock_enqueue):
+    def test_sync_contact_fields_pushes_gamification_fields(self, mock_enqueue):
         """The fields dict serialized into the background job includes the
-        11 state-mutating fields plus 8 new gamification fields = 19. Plus
-        the 7 immutable enrollment-time fields = 26 total in the Glific
-        cache. This test checks the 8 new ones are present in the per-
-        transition sync push (state_machine emits 11 + 8 = 19; the other
+        11 state-mutating fields plus 9 gamification fields = 20. Plus
+        the 7 immutable enrollment-time fields = 27 total in the Glific
+        cache. This test checks the gamification fields are present in the per-
+        transition sync push (state_machine emits 11 + 9 = 20; the other
         7 immutables come from the enrollment-time emit path)."""
         student = _ensure_student("CFSYNC")
         pe = _make_pe(
@@ -376,7 +378,7 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
             current_streak=2, special_gems=3,
             weekly_submission_done=1, weekly_video_done=1,
             total_activity_points=42, weekly_activity_points=10,
-            total_quiz_points=33, weekly_quiz_points=8,
+            total_quiz_points=33, weekly_quiz_points=8, bonus_quiz_points=6,
             total_submission_points=51, weekly_submission_points=25,
         )
 
@@ -386,11 +388,12 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         kwargs = mock_enqueue.call_args.kwargs
         fields = kwargs.get("fields") or {}
 
-        # All 8 new gamification fields must be present
+        # All per-transition gamification fields must be present
         self.assertIn("total_activity_points", fields)
         self.assertIn("weekly_activity_points", fields)
         self.assertIn("total_quiz_points", fields)
         self.assertIn("weekly_quiz_points", fields)
+        self.assertIn("bonus_quiz_points", fields)
         self.assertIn("total_submission_points", fields)
         self.assertIn("weekly_submission_points", fields)
         self.assertIn("special_gems", fields)
@@ -401,6 +404,7 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         self.assertEqual(fields["weekly_activity_points"], "10")
         self.assertEqual(fields["total_quiz_points"], "33")
         self.assertEqual(fields["weekly_quiz_points"], "8")
+        self.assertEqual(fields["bonus_quiz_points"], "6")
         self.assertEqual(fields["total_submission_points"], "51")
         self.assertEqual(fields["weekly_submission_points"], "25")
         self.assertEqual(fields["special_gems"], "3")
@@ -419,9 +423,9 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         ):
             self.assertIn(k, fields, f"existing field {k} missing from sync")
 
-        # Total count = 11 state-mutating + 8 new = 19 per-transition push.
+        # Total count = 11 state-mutating + 9 gamification = 20 per-transition push.
         # (The other 7 immutables live in the enrollment-time push.)
         self.assertEqual(
-            len(fields), 19,
-            "Per-transition sync pushes 11 existing state-mutating + 8 new = 19 fields",
+            len(fields), 20,
+            "Per-transition sync pushes 11 existing state-mutating + 9 gamification = 20 fields",
         )

@@ -548,11 +548,11 @@ def get_student_state(student_id):
             "grace_window_end_at", "current_expected_submission_type",
             "submission_count", "last_escalation_step", "course_level",
             "language", "glific_id",
-            # CR-002 v2 — 8 new gamification fields. Flat-map per
+            # CR-002 v2 gamification fields. Flat-map per
             # docs/api-standard-glific.md Rule 1 (no nesting, no arrays).
             # `weekly_video_done` is internal-only and intentionally omitted.
             "total_activity_points", "weekly_activity_points",
-            "total_quiz_points", "weekly_quiz_points",
+            "total_quiz_points", "weekly_quiz_points", "bonus_quiz_points",
             "total_submission_points", "weekly_submission_points",
             "special_gems", "weekly_submission_done",
         ],

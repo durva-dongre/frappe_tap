@@ -37,6 +37,7 @@ from tap_lms.summer_program.state_machine import (
     get_active_pe,
 )
 from tap_lms.summer_program.event_log import log_event
+from tap_lms.summer_program.utils import glific_response, resolve_student
 
 
 # ════════════════════════════════════════════════════════════
@@ -124,6 +125,54 @@ def award_quiz_points(attempt):
     )
 
 
+@frappe.whitelist(allow_guest=False)
+@glific_response
+def award_bonus_quiz_points(student_id, points):
+    """Award independent bonus quiz points to the student's active PE.
+
+    Bonus quiz points are intentionally independent: they update only
+    ProgramEnrollment.bonus_quiz_points and the matching Glific contact field.
+    They do not change total_points, total_quiz_points, or weekly_quiz_points.
+    """
+    student_id = resolve_student(student_id)
+    if not student_id:
+        return {"success": False}
+
+    parsed_points = _parse_bonus_points(points)
+    if parsed_points is None:
+        return {"success": False}
+
+    pe = get_active_pe(student_id)
+    if not pe:
+        return {"success": False}
+
+    old_bonus_points = int(pe.bonus_quiz_points or 0)
+    frappe.db.sql(
+        """
+        UPDATE "tabProgramEnrollment"
+           SET bonus_quiz_points = COALESCE(bonus_quiz_points, 0) + %s
+         WHERE name = %s
+        """,
+        (parsed_points, pe.name),
+    )
+
+    pe.reload()
+    if pe.glific_id:
+        _enqueue_contact_field_sync(pe)
+
+    log_event(
+        pe, "bonus_quiz_points_awarded",
+        old_value=str(old_bonus_points),
+        new_value=str(pe.bonus_quiz_points or 0),
+        trigger_source="api",
+        details={
+            "points_awarded": parsed_points,
+        },
+    )
+
+    return {"success": True}
+
+
 # ════════════════════════════════════════════════════════════
 # Per-question computation
 # ════════════════════════════════════════════════════════════
@@ -176,3 +225,17 @@ def _previous_latest_points(student, quiz, current_attempt_name):
     if not row:
         return 0
     return int(row[0][0] or 0)
+
+
+def _parse_bonus_points(points):
+    """Return a non-negative int, or None for invalid API input."""
+    try:
+        if isinstance(points, bool):
+            return None
+        text = str(points).strip()
+        if not text or not text.isdigit():
+            return None
+        parsed = int(text)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None

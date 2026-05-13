@@ -238,7 +238,7 @@
    "fieldname": "submission_type",
    "fieldtype": "Select",
    "label": "Submission Type",
-   "options": "emoji\ntext_word\nvoice_note\nphoto\nvideo\nphoto_video_artefact\nvoice_note_text_summary"
+   "options": "emoji\nword_text_voice\nsummary_text_voice\nimage\nvideo\nphoto_video_artefact"
   },
   {
    "fieldname": "escalation_step_at_submit",

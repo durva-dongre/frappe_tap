@@ -38,9 +38,10 @@ from tap_lms.summer_program.constants import (
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
     CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
-    # CR-002 v2 — 8 new gamification contact fields
+    # CR-002 v2 gamification contact fields
     CF_TOTAL_ACTIVITY_POINTS, CF_WEEKLY_ACTIVITY_POINTS,
     CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
+    CF_BONUS_QUIZ_POINTS,
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
     CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
     GLIFIC_SYNC_MAX_RETRIES, GLIFIC_SYNC_RETRY_LOG_TITLE, GLIFIC_SYNC_DLQ_LOG_TITLE,
@@ -110,7 +111,7 @@ def _enqueue_contact_field_sync(pe):
         CF_EXPECTED_SUBMISSION: pe.current_expected_submission_type or "",
         CF_LAST_ESCALATION_STEP: str(pe.last_escalation_step or 0),
         CF_SUBMISSION_COUNT: str(pe.submission_count or 0),
-        # ── CR-002 v2: 8 new gamification fields ──
+        # ── CR-002 v2 gamification fields ──
         # Pushed alongside the existing fields so the cache size on Glific is
         # 26 after this CR (28 after CR-003 also ships escalation_order/type).
         # `weekly_video_done` is intentionally NOT included — internal-only.
@@ -118,6 +119,7 @@ def _enqueue_contact_field_sync(pe):
         CF_WEEKLY_ACTIVITY_POINTS: str(pe.weekly_activity_points or 0),
         CF_TOTAL_QUIZ_POINTS: str(pe.total_quiz_points or 0),
         CF_WEEKLY_QUIZ_POINTS: str(pe.weekly_quiz_points or 0),
+        CF_BONUS_QUIZ_POINTS: str(pe.bonus_quiz_points or 0),
         CF_TOTAL_SUBMISSION_POINTS: str(pe.total_submission_points or 0),
         CF_WEEKLY_SUBMISSION_POINTS: str(pe.weekly_submission_points or 0),
         CF_SPECIAL_GEMS: str(pe.special_gems or 0),
