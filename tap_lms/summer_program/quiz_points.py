@@ -164,7 +164,7 @@ def award_bonus_quiz_points(student_id, points):
         pe, "bonus_quiz_points_awarded",
         old_value=str(old_bonus_points),
         new_value=str(pe.bonus_quiz_points or 0),
-        trigger_source="api",
+        trigger_source="microservice",
         details={
             "points_awarded": parsed_points,
         },
