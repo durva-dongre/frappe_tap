@@ -23,6 +23,7 @@
   "journey_label",
   "last_label_change_at",
   "program_status",
+  "drop_reason",
   "resolved_flow_state",
   "current_expected_submission_type",
   "week_progress_section",
@@ -45,7 +46,6 @@
   "next_action_type",
   "delivery_monitoring_section",
   "delivery_failure_count",
-  "re_engagement_count",
   "last_flow_triggered",
   "last_flow_triggered_at",
   "total_activity_points",
@@ -176,7 +176,7 @@
    "fieldname": "resolved_flow_state",
    "fieldtype": "Select",
    "label": "Resolved Flow State",
-   "options": "normal_content_delivery\nnormal_escalation\nremedial_content_delivery\nremedial_escalation\ngrace_waiting\npaused_no_activity\npaused_binge\nsubmitted_awaiting_feedback\nfeedback_ready\nweek_completed\nprogram_completed\nprogram_dropped",
+   "options": "normal_content_delivery\nnormal_escalation\nremedial_content_delivery\nremedial_escalation\ngrace_waiting\npaused_binge\nsubmitted_awaiting_feedback\nfeedback_ready\nweek_completed\nprogram_completed\nprogram_dropped",
    "reqd": 1,
    "search_index": 1
   },
@@ -268,12 +268,6 @@
    "fieldname": "delivery_failure_count",
    "fieldtype": "Int",
    "label": "Delivery Failure Count"
-  },
-  {
-   "default": "0",
-   "fieldname": "re_engagement_count",
-   "fieldtype": "Int",
-   "label": "Re-engagement Count"
   },
   {
    "fieldname": "last_flow_triggered",
@@ -368,11 +362,17 @@
    "fieldname": "weekly_video_done",
    "fieldtype": "Check",
    "label": "Weekly Video Done"
+  },
+  {
+   "fieldname": "drop_reason",
+   "fieldtype": "Select",
+   "label": "Drop Reason",
+   "options": "\ngrace_expired\nreengagement_exhausted\ndelivery_failure\nmanual"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-13 15:22:49.160933",
+ "modified": "2026-05-13 20:33:35.054771",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEnrollment",

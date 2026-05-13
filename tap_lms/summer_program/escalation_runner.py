@@ -172,16 +172,43 @@ def _check_and_escalate_student(student_id, batch, bpr, current_week):
         return False
 
     flow_id = bpr.escalation_flow
+    # CR-003: step shape uses `escalation_type` (Select) instead of message_type (Data).
+    escalation_type = next_step.get("escalation_type", "help_note_a")
     default_results = {
-        "message_type": next_step["message_type"],
+        "escalation_type": escalation_type,
         "escalation_order": str(next_step["escalation_order"]),
         "points_if_submit": str(next_step.get("points_awarded", 0)),
         "week": str(current_week),
     }
 
-    success = start_contact_flow(
-        str(flow_id), str(glific_id), default_results
-    )
+    # CR-003 §M6: `parent_call` steps go to Vocallabs, NOT the Glific
+    # SP_Escalation flow. The bulk runner has to branch the same way
+    # `pe_dispatcher.handle_escalation` does — else parent_call steps
+    # fire BOTH a WhatsApp escalation AND a phone call. The PE name
+    # comes from the student's active enrollment for this batch.
+    if escalation_type == "parent_call":
+        pe_name = frappe.db.get_value(
+            "ProgramEnrollment",
+            {
+                "student": student_id,
+                "batch": batch.name,
+                "program_status": ["in", ["active", "paused"]],
+            },
+            "name",
+        )
+        if not pe_name:
+            return False
+        frappe.enqueue(
+            "tap_lms.summer_program.vocallabs.initiate_parent_call",
+            queue="long",
+            pe_name=pe_name,
+            escalation_step=next_step,
+        )
+        success = True  # enqueue succeeded; vocallabs handles retry/DLQ
+    else:
+        success = start_contact_flow(
+            str(flow_id), str(glific_id), default_results
+        )
 
     if success:
         # Log the escalation
@@ -190,13 +217,13 @@ def _check_and_escalate_student(student_id, batch, bpr, current_week):
         log.stage_no = current_week
         log.content_type = "Assignment"
         log.content_id = f"escalation_step_{next_step['escalation_order']}"
-        log.content_name = f"Escalation: {next_step['message_type']}"
+        log.content_name = f"Escalation: {escalation_type}"
         log.action = "started"
         log.tier = "Escalation"
         log.started_at = now_datetime()
         log.metadata = json.dumps({
             "escalation_order": next_step["escalation_order"],
-            "message_type": next_step["message_type"],
+            "escalation_type": escalation_type,
             "points_if_submit": next_step.get("points_awarded", 0),
             "flow_id": flow_id,
             "source": "summer_program",

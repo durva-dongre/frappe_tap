@@ -18,7 +18,7 @@ from tap_lms.glific_integration import update_contact_fields
 from tap_lms.summer_program.constants import (
     STATE_NORMAL_CONTENT, STATE_NORMAL_ESCALATION,
     STATE_REMEDIAL_CONTENT, STATE_REMEDIAL_ESCALATION,
-    STATE_GRACE_WAITING, STATE_PAUSED_NO_ACTIVITY, STATE_PAUSED_BINGE,
+    STATE_GRACE_WAITING, STATE_PAUSED_BINGE,
     STATE_SUBMITTED_AWAITING, STATE_FEEDBACK_READY,
     STATE_WEEK_COMPLETED, STATE_PROGRAM_COMPLETED, STATE_PROGRAM_DROPPED,
     PAUSED_STATES, TERMINAL_STATES,
@@ -29,10 +29,10 @@ from tap_lms.summer_program.constants import (
     PATH_CORE, PATH_REMEDIAL,
     ACTION_ESCALATION, ACTION_CONTENT_DELIVERY, ACTION_FEEDBACK_NOTIFICATION,
     ACTION_FEEDBACK_TIMEOUT, ACTION_WEEK_ADVANCEMENT,
-    ACTION_GRACE_REMINDER, ACTION_GRACE_CHECK, ACTION_RE_ENGAGEMENT,
+    ACTION_GRACE_CHECK,
     ACTION_PAUSE_CHECK,
-    PAUSE_NO_ACTIVITY, PAUSE_BINGE_LIMIT,
-    GRACE_WINDOW_DAYS, GRACE_REMINDER_DAYS,
+    PAUSE_BINGE_LIMIT,
+    DEFAULT_GRACE_WINDOW_DAYS,
     FEEDBACK_TIMEOUT_HOURS,
     CF_RESOLVED_FLOW_STATE, CF_CURRENT_WEEK, CF_CURRENT_PATH,
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
@@ -43,6 +43,8 @@ from tap_lms.summer_program.constants import (
     CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
     CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
+    # CR-003 — 2 new escalation channel routing fields
+    CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
     GLIFIC_SYNC_MAX_RETRIES, GLIFIC_SYNC_RETRY_LOG_TITLE, GLIFIC_SYNC_DLQ_LOG_TITLE,
     TIER_BY_WEEK, DEFAULT_TIER,
 )
@@ -122,6 +124,15 @@ def _enqueue_contact_field_sync(pe):
         CF_WEEKLY_SUBMISSION_POINTS: str(pe.weekly_submission_points or 0),
         CF_SPECIAL_GEMS: str(pe.special_gems or 0),
         CF_WEEKLY_SUBMISSION_DONE: str(int(pe.weekly_submission_done or 0)),
+        # ── CR-003: escalation_order field is also re-synced here so the
+        # Glific contact cache reflects last_escalation_step on every
+        # transition. escalation_type is NOT pushed here because it's a
+        # per-step attribute, not a PE state field — the dispatcher pushes
+        # it explicitly in handle_escalation BEFORE firing the SP_Escalation
+        # flow (CR-003 §"Escalation flow — new semantics" step 3). Pushing
+        # escalation_order here keeps the cache fresh after T2/T4/T8/T10
+        # transitions which also bump last_escalation_step.
+        CF_ESCALATION_ORDER: str(pe.last_escalation_step or 0),
     }
     frappe.enqueue(
         "tap_lms.summer_program.state_machine._sync_contact_fields_job",
@@ -236,18 +247,83 @@ def _sync_contact_fields_job(glific_id, fields, pe_name, retry_count=0, student_
 
 
 # ════════════════════════════════════════════════════════════
+# CR-003 — Per-week grace clock helpers
+# ════════════════════════════════════════════════════════════
+
+def _batch_grace_window_days(pe):
+    """Return the cohort's grace window in days.
+
+    CR-003: grace duration is per-batch via Batch.grace_window_days. Falls
+    back to DEFAULT_GRACE_WINDOW_DAYS (14) only if the field is unset, which
+    should not happen on properly-configured batches. We log a warning rather
+    than throwing so a misconfigured batch doesn't block dispatch.
+    """
+    if not pe.batch:
+        return DEFAULT_GRACE_WINDOW_DAYS
+    try:
+        days = frappe.db.get_value("Batch", pe.batch, "grace_window_days")
+    except Exception:
+        days = None
+    if not days:
+        frappe.log_error(
+            f"Batch {pe.batch} has no grace_window_days; "
+            f"falling back to default ({DEFAULT_GRACE_WINDOW_DAYS}d) for PE {pe.name}",
+            "SP Grace Clock Config",
+        )
+        return DEFAULT_GRACE_WINDOW_DAYS
+    return int(days)
+
+
+def _grace_clock_updates(pe):
+    """Return the dict of grace-clock + scheduling updates for a week-start
+    transition (T0 / T19 / `t14_week_advance`).
+
+    CR-003 §"Grace window — new semantics": the clock starts at the week's
+    start and resets on every week advance. The expiry scheduler tick fires
+    a `grace_check` action which routes to `handle_grace_check` and, if the
+    student still hasn't submitted, transitions to STATE_PROGRAM_DROPPED via
+    `t17_grace_expired`. This helper keeps the math + field shape in one
+    place so T0 and T19 cannot drift out of sync.
+
+    Returns a dict suitable for splatting into a transition's `extra_updates`.
+    """
+    now = now_datetime()
+    grace_end = add_to_date(now, days=_batch_grace_window_days(pe))
+    return {
+        "in_grace_window": 1,
+        "grace_window_start": now,
+        "grace_window_end_at": grace_end,
+        # The grace_check tick fires at grace_window_end_at; until then, the
+        # week's escalation steps drive next_action_at on their own cadence.
+        # T0/T19 callers set next_action_at = now for the immediate content
+        # delivery; the grace_check is a separate clock that only fires if
+        # no submission lands by the window's end.
+    }
+
+
+# ════════════════════════════════════════════════════════════
 # NAMED TRANSITIONS (T0–T25)
 # ════════════════════════════════════════════════════════════
 
 # ── T0: Enrollment → normal_content_delivery ───────────────
 def t0_enrollment(pe, trigger_source="scheduler"):
-    """T0: Initial enrollment. Sets resolved_flow_state = normal_content_delivery."""
-    return transition(pe, STATE_NORMAL_CONTENT, trigger_source, {
+    """T0: Initial enrollment. Sets resolved_flow_state = normal_content_delivery.
+
+    CR-003: also arms the per-week grace clock — grace_window_start = now,
+    grace_window_end_at = now + Batch.grace_window_days. The clock is policed
+    by a `grace_check` scheduler action that routes to `handle_grace_check`;
+    if no submission lands by grace_window_end_at the PE is dropped (T17).
+    Note: T0 also kicks off content delivery via next_action_type = content_delivery
+    — that's the immediate work; grace expiry is a separate downstream check.
+    """
+    updates = {
         "journey_label": LABEL_CONTENT_DELIVERED,
         "program_status": PROGRAM_ACTIVE,
         "current_path": PATH_CORE,
         "current_week": 1,
-    })
+    }
+    updates.update(_grace_clock_updates(pe))
+    return transition(pe, STATE_NORMAL_CONTENT, trigger_source, updates)
 
 
 # ── T1: Content delivered, no response → stays, schedule escalation ──
@@ -310,17 +386,28 @@ def t4_next_escalation_step(pe, step_number, next_hours=24, trigger_source="sche
 
 # ── T5: Escalation exhausted + some activity → grace ─────
 def t5_escalation_to_grace(pe, trigger_source="scheduler"):
-    """T5: normal_escalation → grace_waiting (had some activity)."""
-    grace_end = add_to_date(now_datetime(), days=GRACE_WINDOW_DAYS)
-    first_reminder = add_to_date(now_datetime(), days=GRACE_REMINDER_DAYS[0])
-    return transition(pe, STATE_GRACE_WAITING, trigger_source, {
+    """T5: normal_escalation → grace_waiting (escalation steps exhausted).
+
+    CR-003: the grace clock was already set at the week's start (T0 / T19).
+    T5 PRESERVES the existing grace_window_end_at — it does not reset it.
+    The PE just enters the dead-air tail state; the `grace_check` scheduler
+    action set at week start will fire at grace_window_end_at and route via
+    `handle_grace_check`. If pe.grace_window_end_at is somehow None (legacy
+    PE), we defensively arm the clock here using the batch grace duration.
+    """
+    # Defensive: legacy PEs that pre-date CR-003 may not have the clock set.
+    if not pe.grace_window_end_at:
+        grace_updates = _grace_clock_updates(pe)
+    else:
+        grace_updates = {"in_grace_window": 1}
+
+    grace_updates.update({
         "journey_label": LABEL_GRACE_WINDOW,
-        "in_grace_window": 1,
-        "grace_window_start": now_datetime(),
-        "grace_window_end_at": grace_end,
-        "next_action_at": first_reminder,
-        "next_action_type": ACTION_GRACE_REMINDER,
+        # The grace_check action is scheduled for the existing grace_window_end_at.
+        "next_action_at": pe.grace_window_end_at or grace_updates.get("grace_window_end_at"),
+        "next_action_type": ACTION_GRACE_CHECK,
     })
+    return transition(pe, STATE_GRACE_WAITING, trigger_source, grace_updates)
 
 
 # ── T6: Escalation exhausted + ZERO activity → remedial ──
@@ -413,17 +500,23 @@ def t10_next_remedial_escalation(pe, step_number, next_hours=24, trigger_source=
 
 # ── T11: All Remedial escalation exhausted → grace ──────
 def t11_remedial_to_grace(pe, trigger_source="scheduler"):
-    """T11: remedial_escalation → grace_waiting."""
-    grace_end = add_to_date(now_datetime(), days=GRACE_WINDOW_DAYS)
-    first_reminder = add_to_date(now_datetime(), days=GRACE_REMINDER_DAYS[0])
-    return transition(pe, STATE_GRACE_WAITING, trigger_source, {
+    """T11: remedial_escalation → grace_waiting.
+
+    CR-003: mirror of T5 for the remedial path. The grace clock was already
+    armed at the week start; T11 preserves it. Defensive backfill for legacy
+    PEs as in T5.
+    """
+    if not pe.grace_window_end_at:
+        grace_updates = _grace_clock_updates(pe)
+    else:
+        grace_updates = {"in_grace_window": 1}
+
+    grace_updates.update({
         "journey_label": LABEL_GRACE_WINDOW,
-        "in_grace_window": 1,
-        "grace_window_start": now_datetime(),
-        "grace_window_end_at": grace_end,
-        "next_action_at": first_reminder,
-        "next_action_type": ACTION_GRACE_REMINDER,
+        "next_action_at": pe.grace_window_end_at or grace_updates.get("grace_window_end_at"),
+        "next_action_type": ACTION_GRACE_CHECK,
     })
+    return transition(pe, STATE_GRACE_WAITING, trigger_source, grace_updates)
 
 
 # ── T12: AI feedback generated ──────────────────────────
@@ -512,9 +605,6 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         "submission_count": 0,
         "quiz_completed": 0,
         "last_escalation_step": 0,
-        "in_grace_window": 0,
-        "grace_window_start": None,
-        "grace_window_end_at": None,
         "next_action_at": now_datetime(),
         "next_action_type": ACTION_CONTENT_DELIVERY,
         # CR-002 v2: apply streak/gem update + reset all weeklies + flags
@@ -528,6 +618,25 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         # NOTE: total_activity_points, total_quiz_points,
         # total_submission_points, total_points are NEVER reset (E10).
     }
+
+    # ── CR-003 grace re-arm ─────────────────────────────────
+    # The per-week grace clock resets on every week advance. The previous
+    # path-reset block above already cleared last_escalation_step; the grace
+    # helper now seeds grace_window_start, grace_window_end_at, and the
+    # in_grace_window flag for the NEW week. Order (per the coordinate-with-
+    # CR-003 comment block on this function): streak/gem → reset → path reset
+    # → grace re-arm → schedule next content. The CR-002 v2 reset block above
+    # is preserved exactly; CR-003 only APPENDS the grace re-arm.
+    #
+    # Note: next_action_at above is set to now() for the immediate
+    # content_delivery dispatch. The grace_check timer is policed via the
+    # `grace_check` scheduler tick that fires at grace_window_end_at; the
+    # week-start content delivery and grace expiry are independent clocks.
+    # In practice the content_delivery dispatcher claims the row first,
+    # transitions further, and the only way a `grace_check` ever fires is if
+    # the student goes silent through every escalation step.
+    updates.update(_grace_clock_updates(pe))
+
     if week_rule:
         updates["current_expected_submission_type"] = week_rule.get("expected_submission_type", "")
 
@@ -588,63 +697,63 @@ def t17_grace_submission(pe, points=0, trigger_source="flow_callback"):
     })
 
 
-# ── T17b: Grace reminder (no state change) ──────────────
-def t17b_grace_reminder(pe, reminder_index, trigger_source="scheduler"):
-    """T17b: grace_waiting → grace_waiting (reminder sent, schedule next)."""
-    if reminder_index + 1 < len(GRACE_REMINDER_DAYS):
-        next_day = GRACE_REMINDER_DAYS[reminder_index + 1]
-        next_at = add_to_date(pe.grace_window_start, days=next_day)
-        next_type = ACTION_GRACE_REMINDER
-    else:
-        next_at = pe.grace_window_end_at
-        next_type = ACTION_GRACE_CHECK
+# ── T17 (grace expired) — DELETED in CR-001 / RENAMED in CR-003 ─
+#
+# Pre-CR-003: T17b fired SP_Grace_Reminder on days 7/11/13 of the window,
+# then T18 transitioned the PE to STATE_PAUSED_NO_ACTIVITY and scheduled
+# the re-engagement loop. CR-003 retires both: grace reminders are gone
+# (escalation steps within the week ARE the reminders) and the
+# paused_no_activity state is retired (PEs drop directly at grace expiry).
+#
+# T17b removed; the dispatcher's `handle_grace_reminder` is also removed.
 
-    log_event(pe, "grace_reminder_sent", trigger_source=trigger_source,
-              details={"reminder_index": reminder_index})
+# ── T17: Grace expired → program_dropped (CR-003) ───────
+def t17_grace_expired(pe, trigger_source="scheduler"):
+    """T17: grace_waiting → program_dropped.
 
-    return transition(pe, STATE_GRACE_WAITING, trigger_source, {
-        "next_action_at": next_at,
-        "next_action_type": next_type,
-    })
+    CR-003 §"Grace window — new semantics": on grace expiry, the PE
+    transitions directly to STATE_PROGRAM_DROPPED. Terminal. No re-engagement
+    loop, no paused_no_activity hop. drop_reason = 'grace_expired'. The
+    `program_dropped` event is logged for the funnel.
 
-
-# ── T18: Grace expired → paused ─────────────────────────
-def t18_grace_expired(pe, trigger_source="scheduler"):
-    """T18: grace_waiting → paused_no_activity."""
-    return transition(pe, STATE_PAUSED_NO_ACTIVITY, trigger_source, {
-        "journey_label": LABEL_PAUSED,
-        "program_status": PROGRAM_PAUSED,
-        "pause_reason": PAUSE_NO_ACTIVITY,
+    Pre-CR-003 this slot was T18, which moved to STATE_PAUSED_NO_ACTIVITY and
+    scheduled re_engagement. T18 is retained as an alias below for any callers
+    that import by the old name; both point to the same function so existing
+    grep'ed call sites still work during the cutover window.
+    """
+    log_event(pe, "program_dropped", trigger_source=trigger_source,
+              details={"reason": "grace_expired"})
+    return transition(pe, STATE_PROGRAM_DROPPED, trigger_source, {
+        "journey_label": LABEL_DROPPED,
+        "program_status": PROGRAM_DROPPED,
+        "drop_reason": "grace_expired",
         "in_grace_window": 0,
-        "next_action_at": add_to_date(now_datetime(), days=3),
-        "next_action_type": ACTION_RE_ENGAGEMENT,
+        "next_action_at": None,
+        "next_action_type": "",
     })
 
 
-# ── T19: Reactivate (Core path) ─────────────────────────
-def t19_reactivate_core(pe, trigger_source="glific_flow"):
-    """T19: paused_no_activity → normal_content_delivery."""
-    return transition(pe, STATE_NORMAL_CONTENT, trigger_source, {
-        "journey_label": LABEL_RESUMED,
-        "program_status": PROGRAM_ACTIVE,
-        "pause_reason": "",
-        "pause_count": (pe.pause_count or 0) + 1,
-        "next_action_at": now_datetime(),
-        "next_action_type": ACTION_CONTENT_DELIVERY,
-    })
+# Backward-compat alias: callers that imported the old T18 name still work.
+# CR-003 retires the function semantics but keeps the name resolvable during
+# the cutover window. Delete after one release cycle once no caller imports
+# `t18_grace_expired` directly. Tests in test_pe_dispatcher.py still patch
+# `state_machine.t18_grace_expired` — they continue working via this alias.
+t18_grace_expired = t17_grace_expired
 
 
-# ── T20: Reactivate (Remedial path) ─────────────────────
-def t20_reactivate_remedial(pe, trigger_source="glific_flow"):
-    """T20: paused_no_activity → remedial_content_delivery."""
-    return transition(pe, STATE_REMEDIAL_CONTENT, trigger_source, {
-        "journey_label": LABEL_RESUMED,
-        "program_status": PROGRAM_ACTIVE,
-        "pause_reason": "",
-        "pause_count": (pe.pause_count or 0) + 1,
-        "next_action_at": now_datetime(),
-        "next_action_type": ACTION_CONTENT_DELIVERY,
-    })
+# ── T19 / T20 (reactivate from pause) — DELETED in CR-003 ─
+#
+# Pre-CR-003: a PE in paused_no_activity could receive an inbound message
+# and transition back to normal_content_delivery (T19) or
+# remedial_content_delivery (T20). CR-003 removes the paused_no_activity
+# state entirely — students drop at grace expiry and re-engagement is
+# inbound-only via SP_Incoming_Router (Glific reads program_status='dropped'
+# and routes a rejoin path that goes through `reactivate_student`).
+#
+# `t19_reactivate_core` / `t20_reactivate_remedial` removed. Note the T19
+# label is now reused in the architecture-doc vocabulary for the week-advance
+# function (`t14_week_advance` keeps its historical function name per CR-002 v2;
+# see the comment block at line ~458).
 
 
 # ── T21: Binge-paused resumes ───────────────────────────

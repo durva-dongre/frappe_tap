@@ -1449,6 +1449,13 @@ def _get_week_rule(student, batch, week):
 def _get_escalation_steps(student, batch):
     """
     Get escalation steps from ArchetypeConfig for this student.
+
+    CR-003: step dicts now carry `escalation_type` (Select:
+    help_note_a/help_note_b/voice_note/parent_call) instead of the previous
+    `message_type` Data field. Glific reads `escalation_type` via the
+    contact field pushed by the dispatcher to pick its per-channel branch
+    in SP_Escalation. `parent_call` steps are routed by the dispatcher
+    through `summer_program/vocallabs.py` and skip Glific entirely.
     """
     archetype = student.archetype or "Submitter"
     arm = student.experiment_arm or "default"
@@ -1462,7 +1469,7 @@ def _get_escalation_steps(student, batch):
         if step.is_active:
             steps.append({
                 "escalation_order": step.escalation_order,
-                "message_type": step.message_type,
+                "escalation_type": step.escalation_type or "help_note_a",
                 "points_awarded": step.points_awarded or 0,
                 "hours_after_previous": step.hours_after_previous or 24,
             })
@@ -1632,13 +1639,14 @@ def _record_escalation_step(student_id, week, step):
     log.stage_no = week
     log.content_type = "Assignment"
     log.content_id = f"escalation_step_{step['escalation_order']}"
-    log.content_name = f"Escalation: {step['message_type']}"
+    # CR-003: step shape now uses `escalation_type` (Select) not `message_type` (Data).
+    log.content_name = f"Escalation: {step.get('escalation_type', 'help_note_a')}"
     log.action = "started"  # 'started' = escalation sent, 'completed' = submission received
     log.tier = "Escalation"
     log.started_at = now_datetime()
     log.metadata = json.dumps({
         "escalation_order": step["escalation_order"],
-        "message_type": step["message_type"],
+        "escalation_type": step.get("escalation_type", "help_note_a"),
         "points_if_submit": step.get("points_awarded", 0),
         "source": "summer_program",
     })

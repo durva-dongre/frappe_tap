@@ -5,20 +5,25 @@ tap_lms/summer_program/reactivation.py
 API A5: reactivate_student — resume a paused student.
 
 Called by SP_Incoming_Router when a paused student sends any message.
-The router reads @contact.program_status = 'paused' and calls this API.
+The router reads @contact.program_status and routes here for `paused`.
+
+CR-003: the `paused_no_activity` state is retired. Students drop at grace
+expiry; re-engagement is inbound-only. The router now routes dropped
+students to a separate `rejoin` branch (Glific-side), not through this
+API — but if a dropped student ends up here, we surface a "dropped"
+status so the router can recover gracefully. The only live re-entry path
+in this API is for `paused_binge` students whose calendar caught up.
 """
 import frappe
 from frappe import _
 
 from tap_lms.summer_program.constants import (
-    STATE_PAUSED_NO_ACTIVITY, STATE_PAUSED_BINGE,
+    STATE_PAUSED_BINGE,
     PAUSED_STATES, TERMINAL_STATES,
     PROGRAM_PAUSED, PATH_CORE, PATH_REMEDIAL,
 )
 from tap_lms.summer_program.state_machine import (
     get_active_pe,
-    t19_reactivate_core,
-    t20_reactivate_remedial,
     t21_binge_resume,
 )
 from tap_lms.summer_program.event_log import log_event
@@ -29,21 +34,19 @@ def reactivate_student(student_id):
     """
     API A5: reactivate_student
 
-    Resumes a paused student. Called by SP_Incoming_Router when
-    a paused student sends any WhatsApp message.
+    Resumes a paused student. Called by SP_Incoming_Router when a paused
+    student sends any WhatsApp message.
 
-    Logic:
-      - paused_no_activity + Core path → T19 → normal_content_delivery
-      - paused_no_activity + Remedial path → T20 → remedial_content_delivery
+    Logic (post-CR-003):
       - paused_binge → T21 → normal_content_delivery (if calendar allows)
+      - paused_no_activity is retired (no new transition writes it); legacy
+        rows are migrated to program_dropped by the CR-003 patch.
 
     Args:
         student_id: Student name, glific_id, or phone
 
     Response (via frappe.local.response per docs/api-standard-glific.md Rule 1):
         Flat dict with `success` + `status` + reactivation details.
-        Does NOT return — writes directly to local.response so Glific reads
-        @results.webhook.<field> without the `message.` envelope.
     """
     student_id = _resolve_student(student_id)
     if not student_id:
@@ -78,27 +81,6 @@ def reactivate_student(student_id):
             "status": "terminal_state",
             "error_detail": "Student in terminal state",
             "resolved_flow_state": pe.resolved_flow_state,
-        })
-        return
-
-    # ── Handle paused_no_activity ───────────────────────────
-    if pe.resolved_flow_state == STATE_PAUSED_NO_ACTIVITY:
-        if pe.current_path == PATH_REMEDIAL:
-            t20_reactivate_remedial(pe, "glific_flow")
-        else:
-            t19_reactivate_core(pe, "glific_flow")
-
-        log_event(pe, "resume", trigger_source="glific_flow",
-                  details={"reactivation_type": "message", "path": pe.current_path})
-
-        frappe.db.commit()
-        frappe.local.response.update({
-            "success": True,
-            "status": "reactivated",
-            "resolved_flow_state": pe.resolved_flow_state,
-            "current_path": pe.current_path,
-            "current_week": pe.current_week,
-            "pause_count": pe.pause_count,
         })
         return
 

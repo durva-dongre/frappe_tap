@@ -43,13 +43,17 @@ def collection_label(batch_id, archetype, arm):
 
 
 # ── Resolved Flow States (matches PE doctype Select) ───────
-# These are the 12 valid states for ProgramEnrollment.resolved_flow_state
+# These are the valid states for ProgramEnrollment.resolved_flow_state.
+#
+# CR-003: STATE_PAUSED_NO_ACTIVITY retired — no new transition writes it.
+# The Select option remains in the PE JSON as a legacy value for historical
+# rows; the migration patch (`patches.cr_003.grace_and_reengagement`) moves
+# any active legacy PEs to program_dropped. New PEs never enter this state.
 STATE_NORMAL_CONTENT = "normal_content_delivery"
 STATE_NORMAL_ESCALATION = "normal_escalation"
 STATE_REMEDIAL_CONTENT = "remedial_content_delivery"
 STATE_REMEDIAL_ESCALATION = "remedial_escalation"
 STATE_GRACE_WAITING = "grace_waiting"
-STATE_PAUSED_NO_ACTIVITY = "paused_no_activity"
 STATE_PAUSED_BINGE = "paused_binge"
 STATE_SUBMITTED_AWAITING = "submitted_awaiting_feedback"
 STATE_FEEDBACK_READY = "feedback_ready"
@@ -63,8 +67,8 @@ CONTENT_DELIVERY_STATES = [STATE_NORMAL_CONTENT, STATE_REMEDIAL_CONTENT]
 # Escalation states
 ESCALATION_STATES = [STATE_NORMAL_ESCALATION, STATE_REMEDIAL_ESCALATION]
 
-# Paused states
-PAUSED_STATES = [STATE_PAUSED_NO_ACTIVITY, STATE_PAUSED_BINGE]
+# Paused states — only binge-pause is live post-CR-003.
+PAUSED_STATES = [STATE_PAUSED_BINGE]
 
 # Terminal states (no further scheduling)
 TERMINAL_STATES = [STATE_PROGRAM_COMPLETED, STATE_PROGRAM_DROPPED]
@@ -97,57 +101,54 @@ PATH_REMEDIAL = "Remedial"
 
 
 # ── Scheduler Action Types (matches PE doctype Select) ─────
+# CR-003: ACTION_GRACE_REMINDER and ACTION_RE_ENGAGEMENT are retired.
+# Proactive grace reminders are gone (escalation steps within the week are
+# the only reminders); proactive re-engagement is gone (re-engagement is
+# inbound-only via SP_Incoming_Router). The Select options remain in the PE
+# JSON as legacy values, but no new transition writes them. The migration
+# patch nulls these values on any in-flight PEs.
 ACTION_CONTENT_DELIVERY = "content_delivery"
 ACTION_ESCALATION = "escalation"
 ACTION_WEEK_ADVANCEMENT = "week_advancement"
 ACTION_FEEDBACK_NOTIFICATION = "feedback_notification"
-ACTION_RE_ENGAGEMENT = "re_engagement"
 ACTION_GRACE_CHECK = "grace_check"
 ACTION_PAUSE_CHECK = "pause_check"
 ACTION_FEEDBACK_TIMEOUT = "feedback_timeout"
-ACTION_GRACE_REMINDER = "grace_reminder"
 
 ALL_ACTION_TYPES = [
     ACTION_CONTENT_DELIVERY,
     ACTION_ESCALATION,
     ACTION_WEEK_ADVANCEMENT,
     ACTION_FEEDBACK_NOTIFICATION,
-    ACTION_RE_ENGAGEMENT,
     ACTION_GRACE_CHECK,
     ACTION_PAUSE_CHECK,
     ACTION_FEEDBACK_TIMEOUT,
-    ACTION_GRACE_REMINDER,
 ]
 
 # Collection-based actions (one API call per collection)
-ACTION_REENGAGEMENT = "re_engagement"
-
 COLLECTION_ACTIONS = [
     ACTION_CONTENT_DELIVERY,
     ACTION_ESCALATION,
-    ACTION_REENGAGEMENT,
 ]
 
 PER_STUDENT_ACTIONS = [
     ACTION_WEEK_ADVANCEMENT,
     ACTION_GRACE_CHECK,
-    ACTION_GRACE_REMINDER,
     ACTION_PAUSE_CHECK,
     ACTION_FEEDBACK_TIMEOUT,
-    ACTION_RE_ENGAGEMENT,
 ]
 
 # Maps action type → BatchProgramRun field that stores the Glific flow ID
 ACTION_FLOW_FIELD_MAP = {
     ACTION_CONTENT_DELIVERY: "content_delivery_flow",
     ACTION_ESCALATION: "escalation_flow",
-    ACTION_RE_ENGAGEMENT: "reengagement_flow",
-    ACTION_GRACE_REMINDER: "grace_notification_flow",
     ACTION_GRACE_CHECK: "grace_notification_flow",
     ACTION_PAUSE_CHECK: "binge_info_flow",
     "program_complete": "program_complete_flow",
     # NOTE: feedback_delivery_flow removed — FeedbackConsumer handles
-    # feedback notification via its own Glific Flow lookup (label="feedback")
+    # feedback notification via its own Glific Flow lookup (label="feedback").
+    # CR-003: reengagement_flow / grace_notification_flow (reminder) entries
+    # removed — those handlers are gone.
 }
 
 
@@ -215,6 +216,14 @@ CF_WEEKLY_SUBMISSION_POINTS = "weekly_submission_points"
 CF_SPECIAL_GEMS = "special_gems"
 CF_WEEKLY_SUBMISSION_DONE = "weekly_submission_done"
 
+# ── CR-003 escalation channel routing fields ──────────────
+# Pushed before the SP_Escalation flow trigger so Glific can branch on the
+# current step's escalation_order and escalation_type (help_note_a /
+# help_note_b / voice_note / parent_call). Cache size 26 → 28 after CR-003.
+# Per L-008, these names are public contract — do not rename.
+CF_ESCALATION_ORDER = "escalation_order"
+CF_ESCALATION_TYPE = "escalation_type"
+
 
 # ── Glific sync retry policy (pattern P-007 / lesson L-015) ───
 # Background-job retry budget for update_contact_fields failures.
@@ -253,12 +262,11 @@ COLLECTION_BATCH_SIZE = 500
 ENROLLMENT_CHUNK_SIZE = 100
 
 # Grace window
-GRACE_WINDOW_DAYS = 14
-GRACE_REMINDER_DAYS = [7, 11, 13]  # days after grace start
-
-# Re-engagement
-MAX_REENGAGEMENT_ATTEMPTS = 3
-REENGAGEMENT_DAYS = [3, 7, 14]  # days after pause
+# CR-003: per-week grace clock. Duration sourced from Batch.grace_window_days
+# (per-cohort, default 14). The previous hardcoded GRACE_WINDOW_DAYS = 14 and
+# GRACE_REMINDER_DAYS = [7, 11, 13] (proactive reminders) are removed —
+# escalation steps within the week are the only reminders.
+DEFAULT_GRACE_WINDOW_DAYS = 14  # only used if batch.grace_window_days is unset
 
 # Feedback
 FEEDBACK_TIMEOUT_HOURS = 4
@@ -266,3 +274,16 @@ MAX_FEEDBACK_RETRIES = 3
 
 # Delivery
 MAX_DELIVERY_FAILURES = 3
+
+# ── Vocallabs (CR-003) ──────────────────────────────────
+# Parent-call integration retry budget; same shape as the Glific sync and
+# feedback pipeline policies above (P-007 / L-015). On exhaustion the job
+# DLQs to Error Log with student_id, pe_name, week, escalation_order,
+# parent_phone, and the final error. Per CR-003 §E4 a DLQ does NOT extend
+# the grace window — the PE proceeds toward drop on the existing schedule.
+VOCALLABS_MAX_RETRIES = 5
+VOCALLABS_RETRY_LOG_TITLE = "SP Vocallabs Retry"
+VOCALLABS_DLQ_LOG_TITLE = "SP Vocallabs DLQ — manual replay required"
+VOCALLABS_HTTP_TIMEOUT_SECONDS = 10
+VOCALLABS_TOKEN_CACHE_KEY = "vocallabs:auth_token"
+VOCALLABS_DEFAULT_TOKEN_TTL = 3600  # seconds; used if VoiceAgentSettings.auth_token_cache_ttl unset

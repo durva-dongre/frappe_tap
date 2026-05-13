@@ -8,7 +8,9 @@ Covers:
     sticky flags before resetting weeklies.
   - `_enqueue_contact_field_sync` extended to push 8 new gamification fields
     (cache size 26 total, 18 existing + 8 new). `weekly_video_done` is NOT
-    pushed.
+    pushed. CR-003 adds 1 more (escalation_order) to the per-transition push
+    for a total of 20 fields per transition; the 28th cache field
+    (escalation_type) is pushed by the dispatcher per-step.
 
 Tests in this file:
   1. test_t7_extends_streak_gems_submission_done_flag
@@ -17,7 +19,7 @@ Tests in this file:
   4. test_t19_streak_reset_when_assigned_no_submit
   5. test_t19_streak_unchanged_when_not_assigned
   6. test_t19_gem_floored_at_zero
-  7. test_sync_contact_fields_pushes_26_fields (18 + 8 new gamification)
+  7. test_sync_contact_fields_pushes_expected_fields (CR-003: 11 + 8 + 1)
 """
 import frappe
 from frappe.tests.utils import FrappeTestCase
@@ -348,14 +350,15 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
 
 
 # ════════════════════════════════════════════════════════════
-# Contact-field sync — 18 + 8 = 26 fields
+# Contact-field sync — 18 + 8 + 2 = 28 fields after CR-003
 # ════════════════════════════════════════════════════════════
 
 class TestSyncContactFieldsExtended(FrappeTestCase):
     """`_enqueue_contact_field_sync` must include the 8 CR-002 v2 gamification
-    fields alongside the existing 18 (NB: 18 of which 11 are state-mutating
-    and re-synced per-transition; 7 are immutable post-enrollment and live
-    only in the enrollment-time push)."""
+    fields alongside the existing 18 plus the 2 new CR-003 escalation-routing
+    fields (escalation_order, escalation_type — though escalation_type is
+    pushed explicitly by the dispatcher per-step, not by this helper).
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -363,13 +366,13 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         cls.batch_name = _ensure_batch()
 
     @patch("tap_lms.summer_program.state_machine.frappe.enqueue")
-    def test_sync_contact_fields_pushes_26_fields(self, mock_enqueue):
+    def test_sync_contact_fields_pushes_expected_fields(self, mock_enqueue):
         """The fields dict serialized into the background job includes the
-        11 state-mutating fields plus 8 new gamification fields = 19. Plus
-        the 7 immutable enrollment-time fields = 26 total in the Glific
-        cache. This test checks the 8 new ones are present in the per-
-        transition sync push (state_machine emits 11 + 8 = 19; the other
-        7 immutables come from the enrollment-time emit path)."""
+        11 state-mutating fields plus 8 new gamification fields plus 1 new
+        CR-003 field (escalation_order) = 20 per-transition push fields.
+        Plus the 7 immutable enrollment-time fields = 27 total in the
+        Glific cache (escalation_type is the 28th, pushed by the dispatcher
+        on each step rather than per-transition)."""
         student = _ensure_student("CFSYNC")
         pe = _make_pe(
             self.batch_name, student, "CFSYNC",
@@ -419,9 +422,15 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         ):
             self.assertIn(k, fields, f"existing field {k} missing from sync")
 
-        # Total count = 11 state-mutating + 8 new = 19 per-transition push.
-        # (The other 7 immutables live in the enrollment-time push.)
+        # CR-003: escalation_order is included in the per-transition sync
+        # (escalation_type is pushed separately by the dispatcher per-step).
+        self.assertIn("escalation_order", fields)
+
+        # Total count = 11 state-mutating + 8 CR-002 v2 gamification +
+        # 1 CR-003 (escalation_order) = 20 per-transition push fields.
+        # (The other 7 immutables + escalation_type live elsewhere.)
         self.assertEqual(
-            len(fields), 19,
-            "Per-transition sync pushes 11 existing state-mutating + 8 new = 19 fields",
+            len(fields), 20,
+            "Per-transition sync pushes 11 existing + 8 gamification + "
+            "1 CR-003 (escalation_order) = 20 fields",
         )
