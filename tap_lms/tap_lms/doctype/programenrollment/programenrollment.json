@@ -41,7 +41,7 @@
   "grace_window_end_at",
   "pause_reason",
   "escalation_scheduling",
-  "last_escalation_step",
+  "current_escalation_step",
   "next_action_at",
   "next_action_type",
   "delivery_monitoring_section",
@@ -56,7 +56,8 @@
   "weekly_submission_points",
   "special_gems",
   "weekly_submission_done",
-  "weekly_video_done"
+  "weekly_video_done",
+  "current_escalation_type"
  ],
  "fields": [
   {
@@ -166,11 +167,6 @@
    "options": "active\npaused\ncompleted\ndropped",
    "reqd": 1,
    "search_index": 1
-  },
-  {
-   "fieldname": "last_escalation_step",
-   "fieldtype": "Int",
-   "label": "Last Escalation Step"
   },
   {
    "fieldname": "resolved_flow_state",
@@ -368,11 +364,21 @@
    "fieldtype": "Select",
    "label": "Drop Reason",
    "options": "\ngrace_expired\nreengagement_exhausted\ndelivery_failure\nmanual"
+  },
+  {
+   "fieldname": "current_escalation_type",
+   "fieldtype": "Data",
+   "label": "Current Escalation Type"
+  },
+  {
+   "fieldname": "current_escalation_step",
+   "fieldtype": "Int",
+   "label": "Current Escalation Step"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-13 20:33:35.054771",
+ "modified": "2026-05-13 21:59:44.030142",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEnrollment",
