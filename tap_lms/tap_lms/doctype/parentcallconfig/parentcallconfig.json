@@ -9,10 +9,9 @@
  "engine": "InnoDB",
  "field_order": [
   "title",
-  "prompt_template",
+  "status_template",
   "language",
-  "call_params_json",
-  "max_duration"
+  "is_active"
  ],
  "fields": [
   {
@@ -24,31 +23,26 @@
    "reqd": 1
   },
   {
-   "fieldname": "prompt_template",
-   "fieldtype": "Long Text",
-   "label": "Prompt Template"
-  },
-  {
    "fieldname": "language",
    "fieldtype": "Link",
    "label": "Language",
    "options": "TAP Language"
   },
   {
-   "fieldname": "call_params_json",
-   "fieldtype": "JSON",
-   "label": "Call Params JSON"
+   "fieldname": "status_template",
+   "fieldtype": "Long Text",
+   "label": "Status Template"
   },
   {
-   "description": "Maximum call duration in seconds",
-   "fieldname": "max_duration",
-   "fieldtype": "Int",
-   "label": "Max Duration"
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 19:48:37.502220",
+ "modified": "2026-05-13 15:45:16.070069",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ParentCallConfig",

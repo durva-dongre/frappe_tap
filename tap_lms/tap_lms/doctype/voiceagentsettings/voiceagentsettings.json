@@ -12,7 +12,9 @@
   "client_id",
   "client_secret",
   "default_contact_group_id",
-  "agent_mappings"
+  "agent_id",
+  "default_parent_call_config",
+  "auth_token_cache_ttl"
  ],
  "fields": [
   {
@@ -42,16 +44,27 @@
    "label": "Default Contact Group ID"
   },
   {
-   "fieldname": "agent_mappings",
-   "fieldtype": "Table",
-   "label": "Agent Mapping",
-   "options": "VoiceAgentMapping"
+   "fieldname": "agent_id",
+   "fieldtype": "Data",
+   "label": "Agent Id"
+  },
+  {
+   "fieldname": "default_parent_call_config",
+   "fieldtype": "Link",
+   "label": "Default Parent Call Config",
+   "options": "ParentCallConfig"
+  },
+  {
+   "default": "3600",
+   "fieldname": "auth_token_cache_ttl",
+   "fieldtype": "Int",
+   "label": "Auth Token Cache Ttl"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-05-04 19:31:58.772513",
+ "modified": "2026-05-13 15:47:48.367284",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "VoiceAgentSettings",
