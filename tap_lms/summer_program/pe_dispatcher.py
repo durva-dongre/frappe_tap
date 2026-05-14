@@ -163,15 +163,22 @@ def process_program_actions():
     # Observability for 100K-scale operations. Operators monitor `claimed`
     # (throughput) and `queue_depth` (lag indicator) to decide when to scale
     # parallel workers. See architecture §8.8.
+    # NOTE: uses `IN (%s, %s)` rather than `ANY(%s)` with a list parameter.
+    # Frappe's `modify_values` wrapper converts a list-in-tuple to a Postgres
+    # record `('active','paused')` instead of a text[] array when the params
+    # tuple has only 2 entries (vs. the 3-entry candidates query above which
+    # happens to bind correctly). Lesson learned via the `validate_archetype_config`
+    # 500 (2026-05-14). The candidates SELECT above is safe because of its
+    # parameter-count quirk; this 2-param query is not.
     try:
         queue_depth = frappe.db.sql("""
             SELECT COUNT(*)
               FROM "tabProgramEnrollment"
              WHERE next_action_at IS NOT NULL
                AND next_action_at <= %s
-               AND program_status = ANY(%s)
+               AND program_status IN (%s, %s)
                AND next_action_type != ''
-        """, (now, [PROGRAM_ACTIVE, PROGRAM_PAUSED]))[0][0]
+        """, (now, PROGRAM_ACTIVE, PROGRAM_PAUSED))[0][0]
     except Exception:
         queue_depth = -1  # log "unknown" rather than crash the tick
 
@@ -689,15 +696,18 @@ def _record_delivery_failure(pe_name):
     # PE was already terminal — short-circuit. Eliminates the race between
     # a preliminary status read and the increment (M1 fix, 2026-05-13;
     # L-018 concurrency rule).
+    # Use `IN (%s, %s)` rather than `ANY(%s)` with a list parameter — Frappe's
+    # parameter wrapper turns the 2-tuple-with-list shape into a Postgres
+    # record, breaking ANY. See validators.py:189 comment for the same fix.
     rows = frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
            SET delivery_failure_count = COALESCE(delivery_failure_count, 0) + 1
          WHERE name = %s
-           AND program_status = ANY(%s)
+           AND program_status IN (%s, %s)
         RETURNING delivery_failure_count
         """,
-        (pe_name, [PROGRAM_ACTIVE, PROGRAM_PAUSED]),
+        (pe_name, PROGRAM_ACTIVE, PROGRAM_PAUSED),
     )
     if not rows:
         return  # PE was already terminal, or didn't exist

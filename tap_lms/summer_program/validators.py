@@ -186,6 +186,14 @@ def _compute_in_use_tuples(batch_name):
     # is written once at enrollment and never re-synced — a Student.archetype
     # update post-enrollment would make the validator pass on Student's value
     # while the dispatcher fires on the stale PE value (H2 fix, 2026-05-13).
+    #
+    # The `IN (%s, %s)` pattern is used instead of `ANY(%s)` with a list
+    # parameter (see L-005) because Frappe's `modify_values` converts the
+    # parameter tuple's inner list into a Postgres record `('active','paused')`
+    # rather than a text[] array, triggering `op ANY/ALL requires array on
+    # right side` at execution time. The dispatcher's similar `ANY(%s)` usage
+    # happens to work because of a different parameter-position layout —
+    # using explicit IN here is bulletproof and clearer for two fixed values.
     rows = frappe.db.sql(
         """
         SELECT DISTINCT
@@ -193,9 +201,9 @@ def _compute_in_use_tuples(batch_name):
             COALESCE(NULLIF(pe.experiment_arm, ''), 'default') AS experiment_arm
           FROM "tabProgramEnrollment" pe
          WHERE pe.batch = %s
-           AND pe.program_status = ANY(%s)
+           AND pe.program_status IN (%s, %s)
         """,
-        (batch_name, [PROGRAM_ACTIVE, PROGRAM_PAUSED]),
+        (batch_name, PROGRAM_ACTIVE, PROGRAM_PAUSED),
         as_dict=True,
     )
 
