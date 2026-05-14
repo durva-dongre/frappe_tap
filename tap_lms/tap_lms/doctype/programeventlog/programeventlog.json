@@ -78,7 +78,7 @@
    "fieldname": "trigger_source",
    "fieldtype": "Select",
    "label": "Trigger Source",
-   "options": "scheduler\nglific_flow\nflow_callback\nadmin\nmicroservice"
+   "options": "scheduler\nglific_flow\nflow_callback\nadmin\nmicroservice\ndispatcher\nactivity_points\ncontent_log\nfeedback_consumer\nquiz_attempt"
   },
   {
    "description": "JSONB. GIN index. {points, step, week, archetype, experiment_arm}",
@@ -94,7 +94,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-13 20:31:12.895887",
+ "modified": "2026-05-15 00:45:29.994897",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEventLog",

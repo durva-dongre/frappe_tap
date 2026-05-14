@@ -150,7 +150,7 @@
    "fieldname": "journey_label",
    "fieldtype": "Select",
    "label": "Journey Label",
-   "options": "enrolled\ncontent_delivered\nsubmitted\nfeedback_delivered\nweek_summary_sent\ngrace_window\npaused\nresumed\ncompleted\ndropped\nweek_advanced",
+   "options": "enrolled\ncontent_delivered\nsubmitted\nfeedback_delivered\nweek_summary_sent\ngrace_window\npaused\nresumed\ncompleted\ndropped\nweek_advanced\nremedial_started",
    "reqd": 1,
    "search_index": 1
   },
@@ -385,7 +385,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-14 15:39:18.395989",
+ "modified": "2026-05-15 01:48:57.575744",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEnrollment",

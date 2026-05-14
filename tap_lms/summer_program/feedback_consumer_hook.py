@@ -82,12 +82,24 @@ def on_feedback_ready(submission_name, student_id=None):
             return {"status": "skipped", "reason": "week_mismatch",
                     "sub_week": sub_week, "pe_week": pe.current_week}
 
-        # Transition: submitted_awaiting_feedback → feedback_ready
+        # CR-004: branch on AI verdict from the Submission record.
+        # - result_status == 'failed'  → t6b_failed_feedback_to_remedial (re-route to Remedial path)
+        # - else (pass / unset / any other value) → t12_feedback_ready (advance normally)
+        #
         # NOTE: Do NOT commit here — let the caller (FeedbackConsumer.process_message)
         # handle the commit so that submission update + state transition are atomic.
-        t12_feedback_ready(pe, trigger_source="feedback_consumer")
+        result_status = frappe.db.get_value("Submission", submission_name, "result_status")
 
-        return {"status": "transitioned", "pe": pe_name}
+        if result_status == "failed":
+            from tap_lms.summer_program.state_machine import t6b_failed_feedback_to_remedial
+            t6b_failed_feedback_to_remedial(pe, trigger_source="microservice")
+            return {"status": "transitioned", "pe": pe_name, "branch": "remedial"}
+
+        # Default branch — pass / unset / any non-'failed' value → feedback_ready as before.
+        # Note: CR-004 aligns this call's trigger_source from "feedback_consumer" to "microservice"
+        # for analytics consistency with the new t6b branch.
+        t12_feedback_ready(pe, trigger_source="microservice")
+        return {"status": "transitioned", "pe": pe_name, "branch": "feedback_ready"}
 
     except Exception as e:
         frappe.log_error(

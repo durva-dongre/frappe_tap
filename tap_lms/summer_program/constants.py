@@ -82,6 +82,12 @@ TERMINAL_STATES = [STATE_PROGRAM_COMPLETED, STATE_PROGRAM_DROPPED]
 # ── Journey Labels (matches PE doctype Select) ─────────────
 LABEL_ENROLLED = "enrolled"
 LABEL_CONTENT_DELIVERED = "content_delivered"
+# CR-004: distinct journey label for remedial entry (T6 and T6b), to separate
+# the analytics signal "student is in Core content" from "student fell back to
+# Remedial". Both T6 (escalation-exhausted) and T6b (failed AI feedback) write
+# this same value so downstream analytics can identify any remedial entry
+# without needing to join on `current_path`.
+LABEL_REMEDIAL_STARTED = "remedial_started"
 LABEL_SUBMITTED = "submitted"
 LABEL_FEEDBACK_DELIVERED = "feedback_delivered"
 LABEL_WEEK_SUMMARY_SENT = "week_summary_sent"

@@ -361,10 +361,29 @@ def _log_student_content_submission(
             "submission_id": submission_doc.name if submission_doc else None,
             "program_enrollment": getattr(pe, "name", None),
         })
-        log.insert(ignore_permissions=True)
+        # Wrap the bridge-log insert in a savepoint so a failure here
+        # (e.g. duplicate-name from a malformed autoname pattern) doesn't
+        # poison the outer transaction. Without this, L-030 fires: the failed
+        # insert aborts the txn, then frappe.log_error() in the except block
+        # fails with InFailedSqlTransaction, which re-raises and rolls back
+        # the whole save_submission call — losing Submission + T7 transition.
+        # With a savepoint, only the StudentContentLog insert rolls back.
+        sp_name = f"scl_{frappe.utils.random_string(8)}"
+        try:
+            frappe.db.savepoint(sp_name)
+            log.insert(ignore_permissions=True)
+            frappe.db.release_savepoint(sp_name)
+        except Exception as e:
+            frappe.db.rollback(save_point=sp_name)
+            frappe.log_error(
+                f"StudentContentLog submission bridge error: {str(e)}",
+                "SP Save Submission",
+            )
     except Exception as e:
+        # Catches anything outside the savepoint block (build errors etc.)
+        # These are bugs, not transient state — just log without further txn changes.
         frappe.log_error(
-            f"StudentContentLog submission bridge error: {str(e)}",
+            f"StudentContentLog submission bridge build error: {str(e)}",
             "SP Save Submission",
         )
 

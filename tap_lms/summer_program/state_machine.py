@@ -22,7 +22,8 @@ from tap_lms.summer_program.constants import (
     STATE_SUBMITTED_AWAITING, STATE_FEEDBACK_READY,
     STATE_WEEK_COMPLETED, STATE_PROGRAM_COMPLETED, STATE_PROGRAM_DROPPED,
     PAUSED_STATES, TERMINAL_STATES,
-    LABEL_CONTENT_DELIVERED, LABEL_SUBMITTED, LABEL_FEEDBACK_DELIVERED,
+    LABEL_CONTENT_DELIVERED, LABEL_REMEDIAL_STARTED,
+    LABEL_SUBMITTED, LABEL_FEEDBACK_DELIVERED,
     LABEL_GRACE_WINDOW, LABEL_PAUSED, LABEL_RESUMED,
     LABEL_COMPLETED, LABEL_DROPPED, LABEL_WEEK_ADVANCED,
     PROGRAM_ACTIVE, PROGRAM_PAUSED, PROGRAM_COMPLETED, PROGRAM_DROPPED,
@@ -448,10 +449,43 @@ def t5_escalation_to_grace(pe, trigger_source="scheduler"):
 def t6_escalation_to_remedial(pe, week_rule=None, trigger_source="scheduler"):
     """T6: normal_escalation → remedial_content_delivery."""
     updates = {
-        "journey_label": LABEL_CONTENT_DELIVERED,
+        # CR-004: distinguishes remedial entry from Core content for analytics.
+        # Shared with T6b — both routes into remedial write the same label.
+        "journey_label": LABEL_REMEDIAL_STARTED,
         "current_path": PATH_REMEDIAL,
         "current_escalation_step": 0,
         "current_escalation_type": "",
+        "next_action_at": now_datetime(),
+        "next_action_type": ACTION_CONTENT_DELIVERY,
+    }
+    if week_rule:
+        updates["current_expected_submission_type"] = week_rule.get("expected_submission_type", "")
+
+    log_event(pe, "path_changed", PATH_CORE, PATH_REMEDIAL, trigger_source)
+
+    return transition(pe, STATE_REMEDIAL_CONTENT, trigger_source, updates)
+
+
+# ── T6b: Failed AI feedback → remedial (CR-004) ──
+def t6b_failed_feedback_to_remedial(pe, week_rule=None, trigger_source="microservice"):
+    """T6b: submitted_awaiting_feedback → remedial_content_delivery.
+
+    CR-004. Fires when an AI-graded submission comes back with
+    Submission.result_status == 'failed'. Routes the student into the
+    remedial content track for the SAME week. Does NOT clawback points
+    awarded by T7/T9 — the submission counted; only the LEARNING
+    outcome failed.
+
+    Differences vs T6:
+    - Does NOT reset current_escalation_step / current_escalation_type
+      (the student never escalated; those counters are already at defaults).
+    - Source state is submitted_awaiting_feedback, not normal_escalation.
+    - trigger_source defaults to "microservice" (matches the FeedbackConsumer
+      caller; T6 defaults to "scheduler").
+    """
+    updates = {
+        "journey_label": LABEL_REMEDIAL_STARTED,
+        "current_path": PATH_REMEDIAL,
         "next_action_at": now_datetime(),
         "next_action_type": ACTION_CONTENT_DELIVERY,
     }
