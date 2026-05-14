@@ -940,6 +940,19 @@ def get_active_pe(student_id, batch_name=None):
     """
     Get the active ProgramEnrollment for a student.
     Returns PE doc or None.
+
+    A student CAN have multiple ProgramEnrollment rows for the same batch
+    over time (e.g. dropped then re-enrolled, or program_completed then
+    re-enrolled for a follow-up cohort). When that happens, return the
+    one with the most recent `modified` timestamp — that's the row whose
+    state was last advanced by the dispatcher / state machine, i.e. the
+    "live" enrollment the student is currently progressing through.
+
+    Dropped enrollments are excluded by the program_status filter
+    (only ACTIVE + PAUSED are considered). Among those, `modified desc`
+    is the correct tie-breaker because `creation` doesn't change after
+    insert, so a stale older PE could outrank a recently-active newer
+    PE under `creation desc` ordering.
     """
     filters = {
         "student": student_id,
@@ -949,7 +962,7 @@ def get_active_pe(student_id, batch_name=None):
         filters["batch"] = batch_name
 
     pe_name = frappe.db.get_value("ProgramEnrollment", filters, "name",
-                                   order_by="creation desc")
+                                   order_by="modified desc")
     if pe_name:
         return frappe.get_doc("ProgramEnrollment", pe_name)
     return None

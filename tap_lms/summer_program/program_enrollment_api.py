@@ -164,7 +164,8 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
 
             # Create PE
             pe = frappe.new_doc("ProgramEnrollment")
-            pe.enrollment = f"{sid}-{batch.batch_id}"
+            # Use batch.name (unique doc ID), not batch.batch_id (user-editable field — can collide)
+            pe.enrollment = f"{sid}-{batch.name}"
             pe.student = sid
             pe.batch = batch_name
             pe.program_type = batch.program_type or "Summer"
@@ -330,7 +331,8 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
 
     # ── Create ProgramEnrollment ────────────────────────────
     pe = frappe.new_doc("ProgramEnrollment")
-    pe.enrollment = f"{student_id}-{batch.batch_id}"
+    # Use batch.name (unique doc ID), not batch.batch_id (user-editable field — can collide)
+    pe.enrollment = f"{student_id}-{batch.name}"
     pe.student = student_id
     pe.batch = batch_id
     pe.program_type = batch.program_type or "Summer"
@@ -539,6 +541,11 @@ def get_student_state(student_id):
         })
         return
 
+    # A student can have multiple non-dropped PEs over time (re-enrollments
+    # into the same or different batches). Return the most recently MODIFIED
+    # one — that's the row whose state was last advanced, i.e. the "live"
+    # enrollment. `creation desc` would prefer the newest row even if a
+    # paused-but-stale newer row outranks an actively-progressing older row.
     pe_data = frappe.db.get_value(
         "ProgramEnrollment",
         {"student": student_id, "program_status": ["not in", ["dropped"]]},
@@ -560,7 +567,7 @@ def get_student_state(student_id):
             "special_gems", "weekly_submission_done",
         ],
         as_dict=True,
-        order_by="creation desc",
+        order_by="modified desc",
     )
 
     if not pe_data:
