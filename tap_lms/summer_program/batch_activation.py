@@ -231,17 +231,25 @@ def _seed_pe_actions(bpr, batch):
         # Batch started already or start_date is today — deliver now
         base_time = now_datetime()
 
-    # Get all PEs that need seeding
-    pe_list = frappe.db.get_all(
-        "ProgramEnrollment",
-        filters={
-            "batch": bpr.batch,
-            "program_status": PROGRAM_ACTIVE,
-            "resolved_flow_state": STATE_NORMAL_CONTENT,
-            "next_action_at": ["is", "not set"],
-        },
-        fields=["name"],
-        limit_page_length=0,
+    # Get all PEs that need seeding.
+    #
+    # NOTE: uses raw SQL with `IS NULL` instead of Frappe's `["is", "not set"]`
+    # filter. On Postgres, Frappe translates `["is", "not set"]` to
+    # `coalesce(col, '') = ''`, which is a type error for timestamp columns
+    # (`next_action_at` is `datetime`). MariaDB tolerates the type coercion;
+    # Postgres throws `InvalidDatetimeFormat`. Same lesson applies anywhere
+    # else we filter timestamp columns for nullness — prefer raw SQL.
+    pe_list = frappe.db.sql(
+        """
+        SELECT name
+          FROM "tabProgramEnrollment"
+         WHERE batch = %s
+           AND program_status = %s
+           AND resolved_flow_state = %s
+           AND next_action_at IS NULL
+        """,
+        (bpr.batch, PROGRAM_ACTIVE, STATE_NORMAL_CONTENT),
+        as_dict=True,
     )
 
     if not pe_list:
