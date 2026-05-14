@@ -141,7 +141,7 @@
    "fieldname": "archetype",
    "fieldtype": "Select",
    "label": "Archetype",
-   "options": "Dormant\nFence Sitter\nIrregular Submitter\nSubmitter",
+   "options": "dormant\nfence_sitter\nirregular_submitter\nsubmitter",
    "reqd": 1,
    "search_index": 1
   },
@@ -385,7 +385,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-13 21:59:44.030142",
+ "modified": "2026-05-14 15:39:18.395989",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ProgramEnrollment",

@@ -21,7 +21,6 @@ from tap_lms.summer_program.constants import (
     ALL_ARCHETYPES,
     ARM_A,
     ARM_B,
-    ARCHETYPE_KEY_MAP,
     COLLECTION_BATCH_SIZE,
     ENROLLMENT_CHUNK_SIZE,
     ENROLLMENT_QUEUE,
@@ -289,13 +288,13 @@ def _update_bpr_counts(bpr):
         arm = row.get("experiment_arm", "")
         cnt = row.get("cnt", 0)
 
-        if arch == "Dormant":
+        if arch == "dormant":
             dormant += cnt
-        elif arch == "Fence Sitter":
+        elif arch == "fence_sitter":
             fence += cnt
-        elif arch == "Irregular Submitter":
+        elif arch == "irregular_submitter":
             irregular += cnt
-        elif arch == "Submitter":
+        elif arch == "submitter":
             submitter += cnt
 
         if arm == "arm_a":

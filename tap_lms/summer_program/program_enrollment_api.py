@@ -188,7 +188,8 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
             pe.submission_count = 0
             pe.quiz_completed = 0
             pe.in_grace_window = 0
-            pe.last_escalation_step = 0
+            pe.current_escalation_step = 0
+            pe.current_escalation_type = ""
             pe.delivery_failure_count = 0
             pe.re_engagement_count = 0
             pe.next_action_at = None
@@ -353,7 +354,8 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
     pe.submission_count = 0
     pe.quiz_completed = 0
     pe.in_grace_window = 0
-    pe.last_escalation_step = 0
+    pe.current_escalation_step = 0
+    pe.current_escalation_type = ""
     pe.delivery_failure_count = 0
     pe.re_engagement_count = 0
 
@@ -546,13 +548,14 @@ def get_student_state(student_id):
             "current_week", "current_path", "current_tier",
             "total_points", "current_streak", "in_grace_window",
             "grace_window_end_at", "current_expected_submission_type",
-            "submission_count", "last_escalation_step", "course_level",
+            "submission_count", "current_escalation_step",
+            "current_escalation_type", "course_level",
             "language", "glific_id",
-            # CR-002 v2 gamification fields. Flat-map per
+            # CR-002 v2 — 8 new gamification fields. Flat-map per
             # docs/api-standard-glific.md Rule 1 (no nesting, no arrays).
             # `weekly_video_done` is internal-only and intentionally omitted.
             "total_activity_points", "weekly_activity_points",
-            "total_quiz_points", "weekly_quiz_points", "bonus_quiz_points",
+            "total_quiz_points", "weekly_quiz_points",
             "total_submission_points", "weekly_submission_points",
             "special_gems", "weekly_submission_done",
         ],
@@ -566,6 +569,15 @@ def get_student_state(student_id):
             "error_detail": "No ProgramEnrollment found",
         })
         return
+
+    # L-008 (Glific public contract): the Glific contact field + webhook
+    # response key is `last_escalation_step`, despite the PE column being
+    # renamed to `current_escalation_step` in this CR. Re-key the dict so
+    # SP_Incoming_Router and any other flow reading
+    # `@results.webhook.last_escalation_step` continues to work.
+    # `current_escalation_type` is genuinely new — it uses its natural name.
+    if "current_escalation_step" in pe_data:
+        pe_data["last_escalation_step"] = pe_data.pop("current_escalation_step")
 
     frappe.local.response.update({
         "success": True,

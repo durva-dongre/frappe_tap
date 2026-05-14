@@ -31,7 +31,6 @@ from tap_lms.summer_program.constants import (
     STATE_NORMAL_CONTENT,
 )
 from tap_lms.summer_program.quiz_points import (
-    award_bonus_quiz_points,
     compute_quiz_points,
     handle_attempt_update,
 )
@@ -85,7 +84,6 @@ def _make_pe(batch_name, student_name, suffix):
     pe.total_points = 0
     pe.total_quiz_points = 0
     pe.weekly_quiz_points = 0
-    pe.bonus_quiz_points = 0
     pe.insert(ignore_permissions=True)
     return pe.name
 
@@ -355,50 +353,3 @@ class TestQuizPoints(FrappeTestCase):
             FakeAns(q2, 0),  # wrong → 1
         ])
         self.assertEqual(compute_quiz_points(attempt), 11)
-
-    @patch("tap_lms.summer_program.quiz_points._enqueue_contact_field_sync")
-    def test_award_bonus_quiz_points_updates_independent_pe_field(self, mock_sync):
-        """Bonus quiz points update only the independent PE field."""
-        student = _ensure_student("07")
-        pe_name = _make_pe(self.batch_name, student, "07")
-
-        response = award_bonus_quiz_points.__wrapped__(student, "6")
-
-        pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        self.assertEqual(response, {"success": True})
-        self.assertEqual(pe.bonus_quiz_points, 6)
-        self.assertEqual(pe.total_points, 0)
-        self.assertEqual(pe.total_quiz_points, 0)
-        self.assertEqual(pe.weekly_quiz_points, 0)
-        mock_sync.assert_called_once()
-
-    @patch("tap_lms.summer_program.quiz_points._enqueue_contact_field_sync")
-    def test_award_bonus_quiz_points_increments_repeated_calls(self, mock_sync):
-        """Repeated bonus awards increment instead of overwriting."""
-        student = _ensure_student("08")
-        pe_name = _make_pe(self.batch_name, student, "08")
-
-        award_bonus_quiz_points.__wrapped__(student, 4)
-        response = award_bonus_quiz_points.__wrapped__(student, 3)
-
-        pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        self.assertEqual(pe.bonus_quiz_points, 7)
-        self.assertEqual(response, {"success": True})
-        self.assertEqual(pe.total_points, 0)
-        self.assertEqual(pe.total_quiz_points, 0)
-        self.assertEqual(mock_sync.call_count, 2)
-
-    def test_award_bonus_quiz_points_rejects_negative_points(self):
-        student = _ensure_student("09")
-        _make_pe(self.batch_name, student, "09")
-
-        response = award_bonus_quiz_points.__wrapped__(student, "-1")
-
-        self.assertEqual(response, {"success": False})
-
-    def test_award_bonus_quiz_points_requires_active_pe(self):
-        student = _ensure_student("10")
-
-        response = award_bonus_quiz_points.__wrapped__(student, 5)
-
-        self.assertEqual(response, {"success": False})

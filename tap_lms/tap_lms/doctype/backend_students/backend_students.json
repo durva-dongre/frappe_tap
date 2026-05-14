@@ -106,7 +106,7 @@
    "fieldname": "archetype",
    "fieldtype": "Select",
    "label": "Archetype",
-   "options": "Dormant\nFence Sitter\nIrregular Submitter\nSubmitter"
+   "options": "dormant\nfence_sitter\nirregular_submitter\nsubmitter"
   },
   {
    "fieldname": "experiment_arm",
@@ -118,7 +118,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-05-05 20:42:39.522019",
+ "modified": "2026-05-14 15:27:53.612924",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Backend Students",

@@ -9,7 +9,6 @@ Called by:
   - SP_Content_Delivery (on timeout → no_response, on completion)
   - SP_Escalation (on completion)
   - SP_Feedback_Delivery (on completion → triggers week_completed → week_advancement)
-  - SP_Grace_Entry (on completion)
   - SP_Paused_Binge (on completion)
   - SP_Program_Complete (on completion)
   - SP_Submission (on completion)
@@ -18,6 +17,11 @@ CR-003: SP_Grace_Reminder and SP_Paused_Reengagement entries removed.
 Grace reminders are gone (escalation steps within the week ARE the reminders).
 Re-engagement is now inbound-only via SP_Incoming_Router (Glific routes a
 rejoin path when program_status='dropped').
+
+CR-003 follow-up (2026-05-13): SP_Grace_Entry retired. There is no longer a
+separate "you've entered grace" Glific flow — the per-week escalation chain
+inside the active week IS the reminder cadence. `_handle_grace_flow` deleted
+along with the `SP_Grace_Entry` entry in `_get_handler`.
 """
 import frappe
 from frappe import _
@@ -139,15 +143,17 @@ def _get_handler(flow_name, status):
     CR-003: `SP_Grace_Reminder` and `SP_Paused_Reengagement` entries removed
     (flows deleted in coordination with Himani — grace reminders are gone and
     re-engagement is inbound-only). `_handle_info_flow` remains in use by
-    `SP_Program_Complete`. `_handle_grace_flow` now only fires for
-    `SP_Grace_Entry`.
+    `SP_Program_Complete`.
+
+    CR-003 follow-up (2026-05-13): `SP_Grace_Entry` entry removed — the
+    "you've entered grace" Glific flow is retired end-to-end. Escalation
+    steps inside the week deliver the same reminder cadence.
     """
     handlers = {
         "SP_Content_Delivery": _handle_content_delivery,
         "SP_Escalation": _handle_escalation,
         "SP_Feedback_Delivery": _handle_feedback_delivery,
         "SP_Submission": _handle_submission_flow,
-        "SP_Grace_Entry": _handle_grace_flow,
         "SP_Paused_Binge": _handle_binge_info,
         "SP_Program_Complete": _handle_info_flow,
     }
@@ -194,12 +200,12 @@ def _handle_escalation(pe, flow_name, status, metadata):
     pe.save(ignore_permissions=True)
 
     log_event(pe, "escalation_sent", trigger_source="flow_callback",
-              details={"step": pe.last_escalation_step})
+              details={"step": pe.current_escalation_step})
 
     return _response(
         pe,
         "escalation_confirmed",
-        last_escalation_step=pe.last_escalation_step,
+        last_escalation_step=pe.current_escalation_step,
     )
 
 
@@ -236,24 +242,12 @@ def _handle_submission_flow(pe, flow_name, status, metadata):
     return _response(pe, "submission_flow_completed")
 
 
-def _handle_grace_flow(pe, flow_name, status, metadata):
-    """
-    Handle SP_Grace_Entry completion.
-
-    CR-003: the SP_Grace_Reminder Glific flow is deleted (the per-week
-    grace cadence is driven by escalation steps inside the week, not by
-    a separate reminder flow). SP_Grace_Entry callbacks still need a
-    no-op acknowledgement so the Glific flow sees a 200 response and
-    closes cleanly — if the student submitted during the flow's wait node,
-    save_submission already cleared the grace state via T17.
-    """
-    pe.save(ignore_permissions=True)
-    return _response(
-        pe,
-        "grace_flow_completed",
-        in_grace_window=pe.in_grace_window,
-    )
-
+# CR-003 follow-up (2026-05-13): `_handle_grace_flow` deleted along with the
+# SP_Grace_Entry Glific flow. The grace clock is now armed by the
+# activity-points handler on the week's first VideoClass completion and
+# cleared by primary submissions; no separate Glific "you've entered grace"
+# notification is sent. The escalation chain inside the active week IS the
+# reminder cadence.
 
 # CR-003: _handle_reengagement deleted along with the SP_Paused_Reengagement
 # flow. Re-engagement is now inbound-only via SP_Incoming_Router.

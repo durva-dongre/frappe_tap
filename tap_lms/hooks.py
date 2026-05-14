@@ -21,6 +21,21 @@ doc_events = {
     "StudentStageProgress": {
         "after_insert": "tap_lms.tap_lms.doctype.studentonboardingprogress.studentonboardingprogress.update_student_progress",
         "on_update": "tap_lms.tap_lms.doctype.studentonboardingprogress.studentonboardingprogress.update_student_progress"
+    },
+    # CR-002 v2 gamification (2026-05-13): VideoClass completion via
+    # StudentContentLog drives the activity-points handler. The handler also
+    # arms the grace clock on the first VideoClass of each week (CR-003
+    # follow-up 2: atomic Postgres CASE WHEN on `weekly_video_done`). Without
+    # this hook the activity-points pipeline AND the grace clock are dead.
+    "StudentContentLog": {
+        "after_insert": "tap_lms.summer_program.activity_points.handle_content_log"
+    },
+    # CR-002 v2 gamification (2026-05-13): quiz attempts award per-question
+    # points (correct → q.points; wrong → q.failed_points). The handler is
+    # idempotent via `attempt.points_earned` so re-saves of completed
+    # attempts are no-ops.
+    "StudentQuizAttempt": {
+        "on_update": "tap_lms.summer_program.quiz_points.handle_attempt_update"
     }
 }
 
@@ -34,8 +49,15 @@ doc_events = {
 #                          dispatcher has work. See task #19 for details.
 #
 # Cron:
-#   - */2 * * * *  — pe_dispatcher: per-PE event-driven dispatcher (task #15);
-#                    processes overdue next_action_at, routes by next_action_type
+#   - */1 * * * *  — pe_dispatcher: per-PE event-driven dispatcher (task #15);
+#                    processes overdue next_action_at, routes by next_action_type.
+#                    Tightened from */2 to */1 min for the 100K-student MVP target
+#                    (architecture §8.8 + ADR-003 audit log 2026-05-13). Combined
+#                    with DISPATCH_BATCH_SIZE=1000 and 4 parallel workers gives
+#                    240K actions/hour — drains a 100K week-boundary T19 burst in
+#                    ~25 min. Hard prerequisite: partial index idx_pe_next_action
+#                    (task #24, patch cr_004_scale.idx_pe_next_action) so the
+#                    SELECT stays <50ms at scale.
 #   - 0 */2 * * *  — escalation_runner: 6-hour bulk escalation sweep (legacy
 #                    batcher; will eventually be replaced by escalation_batcher
 #                    in collection-mode rollout)
@@ -49,8 +71,8 @@ scheduler_events = {
         "tap_lms.summer_program.batch_activation.check_auto_activate",
     ],
     "cron": {
-        "*/2 * * * *": [
-            "tap_lms.summer_program.pe_dispatcher.dispatch_pending_actions",
+        "*/1 * * * *": [
+            "tap_lms.summer_program.pe_dispatcher.process_program_actions",
         ],
         "0 */2 * * *": [
             "tap_lms.summer_program.escalation_runner.run_escalation_check",

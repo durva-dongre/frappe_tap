@@ -71,7 +71,7 @@ def _make_pe(batch_name, student_name, suffix, **kwargs):
     pe.current_week = 1
     pe.current_tier = "Basic"
     pe.archetype = "Submitter"
-    pe.last_escalation_step = kwargs.get("last_escalation_step", 0)
+    pe.current_escalation_step = kwargs.get("current_escalation_step", 0)
     pe.submission_count = kwargs.get("submission_count", 0)
     pe.insert(ignore_permissions=True)
     return pe.name
@@ -106,12 +106,11 @@ class TestEscalationBranching(FrappeTestCase):
         from tap_lms.summer_program import pe_dispatcher
 
         s = _ensure_student("01")
-        pe_name = _make_pe(self.batch_name, s, "01", last_escalation_step=0)
+        pe_name = _make_pe(self.batch_name, s, "01", current_escalation_step=0)
 
         with _patch_escalation_steps([_step(1, "help_note_a")]), \
              patch.object(pe_dispatcher, "_get_flow_id", return_value="flow-esc"), \
              patch.object(pe_dispatcher, "_trigger_flow") as fake_trigger, \
-             patch.object(pe_dispatcher, "_push_escalation_contact_fields"), \
              patch.object(frappe, "enqueue") as fake_enqueue, \
              patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
             row = frappe._dict({
@@ -136,7 +135,7 @@ class TestEscalationBranching(FrappeTestCase):
         from tap_lms.summer_program import pe_dispatcher
 
         s = _ensure_student("02")
-        pe_name = _make_pe(self.batch_name, s, "02", last_escalation_step=2)
+        pe_name = _make_pe(self.batch_name, s, "02", current_escalation_step=2)
 
         with _patch_escalation_steps([
             _step(1, "help_note_a"),
@@ -145,7 +144,6 @@ class TestEscalationBranching(FrappeTestCase):
         ]), \
              patch.object(pe_dispatcher, "_get_flow_id", return_value="flow-esc"), \
              patch.object(pe_dispatcher, "_trigger_flow") as fake_trigger, \
-             patch.object(pe_dispatcher, "_push_escalation_contact_fields"), \
              patch.object(frappe, "enqueue") as fake_enqueue, \
              patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
             row = frappe._dict({
@@ -173,7 +171,7 @@ class TestEscalationBranching(FrappeTestCase):
         from tap_lms.summer_program import pe_dispatcher
 
         s = _ensure_student("03")
-        pe_name = _make_pe(self.batch_name, s, "03", last_escalation_step=3)
+        pe_name = _make_pe(self.batch_name, s, "03", current_escalation_step=3)
 
         with _patch_escalation_steps([
             _step(1, "help_note_a"),
@@ -183,7 +181,6 @@ class TestEscalationBranching(FrappeTestCase):
         ]), \
              patch.object(pe_dispatcher, "_get_flow_id", return_value="flow-esc"), \
              patch.object(pe_dispatcher, "_trigger_flow") as fake_trigger, \
-             patch.object(pe_dispatcher, "_push_escalation_contact_fields"), \
              patch.object(frappe, "enqueue") as fake_enqueue, \
              patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
             row = frappe._dict({
@@ -208,29 +205,24 @@ class TestEscalationBranching(FrappeTestCase):
         self.assertEqual(kwargs["pe_name"], pe_name)
         self.assertEqual(kwargs["escalation_step"]["escalation_type"], "parent_call")
 
-    def test_handle_escalation_pushes_contact_fields_before_firing(self):
-        """The 2 new contact fields (escalation_order, escalation_type) are
-        pushed to Glific BEFORE the SP_Escalation flow trigger / Vocallabs
-        enqueue.
+    def test_handle_escalation_writes_step_and_type_to_pe(self):
+        """Post CR-003 follow-up: handle_escalation no longer calls a
+        dedicated push helper. Instead, T2/T4/T8/T10 transitions write
+        `current_escalation_step` AND `current_escalation_type` to the PE,
+        and the standard `_enqueue_contact_field_sync` (called by transition)
+        pushes BOTH to Glific via the per-transition sync.
+
+        This test verifies the PE columns are populated by the time the
+        Glific flow is triggered.
         """
         from tap_lms.summer_program import pe_dispatcher
 
         s = _ensure_student("04")
-        pe_name = _make_pe(self.batch_name, s, "04", last_escalation_step=0)
-
-        ordering = []  # records "push" or "trigger" event labels
-
-        def fake_push(glific_id, pe_n, student_id, escalation_order, escalation_type):
-            ordering.append(("push", escalation_order, escalation_type))
-
-        def fake_trigger(*args, **kwargs):
-            ordering.append(("trigger",))
+        pe_name = _make_pe(self.batch_name, s, "04", current_escalation_step=0)
 
         with _patch_escalation_steps([_step(1, "help_note_a")]), \
              patch.object(pe_dispatcher, "_get_flow_id", return_value="flow-esc"), \
-             patch.object(pe_dispatcher, "_trigger_flow", side_effect=fake_trigger), \
-             patch.object(pe_dispatcher, "_push_escalation_contact_fields",
-                          side_effect=fake_push), \
+             patch.object(pe_dispatcher, "_trigger_flow"), \
              patch.object(frappe, "enqueue"), \
              patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
             row = frappe._dict({
@@ -241,15 +233,84 @@ class TestEscalationBranching(FrappeTestCase):
             })
             pe_dispatcher.handle_escalation(row)
 
-        self.assertEqual(len(ordering), 2)
-        # Push happens before trigger.
-        self.assertEqual(ordering[0][0], "push")
-        self.assertEqual(ordering[0][1], 1)
-        self.assertEqual(ordering[0][2], "help_note_a")
-        self.assertEqual(ordering[1][0], "trigger")
+        pe = frappe.get_doc("ProgramEnrollment", pe_name)
+        self.assertEqual(pe.current_escalation_step, 1)
+        self.assertEqual(pe.current_escalation_type, "help_note_a")
+
+    def test_t4_sets_current_escalation_type_from_step_config(self):
+        """T4 (next escalation step on the Core path) writes the step's
+        `escalation_type` to PE.current_escalation_type. Verifies the
+        dispatcher → transition wiring picks up the channel from the
+        resolved step config (not a hardcoded default).
+        """
+        from tap_lms.summer_program import pe_dispatcher
+
+        s = _ensure_student("06")
+        pe_name = _make_pe(
+            self.batch_name, s, "06",
+            resolved_flow_state=STATE_NORMAL_ESCALATION,
+            current_escalation_step=1,  # already past step 1
+        )
+
+        with _patch_escalation_steps([
+            _step(1, "help_note_a"),
+            _step(2, "voice_note"),  # step 2 is voice_note
+        ]), \
+             patch.object(pe_dispatcher, "_get_flow_id", return_value="flow-esc"), \
+             patch.object(pe_dispatcher, "_trigger_flow"), \
+             patch.object(frappe, "enqueue"), \
+             patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
+            row = frappe._dict({
+                "name": pe_name,
+                "next_action_type": ACTION_ESCALATION,
+                "batch": self.batch_name,
+                "journey_label": LABEL_CONTENT_DELIVERED,
+            })
+            pe_dispatcher.handle_escalation(row)
+
+        pe = frappe.get_doc("ProgramEnrollment", pe_name)
+        # T4 advanced from step 1 → step 2 AND wrote the step-2 channel.
+        self.assertEqual(pe.current_escalation_step, 2)
+        self.assertEqual(pe.current_escalation_type, "voice_note")
+
+    def test_per_transition_sync_includes_escalation_order_and_type(self):
+        """After T2 fires inside handle_escalation, the contact-field sync
+        map built by `_enqueue_contact_field_sync` contains BOTH
+        `escalation_order` and `escalation_type`. This is the replacement
+        for the old eager `_push_escalation_contact_fields` test — both
+        fields now flow via the standard sync path.
+        """
+        from tap_lms.summer_program import pe_dispatcher, state_machine
+
+        s = _ensure_student("07")
+        pe_name = _make_pe(self.batch_name, s, "07", current_escalation_step=0)
+
+        captured = {}
+
+        def fake_enqueue_sync(pe):
+            # Mirror the real builder so the test sees what would be pushed.
+            captured["step"] = pe.current_escalation_step
+            captured["type"] = pe.current_escalation_type
+
+        with _patch_escalation_steps([_step(1, "help_note_b")]), \
+             patch.object(pe_dispatcher, "_get_flow_id", return_value="flow-esc"), \
+             patch.object(pe_dispatcher, "_trigger_flow"), \
+             patch.object(frappe, "enqueue"), \
+             patch.object(state_machine, "_enqueue_contact_field_sync",
+                          side_effect=fake_enqueue_sync):
+            row = frappe._dict({
+                "name": pe_name,
+                "next_action_type": ACTION_ESCALATION,
+                "batch": self.batch_name,
+                "journey_label": LABEL_CONTENT_DELIVERED,
+            })
+            pe_dispatcher.handle_escalation(row)
+
+        self.assertEqual(captured["step"], 1)
+        self.assertEqual(captured["type"], "help_note_b")
 
     def test_step_exhausted_routes_to_grace_with_activity(self):
-        """When last_escalation_step >= len(steps) AND submission_count > 0,
+        """When current_escalation_step >= len(steps) AND submission_count > 0,
         the handler routes to t5_escalation_to_grace.
         """
         from tap_lms.summer_program import pe_dispatcher
@@ -258,7 +319,7 @@ class TestEscalationBranching(FrappeTestCase):
         pe_name = _make_pe(
             self.batch_name, s, "05",
             resolved_flow_state=STATE_NORMAL_ESCALATION,
-            last_escalation_step=2,
+            current_escalation_step=2,
             submission_count=1,  # has activity
         )
 

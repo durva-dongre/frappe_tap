@@ -8,10 +8,17 @@ All values match the ProgramEnrollment doctype Select options exactly.
 
 
 # ── Archetypes ──────────────────────────────────────────────
-ARCHETYPE_DORMANT = "Dormant"
-ARCHETYPE_FENCE_SITTER = "Fence Sitter"
-ARCHETYPE_IRREGULAR_SUBMITTER = "Irregular Submitter"
-ARCHETYPE_SUBMITTER = "Submitter"
+# Canonical archetype values are lowercase-snake_case to match:
+#   1. The DocType Select options on `ArchetypeConfig.archetype` and
+#      `Student.archetype` (updated 2026-05-14 to align with upstream
+#      data shape).
+#   2. The Glific collection label form (e.g., `SP_..._dormant_arm_a`).
+# Older code that compared against Title Case literals (`"Dormant"`,
+# etc.) was a bug; those have been swept and lowercased.
+ARCHETYPE_DORMANT = "dormant"
+ARCHETYPE_FENCE_SITTER = "fence_sitter"
+ARCHETYPE_IRREGULAR_SUBMITTER = "irregular_submitter"
+ARCHETYPE_SUBMITTER = "submitter"
 
 ALL_ARCHETYPES = [
     ARCHETYPE_DORMANT,
@@ -27,18 +34,16 @@ ARM_B = "arm_b"
 
 ALL_ARMS = [ARM_DEFAULT, ARM_A, ARM_B]
 
+
 # ── Collection labels ───────────────────────────────────────
-ARCHETYPE_KEY_MAP = {
-    ARCHETYPE_DORMANT: "dormant",
-    ARCHETYPE_FENCE_SITTER: "fence_sitter",
-    ARCHETYPE_IRREGULAR_SUBMITTER: "irregular_submitter",
-    ARCHETYPE_SUBMITTER: "submitter",
-}
-
-
 def collection_label(batch_id, archetype, arm):
-    """Build the Glific collection label for an archetype×arm combo."""
-    arch_key = ARCHETYPE_KEY_MAP.get(archetype, archetype.lower().replace(" ", "_"))
+    """Build the Glific collection label for an archetype × arm combo.
+
+    archetype is now the canonical lowercase-snake_case form (e.g., 'dormant'),
+    so no transformation is needed. Defensive fallback handles legacy uppercase
+    values that may exist in fixtures or migrated rows.
+    """
+    arch_key = archetype.lower().replace(" ", "_") if archetype else "submitter"
     return f"SP_{batch_id}_{arch_key}_{arm}"
 
 
