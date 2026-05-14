@@ -1342,7 +1342,7 @@ def _resolve_path(student, batch, bpr, current_week):
     if current_week <= 1:
         return PATH_CORE
 
-    archetype = student.archetype or "Submitter"
+    archetype = student.archetype or "submitter"
     arm = student.experiment_arm or "default"
 
     # Check previous week's submission status AND validity
@@ -1438,7 +1438,7 @@ def _get_week_rule(student, batch, week):
     Get the WeekRule for a student's archetype/arm/week.
     Determines expected submission type and whether validation is on.
     """
-    archetype = student.archetype or "Submitter"
+    archetype = student.archetype or "submitter"
     arm = student.experiment_arm or "default"
 
     # Try Core config first (Core has the week rules for content delivery)
@@ -1468,7 +1468,7 @@ def _get_escalation_steps(student, batch):
     in SP_Escalation. `parent_call` steps are routed by the dispatcher
     through `summer_program/vocallabs.py` and skip Glific entirely.
     """
-    archetype = student.archetype or "Submitter"
+    archetype = student.archetype or "submitter"
     arm = student.experiment_arm or "default"
 
     config = _get_archetype_config(batch.name, arm, archetype, PATH_CORE)

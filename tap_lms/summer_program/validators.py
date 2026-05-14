@@ -189,7 +189,7 @@ def _compute_in_use_tuples(batch_name):
     rows = frappe.db.sql(
         """
         SELECT DISTINCT
-            COALESCE(NULLIF(pe.archetype, ''), 'Submitter') AS archetype,
+            COALESCE(NULLIF(pe.archetype, ''), 'submitter') AS archetype,
             COALESCE(NULLIF(pe.experiment_arm, ''), 'default') AS experiment_arm
           FROM "tabProgramEnrollment" pe
          WHERE pe.batch = %s
