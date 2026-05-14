@@ -41,7 +41,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Archetype",
-   "options": "Dormant\nFence Sitter\nIrregular Submitter\nSubmitter",
+   "options": "dormant\nfence_sitter\nirregular_submitter\nsubmitter",
    "reqd": 1,
    "search_index": 1
   },
@@ -75,7 +75,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-01 13:30:41.504643",
+ "modified": "2026-05-14 15:41:12.665544",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "ArchetypeConfig",
