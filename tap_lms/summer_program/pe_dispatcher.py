@@ -94,7 +94,11 @@ def process_program_actions():
     # program_status filter includes both ACTIVE and PAUSED so paused-state
     # handlers (handle_pause_check for binge-resume, handle_re_engagement)
     # are reachable. Earlier ACTIVE-only filter excluded them entirely (B3).
-    # PG `= ANY(%s)` with a list parameter per L-005 (avoid IN-tuple).
+    # Per L-005: avoid `= ANY(%s)` with a list-in-tuple — Frappe's
+    # modify_values mangles a 2-element list into a Postgres record
+    # `('active','paused')` instead of a `text[]` array, producing the
+    # "op ANY/ALL (array) requires array on right side" error. Use flat
+    # `IN (%s, %s)` with scalar params instead — same semantics, deterministic.
     candidates = frappe.db.sql(
         """
         SELECT pe.name, pe.next_action_type, pe.next_action_at,
@@ -105,13 +109,13 @@ def process_program_actions():
         FROM `tabProgramEnrollment` pe
         WHERE pe.next_action_at IS NOT NULL
           AND pe.next_action_at <= %s
-          AND pe.program_status = ANY(%s)
+          AND pe.program_status IN (%s, %s)
           AND pe.next_action_type != ''
         ORDER BY pe.next_action_at ASC
         LIMIT %s
         FOR UPDATE SKIP LOCKED
         """,
-        (now, [PROGRAM_ACTIVE, PROGRAM_PAUSED], DISPATCH_BATCH_SIZE),
+        (now, PROGRAM_ACTIVE, PROGRAM_PAUSED, DISPATCH_BATCH_SIZE),
         as_dict=True,
     )
 
