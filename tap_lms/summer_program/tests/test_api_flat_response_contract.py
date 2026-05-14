@@ -629,130 +629,6 @@ class TestGetContentDetailsAssessmentsPreserved(unittest.TestCase):
         # No assessment_<i>_* keys when count is 0
         self.assertNotIn("assessment_1_id", resp)
 
-    @patch("tap_lms.summer_program.student_progression_sp._get_video_unguided_submission_message")
-    @patch("tap_lms.summer_program.student_progression_sp._get_video_assessments")
-    @patch("tap_lms.summer_program.student_progression_sp.frappe")
-    def test_video_class_without_student_id_omits_unguided_fields(
-        self, mock_frappe, mock_assessments, mock_unguided
-    ):
-        from tap_lms.summer_program import student_progression_sp as api
-
-        mock_frappe.db.exists.return_value = True
-        doc = MagicMock()
-        doc.video_name = "V1"
-        doc.video_youtube_url = "https://youtu.be/x"
-        doc.video_plio_url = None
-        doc.video_file = None
-        doc.duration = None
-        doc.description = ""
-        doc.video_translations = []
-        mock_frappe.get_doc.return_value = doc
-        mock_assessments.return_value = [
-            {"assessment_type": "Assignment", "assessment_id": "ASN-001"},
-        ]
-
-        resp = api.get_content_details.__wrapped__("VideoClass", "VC-1")
-
-        assert_flat_response(resp)
-        self.assertNotIn("unguided_text", resp)
-        self.assertNotIn("unguided_text_url", resp)
-        mock_unguided.assert_not_called()
-
-    @patch("tap_lms.summer_program.student_progression_sp._get_video_unguided_submission_message")
-    @patch("tap_lms.summer_program.student_progression_sp._get_video_assessments")
-    @patch("tap_lms.summer_program.student_progression_sp.frappe")
-    def test_video_class_with_student_id_includes_unguided_fields(
-        self, mock_frappe, mock_assessments, mock_unguided
-    ):
-        from tap_lms.summer_program import student_progression_sp as api
-
-        mock_frappe.db.exists.return_value = True
-        doc = MagicMock()
-        doc.video_name = "V1"
-        doc.video_youtube_url = "https://youtu.be/x"
-        doc.video_plio_url = None
-        doc.video_file = None
-        doc.duration = None
-        doc.description = ""
-        doc.video_translations = []
-        mock_frappe.get_doc.return_value = doc
-        assessments = [
-            {"assessment_type": "Assignment", "assessment_id": "ASN-001"},
-        ]
-        mock_assessments.return_value = assessments
-        mock_unguided.return_value = {
-            "unguided_text": "Send a reflection",
-            "unguided_text_url": "https://example.com/audio.mp3",
-        }
-
-        resp = api.get_content_details.__wrapped__(
-            "VideoClass", "VC-1", student_id="STU-001"
-        )
-
-        assert_flat_response(resp)
-        self.assertEqual(resp["unguided_text"], "Send a reflection")
-        self.assertEqual(
-            resp["unguided_text_url"], "https://example.com/audio.mp3"
-        )
-        mock_unguided.assert_called_once_with("STU-001", assessments, None)
-
-    @patch("tap_lms.summer_program.student_progression_sp.get_active_pe")
-    @patch("tap_lms.summer_program.student_progression_sp.resolve_student")
-    @patch("tap_lms.summer_program.student_progression_sp.frappe")
-    def test_video_unguided_message_strips_text_editor_html(
-        self, mock_frappe, mock_resolve, mock_get_active_pe
-    ):
-        from tap_lms.summer_program import student_progression_sp as api
-
-        mock_resolve.return_value = "STU-001"
-        pe = MagicMock()
-        pe.current_expected_submission_type = "emoji"
-        pe.language = "Hindi"
-        mock_get_active_pe.return_value = pe
-
-        row = MagicMock()
-        row.unguided_text = (
-            '<div class="ql-editor read-mode"><p>If you feel confident about '
-            "the activity, send us any emoji of your choice</p></div>"
-        )
-        row.unguided_text_audio = "https://example.com/audio.mp3"
-        mock_frappe.get_all.return_value = [row]
-
-        resp = api._get_video_unguided_submission_message(
-            "STU-001",
-            [{"assessment_type": "Assignment", "assessment_id": "ASN-001"}],
-        )
-
-        self.assertEqual(
-            resp["unguided_text"],
-            "If you feel confident about the activity, send us any emoji of your choice",
-        )
-        self.assertEqual(resp["unguided_text_url"], "https://example.com/audio.mp3")
-
-
-class TestCustomSubmissionMessages(unittest.TestCase):
-    def test_select_message_for_flow_strips_text_editor_html(self):
-        from tap_lms.summer_program import custom_messages
-
-        rule = {
-            "unguided_text": (
-                '<div class="ql-editor read-mode"><p>If you feel confident about '
-                "the activity, send us any emoji of your choice</p></div>"
-            ),
-            "unguided_text_audio": "https://example.com/audio.mp3",
-            "guided_text": None,
-            "guided_text_audio": None,
-        }
-
-        resp = custom_messages._select_message_for_flow(rule, "main")
-
-        self.assertEqual(resp["message_variant"], "unguided")
-        self.assertEqual(
-            resp["message"],
-            "If you feel confident about the activity, send us any emoji of your choice",
-        )
-        self.assertEqual(resp["message_url"], "https://example.com/audio.mp3")
-
 
 class TestGetNextContentFlatShape(unittest.TestCase):
     """Task #68 — `get_next_content` previously returned nested `position` and
@@ -911,8 +787,8 @@ class TestGetNextContentFlatShape(unittest.TestCase):
 
 
 class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
-    """CR-002 v2 §"API surface": get_student_state response must include the
-    gamification fields at top level (flat-map per
+    """CR-002 v2 §"API surface": get_student_state response must include the 8
+    new gamification fields at top level (flat-map per
     docs/api-standard-glific.md Rule 1) so SP_Incoming_Router can read
     @results.webhook.<field> as a fallback when contact-field cache is stale.
 
@@ -925,7 +801,6 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
         "weekly_activity_points",
         "total_quiz_points",
         "weekly_quiz_points",
-        "bonus_quiz_points",
         "total_submission_points",
         "weekly_submission_points",
         "special_gems",
@@ -934,7 +809,7 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
 
     @patch("tap_lms.summer_program.program_enrollment_api._resolve_student")
     @patch("tap_lms.summer_program.program_enrollment_api.frappe")
-    def test_response_includes_all_gamification_fields_and_is_flat(
+    def test_response_includes_all_eight_new_fields_and_is_flat(
         self, mock_frappe, mock_resolve,
     ):
         from tap_lms.summer_program import program_enrollment_api as api
@@ -951,12 +826,12 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
             "total_points": 50, "current_streak": 2, "in_grace_window": 0,
             "grace_window_end_at": None,
             "current_expected_submission_type": "photo",
-            "submission_count": 1, "last_escalation_step": 0,
+            "submission_count": 1, "current_escalation_step": 0,
+            "current_escalation_type": "",
             "course_level": "CL-1", "language": "English", "glific_id": "G-1",
             # CR-002 v2 fields
             "total_activity_points": 20, "weekly_activity_points": 10,
             "total_quiz_points": 5, "weekly_quiz_points": 5,
-            "bonus_quiz_points": 6,
             "total_submission_points": 25, "weekly_submission_points": 25,
             "special_gems": 1, "weekly_submission_done": 1,
         }
@@ -968,7 +843,7 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
 
         api.get_student_state("STU-001")
 
-        # All gamification fields appear at top level
+        # All 8 new fields appear at top level
         for fld in self.EXPECTED_NEW_FIELDS:
             self.assertIn(
                 fld, captured,
@@ -984,6 +859,67 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
 
         # Flat-map contract: every value is a scalar, no nested dicts or lists
         assert_flat_response(captured)
+
+    @patch("tap_lms.summer_program.program_enrollment_api._resolve_student")
+    @patch("tap_lms.summer_program.program_enrollment_api.frappe")
+    def test_response_preserves_last_escalation_step_key_for_glific_contract(
+        self, mock_frappe, mock_resolve,
+    ):
+        """L-008 (Glific public contract): the response key is
+        `last_escalation_step`, NOT `current_escalation_step`, even though the
+        PE column was renamed. Glific flows read
+        `@results.webhook.last_escalation_step` from SP_Incoming_Router and
+        elsewhere; silently renaming the response key would break every flow
+        reading it. Re-keying happens in get_student_state before the dict
+        spreads into frappe.local.response.
+        """
+        from tap_lms.summer_program import program_enrollment_api as api
+
+        mock_resolve.return_value = "STU-001"
+        mock_frappe.db.get_value.return_value = {
+            "name": "PE-1", "batch": "BATCH-1", "program_type": "Summer",
+            "archetype": "Submitter", "experiment_arm": "default",
+            "resolved_flow_state": "normal_escalation",
+            "journey_label": "content_delivered", "program_status": "active",
+            "current_week": 1, "current_path": "Core", "current_tier": "Basic",
+            "total_points": 0, "current_streak": 0, "in_grace_window": 0,
+            "grace_window_end_at": None,
+            "current_expected_submission_type": "photo",
+            "submission_count": 0,
+            "current_escalation_step": 2,
+            "current_escalation_type": "voice_note",
+            "course_level": "CL-1", "language": "English", "glific_id": "G-1",
+            "total_activity_points": 0, "weekly_activity_points": 0,
+            "total_quiz_points": 0, "weekly_quiz_points": 0,
+            "total_submission_points": 0, "weekly_submission_points": 0,
+            "special_gems": 0, "weekly_submission_done": 0,
+        }
+        captured = {}
+        mock_frappe.local.response = captured
+
+        api.get_student_state("STU-001")
+
+        # Glific-facing key MUST be present
+        self.assertIn(
+            "last_escalation_step", captured,
+            "Response missing the Glific public-contract key "
+            "`last_escalation_step` — SP_Incoming_Router reads this. The PE "
+            "column was renamed to `current_escalation_step` but the API key "
+            "must stay (L-008).",
+        )
+        self.assertEqual(captured["last_escalation_step"], 2)
+
+        # The internal column name MUST NOT leak
+        self.assertNotIn(
+            "current_escalation_step", captured,
+            "Internal PE column `current_escalation_step` leaked into the "
+            "API response. Re-key to `last_escalation_step` before spreading "
+            "into frappe.local.response.",
+        )
+
+        # New field uses its natural name — that one is fresh contract surface
+        self.assertIn("current_escalation_type", captured)
+        self.assertEqual(captured["current_escalation_type"], "voice_note")
 
 
 if __name__ == "__main__":

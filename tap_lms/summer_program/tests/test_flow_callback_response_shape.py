@@ -121,14 +121,11 @@ class TestAllHandlerResponses(unittest.TestCase):
         self._assert_v3_shape(resp)
         self.assertEqual(resp["action"], "submission_flow_completed")
 
-    def test_grace_flow_handler_returns_v3_shape(self):
-        from tap_lms.summer_program.flow_callback import _handle_grace_flow
-        pe = _make_pe()
-        pe.save = MagicMock()
-        pe.in_grace_window = 1
-        resp = _handle_grace_flow(pe, "SP_Grace_Entry", "completed", {})
-        self._assert_v3_shape(resp)
-        self.assertEqual(resp["in_grace_window"], 1)
+    # CR-003 follow-up (2026-05-13): test_grace_flow_handler_returns_v3_shape
+    # removed. `_handle_grace_flow` was deleted along with the SP_Grace_Entry
+    # Glific flow — the grace clock is armed by the activity-points handler
+    # and cleared by primary submissions; there's no Glific "entered grace"
+    # notification to handle.
 
     # CR-003: test_reengagement_handler_returns_v3_shape removed.
     # _handle_reengagement was deleted along with the SP_Paused_Reengagement

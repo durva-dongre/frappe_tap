@@ -23,10 +23,25 @@ Design notes:
   - Glific sync: re-uses `_enqueue_contact_field_sync` (the same retry+DLQ
     machinery that protects every other PE→Glific write — pattern P-007).
 
-Test plan: see app/tap_lms/summer_program/tests/test_activity_points.py.
+CR-003 follow-up (2026-05-13) — grace clock arming:
+  - The same UPDATE that flips `weekly_video_done` 0→1 also arms the
+    per-week grace clock (`grace_window_start`, `grace_window_end_at`,
+    `in_grace_window`) via atomic Postgres `CASE WHEN` clauses. Postgres
+    evaluates `CASE WHEN weekly_video_done = 0 ...` against the OLD row
+    state within a single UPDATE statement (standard SQL behaviour), so
+    the arm only fires when this is genuinely the week's first VideoClass.
+    A `grace_window_entered` ProgramEventLog row is written before the
+    UPDATE, gated on the pre-UPDATE Python read of `pe.weekly_video_done`.
+  - Re-arming on the next week is automatic: T19's weekly reset sets
+    `weekly_video_done = 0`, so the next VideoClass completion re-trips
+    the CASE WHEN and writes a fresh `grace_window_end_at`.
+
+Test plan: see app/tap_lms/summer_program/tests/test_activity_points.py
+and app/tap_lms/summer_program/tests/test_grace_logic.py.
 """
 import frappe
 
+from tap_lms.summer_program.constants import DEFAULT_GRACE_WINDOW_DAYS
 from tap_lms.summer_program.state_machine import (
     _enqueue_contact_field_sync,
     get_active_pe,
@@ -60,16 +75,26 @@ def handle_content_log(doc, method=None):
 def award_activity_points(scl):
     """Award VideoClass.points to the student's active PE.
 
-    Steps (per CR-002 v2 §"New module — activity_points.py"):
+    Steps (per CR-002 v2 §"New module — activity_points.py" + CR-003
+    follow-up 2026-05-13):
       1. Filter (handled by caller `handle_content_log`).
       2. Idempotency: skip if scl.points_awarded > 0.
       3. Resolve award: VideoClass.points → pts. Return on 0/null (E11).
       4. Resolve active PE for scl.student. Return if none.
-      5. Atomic UPDATE bumping total_activity_points,
-         weekly_activity_points, total_points, and setting
-         weekly_video_done = 1.
+      5a. If this is the week's first VideoClass (pre-UPDATE
+          `pe.weekly_video_done == 0`), log a `grace_window_entered`
+          ProgramEventLog row BEFORE the UPDATE so the audit trail captures
+          the arm intent even if the UPDATE races. Resolve
+          `Batch.grace_window_days` once so the CASE WHEN can use it.
+      5b. Atomic UPDATE bumping total_activity_points,
+          weekly_activity_points, total_points, setting weekly_video_done = 1,
+          AND arming the grace clock via CASE WHEN clauses that fire iff
+          weekly_video_done = 0 at UPDATE time. Postgres evaluates CASE
+          against OLD row values within the same UPDATE, so the arm only
+          fires for the genuine 0→1 flip.
       6. Write `scl.points_awarded` (audit-after-PE so retries are safe).
-      7. Sync contact fields + log ProgramEventLog event.
+      7. Sync contact fields + log activity_points_awarded ProgramEventLog
+         event.
     """
     # ── 2. Idempotency anchor (P-005) ───────────────────────
     if (scl.points_awarded or 0) > 0:
@@ -89,19 +114,65 @@ def award_activity_points(scl):
     if not pe:
         return
 
-    # ── 5. Atomic UPDATE on PE (P-002 / L-011) ──────────────
+    # ── 5a. First-VideoClass-of-week detection (CR-003 follow-up) ──
+    # Pre-UPDATE Python read; the SQL CASE WHEN in step 5b is the source
+    # of truth for the atomic arm, but the Python read is a cheap and
+    # consistent gate for the event-log row. If the read here is racing a
+    # concurrent first-VideoClass write, both paths converge on the same
+    # arm semantics — the CASE WHEN preserves the existing clock and the
+    # event log may have one extra row that says "grace_window_entered"
+    # with no actual arm; that's harmless and observable.
+    is_first_video_of_week = not bool(pe.weekly_video_done)
+    grace_window_days = _resolve_grace_window_days(pe)
+
+    if is_first_video_of_week:
+        # Log BEFORE the UPDATE so the audit row exists even if the SQL
+        # raises after the log write. `grace_window_entered` is one of the
+        # accepted event_type values on ProgramEventLog.
+        from frappe.utils import now_datetime, add_to_date
+        log_event(
+            pe, "grace_window_entered",
+            trigger_source="activity_points",
+            details={
+                "video": scl.content_id,
+                "grace_days": grace_window_days,
+                # Expected end timestamp the CASE WHEN should write — useful
+                # for reconstructing the timeline from logs alone if the
+                # PE row's grace_window_end_at gets clobbered downstream.
+                "grace_window_end_at_expected": str(
+                    add_to_date(now_datetime(), days=grace_window_days)
+                ),
+            },
+        )
+
+    # ── 5b. Atomic UPDATE on PE (P-002 / L-011 + CR-003 grace arm) ──
     # COALESCE-update is race-tolerant against T19's reset of
     # weekly_activity_points (E5) and against parallel quiz/submission writes.
+    #
+    # The CASE WHEN clauses fire IFF weekly_video_done = 0 at UPDATE time.
+    # Postgres reads OLD row values in CASE WHEN within the same UPDATE
+    # (standard SQL behaviour), so the arm only happens when this is
+    # genuinely the week's first VideoClass. Second-video-same-week is a
+    # no-op for the grace fields (existing values preserved).
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
            SET total_activity_points  = COALESCE(total_activity_points, 0)  + %s,
                weekly_activity_points = COALESCE(weekly_activity_points, 0) + %s,
                total_points           = COALESCE(total_points, 0)           + %s,
-               weekly_video_done      = 1
+               weekly_video_done      = 1,
+               grace_window_start     = CASE WHEN weekly_video_done = 0
+                                             THEN NOW()
+                                             ELSE grace_window_start END,
+               grace_window_end_at    = CASE WHEN weekly_video_done = 0
+                                             THEN NOW() + (%s || ' days')::interval
+                                             ELSE grace_window_end_at END,
+               in_grace_window        = CASE WHEN weekly_video_done = 0
+                                             THEN 1
+                                             ELSE in_grace_window END
          WHERE name = %s
         """,
-        (pts, pts, pts, pe.name),
+        (pts, pts, pts, grace_window_days, pe.name),
     )
 
     # ── 6. Audit-field anchor (written AFTER PE update so retries skip) ──
@@ -113,7 +184,7 @@ def award_activity_points(scl):
     # ── 7a. Push contact fields ────────────────────────────
     # Reload the PE so the Glific sync reflects the post-UPDATE values
     # (the local doc instance from get_active_pe still has the pre-UPDATE
-    # values for the bumped columns).
+    # values for the bumped columns + freshly armed grace fields).
     pe.reload()
     if pe.glific_id:
         _enqueue_contact_field_sync(pe)
@@ -153,3 +224,27 @@ def _resolve_video_points(video_id):
         )
         return 0
     return int(pts or 0)
+
+
+def _resolve_grace_window_days(pe):
+    """Return Batch.grace_window_days for the PE, falling back to
+    DEFAULT_GRACE_WINDOW_DAYS if unset.
+
+    Mirrors `state_machine._batch_grace_window_days` but is duplicated here
+    to keep activity_points self-contained — the CASE WHEN UPDATE needs the
+    integer value bound as a parameter, so we resolve it before the SQL call.
+    """
+    if not pe.batch:
+        return DEFAULT_GRACE_WINDOW_DAYS
+    try:
+        days = frappe.db.get_value("Batch", pe.batch, "grace_window_days")
+    except Exception:
+        days = None
+    if not days:
+        frappe.log_error(
+            f"activity_points: Batch {pe.batch} has no grace_window_days; "
+            f"falling back to default ({DEFAULT_GRACE_WINDOW_DAYS}d) for PE {pe.name}",
+            "SP Activity Points Grace Config",
+        )
+        return DEFAULT_GRACE_WINDOW_DAYS
+    return int(days)

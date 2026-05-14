@@ -38,10 +38,9 @@ from tap_lms.summer_program.constants import (
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
     CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
-    # CR-002 v2 gamification contact fields
+    # CR-002 v2 — 8 new gamification contact fields
     CF_TOTAL_ACTIVITY_POINTS, CF_WEEKLY_ACTIVITY_POINTS,
     CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
-    CF_BONUS_QUIZ_POINTS,
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
     CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
     # CR-003 — 2 new escalation channel routing fields
@@ -111,9 +110,9 @@ def _enqueue_contact_field_sync(pe):
         CF_CURRENT_STREAK: str(pe.current_streak or 0),
         CF_GRACE_WINDOW_END: str(pe.grace_window_end_at) if pe.grace_window_end_at else "",
         CF_EXPECTED_SUBMISSION: pe.current_expected_submission_type or "",
-        CF_LAST_ESCALATION_STEP: str(pe.last_escalation_step or 0),
+        CF_LAST_ESCALATION_STEP: str(pe.current_escalation_step or 0),
         CF_SUBMISSION_COUNT: str(pe.submission_count or 0),
-        # ── CR-002 v2 gamification fields ──
+        # ── CR-002 v2: 8 new gamification fields ──
         # Pushed alongside the existing fields so the cache size on Glific is
         # 26 after this CR (28 after CR-003 also ships escalation_order/type).
         # `weekly_video_done` is intentionally NOT included — internal-only.
@@ -121,20 +120,19 @@ def _enqueue_contact_field_sync(pe):
         CF_WEEKLY_ACTIVITY_POINTS: str(pe.weekly_activity_points or 0),
         CF_TOTAL_QUIZ_POINTS: str(pe.total_quiz_points or 0),
         CF_WEEKLY_QUIZ_POINTS: str(pe.weekly_quiz_points or 0),
-        CF_BONUS_QUIZ_POINTS: str(pe.bonus_quiz_points or 0),
         CF_TOTAL_SUBMISSION_POINTS: str(pe.total_submission_points or 0),
         CF_WEEKLY_SUBMISSION_POINTS: str(pe.weekly_submission_points or 0),
         CF_SPECIAL_GEMS: str(pe.special_gems or 0),
         CF_WEEKLY_SUBMISSION_DONE: str(int(pe.weekly_submission_done or 0)),
-        # ── CR-003: escalation_order field is also re-synced here so the
-        # Glific contact cache reflects last_escalation_step on every
-        # transition. escalation_type is NOT pushed here because it's a
-        # per-step attribute, not a PE state field — the dispatcher pushes
-        # it explicitly in handle_escalation BEFORE firing the SP_Escalation
-        # flow (CR-003 §"Escalation flow — new semantics" step 3). Pushing
-        # escalation_order here keeps the cache fresh after T2/T4/T8/T10
-        # transitions which also bump last_escalation_step.
-        CF_ESCALATION_ORDER: str(pe.last_escalation_step or 0),
+        # ── CR-003: escalation_order + escalation_type are re-synced here so
+        # the Glific contact cache reflects the current escalation step on
+        # every transition. The dispatcher's T2/T4/T8/T10 calls now resolve
+        # the step's escalation_type and write it to PE.current_escalation_type
+        # as part of the same transition, so the standard sync below is the
+        # only push needed — the previous eager `_push_escalation_contact_fields`
+        # in pe_dispatcher.handle_escalation has been removed.
+        CF_ESCALATION_ORDER: str(pe.current_escalation_step or 0),
+        CF_ESCALATION_TYPE: str(pe.current_escalation_type or ""),
     }
     frappe.enqueue(
         "tap_lms.summer_program.state_machine._sync_contact_fields_job",
@@ -249,8 +247,17 @@ def _sync_contact_fields_job(glific_id, fields, pe_name, retry_count=0, student_
 
 
 # ════════════════════════════════════════════════════════════
-# CR-003 — Per-week grace clock helpers
+# CR-003 follow-up (2026-05-13) — Grace clock helper
 # ════════════════════════════════════════════════════════════
+#
+# The original CR-003 helper `_grace_clock_updates` (armed grace at week
+# starts T0 / T19) was retired in the 2026-05-13 follow-up. Grace is now
+# armed by `activity_points.handle_content_log` on the week's FIRST
+# VideoClass completion (atomic Postgres `CASE WHEN`) and cleared by the
+# four primary-submission transitions (T7/T9/T17/T3). The only remaining
+# grace-arming code path is the defensive backfill in T5/T11 for legacy
+# PEs that pre-date CR-003 and somehow land in escalation-exhaust without
+# a clock set — that's what `_batch_grace_window_days` still serves.
 
 def _batch_grace_window_days(pe):
     """Return the cohort's grace window in days.
@@ -276,18 +283,15 @@ def _batch_grace_window_days(pe):
     return int(days)
 
 
-def _grace_clock_updates(pe):
-    """Return the dict of grace-clock + scheduling updates for a week-start
-    transition (T0 / T19 / `t14_week_advance`).
+def _defensive_grace_clock_updates(pe):
+    """Return a grace-clock-arming dict for the LEGACY-PE defensive path in
+    T5/T11 only. Used when a PE somehow reaches escalation exhaustion without
+    a clock set (e.g., a PE that pre-dates the 2026-05-13 follow-up that moved
+    arming into the activity-points handler).
 
-    CR-003 §"Grace window — new semantics": the clock starts at the week's
-    start and resets on every week advance. The expiry scheduler tick fires
-    a `grace_check` action which routes to `handle_grace_check` and, if the
-    student still hasn't submitted, transitions to STATE_PROGRAM_DROPPED via
-    `t17_grace_expired`. This helper keeps the math + field shape in one
-    place so T0 and T19 cannot drift out of sync.
-
-    Returns a dict suitable for splatting into a transition's `extra_updates`.
+    DO NOT use this for new week-start arming — that's now handled by
+    `activity_points.handle_content_log` on the week's first VideoClass
+    completion via atomic Postgres CASE WHEN.
     """
     now = now_datetime()
     grace_end = add_to_date(now, days=_batch_grace_window_days(pe))
@@ -295,11 +299,6 @@ def _grace_clock_updates(pe):
         "in_grace_window": 1,
         "grace_window_start": now,
         "grace_window_end_at": grace_end,
-        # The grace_check tick fires at grace_window_end_at; until then, the
-        # week's escalation steps drive next_action_at on their own cadence.
-        # T0/T19 callers set next_action_at = now for the immediate content
-        # delivery; the grace_check is a separate clock that only fires if
-        # no submission lands by the window's end.
     }
 
 
@@ -311,12 +310,13 @@ def _grace_clock_updates(pe):
 def t0_enrollment(pe, trigger_source="scheduler"):
     """T0: Initial enrollment. Sets resolved_flow_state = normal_content_delivery.
 
-    CR-003: also arms the per-week grace clock — grace_window_start = now,
-    grace_window_end_at = now + Batch.grace_window_days. The clock is policed
-    by a `grace_check` scheduler action that routes to `handle_grace_check`;
-    if no submission lands by grace_window_end_at the PE is dropped (T17).
-    Note: T0 also kicks off content delivery via next_action_type = content_delivery
-    — that's the immediate work; grace expiry is a separate downstream check.
+    CR-003 follow-up (2026-05-13): T0 NO LONGER arms the grace clock. The
+    clock is now armed by `activity_points.handle_content_log` on the
+    week's first VideoClass completion (atomic Postgres CASE WHEN trick on
+    the existing UPDATE). T0 only sets resolved_flow_state, journey_label,
+    program_status, path, and current_week. The grace clock arms naturally
+    once the student watches their first VideoClass; it stays unset until
+    then.
     """
     updates = {
         "journey_label": LABEL_CONTENT_DELIVERED,
@@ -324,7 +324,6 @@ def t0_enrollment(pe, trigger_source="scheduler"):
         "current_path": PATH_CORE,
         "current_week": 1,
     }
-    updates.update(_grace_clock_updates(pe))
     return transition(pe, STATE_NORMAL_CONTENT, trigger_source, updates)
 
 
@@ -333,6 +332,12 @@ def t1_content_no_response(pe, escalation_step, trigger_source="flow_callback"):
     """
     T1: Content delivered but student didn't respond within wait window.
     State stays normal_content_delivery but schedule escalation.
+
+    CR-003 follow-up: the dispatcher resolves the step's `escalation_type`
+    when it actually fires the escalation (T2/T4/T8/T10). T1 only schedules
+    the next tick — we don't write `current_escalation_type` here because
+    the step hasn't fired yet and the contact field would announce a channel
+    we haven't taken. The dispatcher's T2 call sets it when the step fires.
     """
     hours = escalation_step.get("hours_after_previous", 24) if escalation_step else 24
     return transition(pe, STATE_NORMAL_CONTENT, trigger_source, {
@@ -342,10 +347,17 @@ def t1_content_no_response(pe, escalation_step, trigger_source="flow_callback"):
 
 
 # ── T2: Start escalation (Core) ───────────────────────────
-def t2_start_escalation(pe, step_number=1, trigger_source="scheduler"):
-    """T2: normal_content_delivery → normal_escalation."""
+def t2_start_escalation(pe, step_number=1, escalation_type="", trigger_source="scheduler"):
+    """T2: normal_content_delivery → normal_escalation.
+
+    CR-003 follow-up: also writes `current_escalation_type` so the standard
+    contact-field sync pushes it to Glific without the dispatcher needing a
+    separate eager push. Defaults to "" for backward compatibility with any
+    caller that still passes only `step_number`.
+    """
     return transition(pe, STATE_NORMAL_ESCALATION, trigger_source, {
-        "last_escalation_step": step_number,
+        "current_escalation_step": step_number,
+        "current_escalation_type": escalation_type or "",
         "journey_label": LABEL_CONTENT_DELIVERED,
     })
 
@@ -359,6 +371,11 @@ def t3_escalation_submission(pe, points=0, trigger_source="flow_callback"):
     sticky `weekly_submission_done` flag, and increment `current_streak` and
     `special_gems` — all in the same atomic save. Streak/gems increment AT
     SUBMISSION TIME, not deferred to T19.
+
+    CR-003 follow-up (2026-05-13): also clears the grace clock fields
+    (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
+    primary submission ends the week's grace window even if the student
+    submitted before the dispatcher escalated all the way to grace_waiting.
     """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
@@ -371,16 +388,26 @@ def t3_escalation_submission(pe, points=0, trigger_source="flow_callback"):
         "weekly_submission_done": 1,
         "current_streak": (pe.current_streak or 0) + 1,
         "special_gems": (pe.special_gems or 0) + 1,
+        # CR-003 follow-up: clear grace state on any primary submission.
+        "in_grace_window": 0,
+        "grace_window_end_at": None,
+        "grace_window_start": None,
         "next_action_at": add_to_date(now_datetime(), hours=FEEDBACK_TIMEOUT_HOURS),
         "next_action_type": ACTION_FEEDBACK_TIMEOUT,
     })
 
 
 # ── T4: Next escalation step ─────────────────────────────
-def t4_next_escalation_step(pe, step_number, next_hours=24, trigger_source="scheduler"):
-    """T4: normal_escalation → normal_escalation (next step)."""
+def t4_next_escalation_step(pe, step_number, next_hours=24, escalation_type="", trigger_source="scheduler"):
+    """T4: normal_escalation → normal_escalation (next step).
+
+    CR-003 follow-up: writes `current_escalation_type` so the standard
+    contact-field sync pushes it to Glific. Defaults to "" for backward
+    compatibility.
+    """
     return transition(pe, STATE_NORMAL_ESCALATION, trigger_source, {
-        "last_escalation_step": step_number,
+        "current_escalation_step": step_number,
+        "current_escalation_type": escalation_type or "",
         "next_action_at": add_to_date(now_datetime(), hours=next_hours),
         "next_action_type": ACTION_ESCALATION,
     })
@@ -390,16 +417,21 @@ def t4_next_escalation_step(pe, step_number, next_hours=24, trigger_source="sche
 def t5_escalation_to_grace(pe, trigger_source="scheduler"):
     """T5: normal_escalation → grace_waiting (escalation steps exhausted).
 
-    CR-003: the grace clock was already set at the week's start (T0 / T19).
-    T5 PRESERVES the existing grace_window_end_at — it does not reset it.
-    The PE just enters the dead-air tail state; the `grace_check` scheduler
-    action set at week start will fire at grace_window_end_at and route via
-    `handle_grace_check`. If pe.grace_window_end_at is somehow None (legacy
-    PE), we defensively arm the clock here using the batch grace duration.
+    CR-003 follow-up (2026-05-13): the grace clock is now armed by the
+    activity-points handler on the week's first VideoClass completion
+    (atomic CASE WHEN). T5 PRESERVES whatever clock is currently set —
+    it does not reset it. The PE just enters the dead-air tail state;
+    the `grace_check` scheduler action set here fires at grace_window_end_at
+    and routes via `handle_grace_check`. If pe.grace_window_end_at is somehow
+    None (legacy PE that never watched a VideoClass this week, or a PE that
+    pre-dates the 2026-05-13 follow-up), we defensively arm the clock here
+    using the batch grace duration so the dispatcher schedule is valid.
     """
-    # Defensive: legacy PEs that pre-date CR-003 may not have the clock set.
+    # Defensive: PE without an armed clock — happens if the student never
+    # watched a VideoClass this week and somehow reached escalation exhaust
+    # via a non-content path, or for legacy pre-follow-up PEs.
     if not pe.grace_window_end_at:
-        grace_updates = _grace_clock_updates(pe)
+        grace_updates = _defensive_grace_clock_updates(pe)
     else:
         grace_updates = {"in_grace_window": 1}
 
@@ -418,7 +450,8 @@ def t6_escalation_to_remedial(pe, week_rule=None, trigger_source="scheduler"):
     updates = {
         "journey_label": LABEL_CONTENT_DELIVERED,
         "current_path": PATH_REMEDIAL,
-        "last_escalation_step": 0,
+        "current_escalation_step": 0,
+        "current_escalation_type": "",
         "next_action_at": now_datetime(),
         "next_action_type": ACTION_CONTENT_DELIVERY,
     }
@@ -439,6 +472,11 @@ def t7_core_submission(pe, points=0, trigger_source="flow_callback"):
     sticky `weekly_submission_done` flag, and increment `current_streak` and
     `special_gems` — all in the same atomic save. Streak/gems increment AT
     SUBMISSION TIME, not deferred to T19.
+
+    CR-003 follow-up (2026-05-13): also clears the grace clock fields
+    (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
+    primary submission ends the week's grace window (which the activity-points
+    handler armed when the student watched their first VideoClass).
     """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
@@ -451,16 +489,26 @@ def t7_core_submission(pe, points=0, trigger_source="flow_callback"):
         "weekly_submission_done": 1,
         "current_streak": (pe.current_streak or 0) + 1,
         "special_gems": (pe.special_gems or 0) + 1,
+        # CR-003 follow-up: clear grace state on any primary submission.
+        "in_grace_window": 0,
+        "grace_window_end_at": None,
+        "grace_window_start": None,
         "next_action_at": add_to_date(now_datetime(), hours=FEEDBACK_TIMEOUT_HOURS),
         "next_action_type": ACTION_FEEDBACK_TIMEOUT,
     })
 
 
 # ── T8: Start Remedial escalation ────────────────────────
-def t8_start_remedial_escalation(pe, step_number=1, trigger_source="scheduler"):
-    """T8: remedial_content_delivery → remedial_escalation."""
+def t8_start_remedial_escalation(pe, step_number=1, escalation_type="", trigger_source="scheduler"):
+    """T8: remedial_content_delivery → remedial_escalation.
+
+    CR-003 follow-up: writes `current_escalation_type` so the standard
+    contact-field sync pushes it to Glific. Defaults to "" for backward
+    compatibility.
+    """
     return transition(pe, STATE_REMEDIAL_ESCALATION, trigger_source, {
-        "last_escalation_step": step_number,
+        "current_escalation_step": step_number,
+        "current_escalation_type": escalation_type or "",
     })
 
 
@@ -473,6 +521,10 @@ def t9_remedial_submission(pe, points=0, trigger_source="flow_callback"):
     sticky `weekly_submission_done` flag, and increment `current_streak` and
     `special_gems` — all in the same atomic save. Streak/gems increment AT
     SUBMISSION TIME, not deferred to T19.
+
+    CR-003 follow-up (2026-05-13): also clears the grace clock fields
+    (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
+    primary submission ends the week's grace window.
     """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
@@ -485,16 +537,26 @@ def t9_remedial_submission(pe, points=0, trigger_source="flow_callback"):
         "weekly_submission_done": 1,
         "current_streak": (pe.current_streak or 0) + 1,
         "special_gems": (pe.special_gems or 0) + 1,
+        # CR-003 follow-up: clear grace state on any primary submission.
+        "in_grace_window": 0,
+        "grace_window_end_at": None,
+        "grace_window_start": None,
         "next_action_at": add_to_date(now_datetime(), hours=FEEDBACK_TIMEOUT_HOURS),
         "next_action_type": ACTION_FEEDBACK_TIMEOUT,
     })
 
 
 # ── T10: Next Remedial escalation step ───────────────────
-def t10_next_remedial_escalation(pe, step_number, next_hours=24, trigger_source="scheduler"):
-    """T10: remedial_escalation → remedial_escalation (next step)."""
+def t10_next_remedial_escalation(pe, step_number, next_hours=24, escalation_type="", trigger_source="scheduler"):
+    """T10: remedial_escalation → remedial_escalation (next step).
+
+    CR-003 follow-up: writes `current_escalation_type` so the standard
+    contact-field sync pushes it to Glific. Defaults to "" for backward
+    compatibility.
+    """
     return transition(pe, STATE_REMEDIAL_ESCALATION, trigger_source, {
-        "last_escalation_step": step_number,
+        "current_escalation_step": step_number,
+        "current_escalation_type": escalation_type or "",
         "next_action_at": add_to_date(now_datetime(), hours=next_hours),
         "next_action_type": ACTION_ESCALATION,
     })
@@ -504,12 +566,12 @@ def t10_next_remedial_escalation(pe, step_number, next_hours=24, trigger_source=
 def t11_remedial_to_grace(pe, trigger_source="scheduler"):
     """T11: remedial_escalation → grace_waiting.
 
-    CR-003: mirror of T5 for the remedial path. The grace clock was already
-    armed at the week start; T11 preserves it. Defensive backfill for legacy
-    PEs as in T5.
+    CR-003 follow-up (2026-05-13): mirror of T5 for the remedial path. The
+    grace clock is armed by activity-points on the week's first VideoClass
+    completion; T11 preserves it. Defensive backfill for legacy PEs as in T5.
     """
     if not pe.grace_window_end_at:
-        grace_updates = _grace_clock_updates(pe)
+        grace_updates = _defensive_grace_clock_updates(pe)
     else:
         grace_updates = {"in_grace_window": 1}
 
@@ -555,13 +617,13 @@ def t13_feedback_delivered(pe, trigger_source="flow_callback"):
 # reasons; the architecture-doc vocabulary calls it T19. CR-002 v2 keeps
 # the function name (per CR §"T19 week-advance — extended" — do NOT rename).
 #
-# CR-003 coordination note (DO NOT REMOVE THIS COMMENT BLOCK):
-#   CR-003 will append grace re-arm logic AFTER the weekly reset and
-#   BEFORE schedule-next-content. If both CRs land, the merged write
-#   order is:
-#     streak/gem compute → weekly reset → path reset → grace re-arm
-#     → schedule next content.
-#   Code-reviewers and the CR-003 author should grep for this string.
+# CR-003 follow-up (2026-05-13): T19 NO LONGER arms the grace clock.
+# The clock is armed naturally each week by `activity_points.handle_content_log`
+# when the student completes the week's FIRST VideoClass — the atomic
+# Postgres CASE WHEN trick in that handler reads `weekly_video_done = 0`
+# (which T19 resets below) and re-arms the clock on the 0→1 flip. T19's
+# job here is just the weekly reset; the next VideoClass watch drives the
+# re-arm.
 def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
     """T19: week_completed → normal_content_delivery (next week).
 
@@ -606,7 +668,8 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         "current_tier": tier,
         "submission_count": 0,
         "quiz_completed": 0,
-        "last_escalation_step": 0,
+        "current_escalation_step": 0,
+        "current_escalation_type": "",
         "next_action_at": now_datetime(),
         "next_action_type": ACTION_CONTENT_DELIVERY,
         # CR-002 v2: apply streak/gem update + reset all weeklies + flags
@@ -621,23 +684,18 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         # total_submission_points, total_points are NEVER reset (E10).
     }
 
-    # ── CR-003 grace re-arm ─────────────────────────────────
-    # The per-week grace clock resets on every week advance. The previous
-    # path-reset block above already cleared last_escalation_step; the grace
-    # helper now seeds grace_window_start, grace_window_end_at, and the
-    # in_grace_window flag for the NEW week. Order (per the coordinate-with-
-    # CR-003 comment block on this function): streak/gem → reset → path reset
-    # → grace re-arm → schedule next content. The CR-002 v2 reset block above
-    # is preserved exactly; CR-003 only APPENDS the grace re-arm.
-    #
-    # Note: next_action_at above is set to now() for the immediate
-    # content_delivery dispatch. The grace_check timer is policed via the
-    # `grace_check` scheduler tick that fires at grace_window_end_at; the
-    # week-start content delivery and grace expiry are independent clocks.
-    # In practice the content_delivery dispatcher claims the row first,
-    # transitions further, and the only way a `grace_check` ever fires is if
-    # the student goes silent through every escalation step.
-    updates.update(_grace_clock_updates(pe))
+    # ── CR-003 follow-up (2026-05-13): grace re-arm removed ──
+    # T19 no longer arms the grace clock. The activity-points handler will
+    # re-arm it on the new week's first VideoClass completion via atomic
+    # CASE WHEN (now that `weekly_video_done` is reset to 0 above, the next
+    # video watch flips it 0→1 and the same UPDATE seeds the new clock).
+    # Grace state from the prior week is intentionally NOT cleared here —
+    # the only ways a PE leaves T19 with a non-null grace_window_end_at are:
+    #   (a) the student submitted (T7/T9/T17/T3 already cleared the fields), or
+    #   (b) the student went silent through escalation and the dispatcher
+    #       fired t17_grace_expired (PE is now in program_dropped, not here).
+    # Either way the fields are already in the correct state by the time T19
+    # runs, so no explicit clear is needed.
 
     if week_rule:
         updates["current_expected_submission_type"] = week_rule.get("expected_submission_type", "")
@@ -776,6 +834,41 @@ def t22_duplicate_submission(pe, trigger_source="flow_callback"):
     log_event(pe, "submission_received", trigger_source=trigger_source,
               details={"is_primary": False, "duplicate": True})
     return True
+
+
+# ── T23: System-initiated auto-drop ─────────────────────
+def t23_auto_drop(pe, reason, trigger_source="dispatcher"):
+    """T23: ANY → program_dropped, system-initiated.
+
+    `reason` must be one of: 'delivery_failure', 'admin', 'manual'.
+    NOT for grace expiry — that's t17_grace_expired with
+    `drop_reason='grace_expired'`.
+
+    CR-003: the `reengagement_exhausted` trigger was retired. Only
+    `delivery_failure_count >= MAX_DELIVERY_FAILURES` chains to T23 today.
+    `_record_delivery_failure` in pe_dispatcher.py is the helper that
+    counts failures and fires this transition at the threshold.
+
+    Idempotent on already-terminal PEs (completed / dropped) — the early
+    return prevents a double `program_dropped` log entry and a redundant
+    Glific contact-field sync.
+    """
+    if pe.program_status in (PROGRAM_COMPLETED, PROGRAM_DROPPED):
+        return  # already terminal, no-op
+
+    log_event(pe, "program_dropped", trigger_source=trigger_source,
+              details={"reason": reason})
+
+    return transition(pe, STATE_PROGRAM_DROPPED, trigger_source, {
+        "program_status": PROGRAM_DROPPED,
+        "journey_label": LABEL_DROPPED,
+        "drop_reason": reason,
+        "in_grace_window": 0,
+        "grace_window_end_at": None,
+        "grace_window_start": None,
+        "next_action_at": None,
+        "next_action_type": "",
+    })
 
 
 # ── T24: Admin drops student ────────────────────────────

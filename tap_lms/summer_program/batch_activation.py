@@ -181,6 +181,19 @@ def activate_bpr(bpr_name):
 
     batch = frappe.get_doc("Batch", bpr.batch)
 
+    # Task #14 (2026-05-13): hard-fail on per-tuple ArchetypeConfig
+    # completeness before flipping the BPR to active. The old always-16
+    # invariant was retired (ADR-004 supersession); this replacement scales
+    # naturally to however many experiment_arms the batch actually uses.
+    # `_validate_archetype_config_before_activation` throws ValidationError
+    # with a multi-line list of every error-severity issue when invalid;
+    # warnings (e.g., escalation hours > grace window) only show in the
+    # admin preview API and don't block activation.
+    from tap_lms.summer_program.validators import (
+        _validate_archetype_config_before_activation,
+    )
+    _validate_archetype_config_before_activation(bpr.batch)
+
     bpr.status = BPR_ACTIVE
     bpr.activated_at = now_datetime()
     bpr.save(ignore_permissions=True)

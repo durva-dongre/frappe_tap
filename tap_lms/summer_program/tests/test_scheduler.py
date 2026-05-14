@@ -33,8 +33,9 @@ class TestSchedulerRetired(unittest.TestCase):
         self.assertFalse(
             hasattr(scheduler, "_run_grace_notifications"),
             "_run_grace_notifications was retired in CR-003. If you need "
-            "weekly grace handling, see state_machine._grace_clock_updates "
-            "and pe_dispatcher.handle_grace_check.",
+            "weekly grace handling, see activity_points.award_activity_points "
+            "(arms the grace clock on first VideoClass of week) and "
+            "pe_dispatcher.handle_grace_check (drop path at expiry).",
         )
 
     def test_reengagement_function_removed(self):

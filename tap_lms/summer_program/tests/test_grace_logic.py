@@ -1,13 +1,19 @@
 """
-Tests for CR-003 grace logic restructure.
+Tests for CR-003 follow-up (2026-05-13) — grace clock refactor.
 
-Covers:
-  - T0 sets the grace clock from Batch.grace_window_days
-  - T19 (t14_week_advance) re-arms the grace clock at week advance
-  - handle_grace_check drops at expiry
-  - handle_grace_check is a no-op when weekly_submission_done = 1
-  - Grace clock resets every week
-  - T5 (escalation_to_grace) preserves the existing clock (no reset)
+The grace clock is now:
+  - ARMED by `activity_points.handle_content_log` on the week's FIRST
+    VideoClass completion (atomic Postgres CASE WHEN on the same UPDATE
+    that flips weekly_video_done 0→1).
+  - CLEARED by primary submission transitions T7/T9/T17/T3.
+  - RE-ARMED automatically each week — T19 resets weekly_video_done to 0,
+    and the next VideoClass completion re-trips the CASE WHEN with a fresh
+    grace_window_end_at.
+  - DROPS the student via the existing handle_grace_check dispatcher path
+    (scheduled by T5/T11).
+
+T0 and T19 NO LONGER arm the clock. Tests below cover all five paths plus
+the multi-week-grace scenario where the clock spans week boundaries.
 """
 from datetime import timedelta
 
@@ -19,7 +25,6 @@ from unittest.mock import patch
 from tap_lms.summer_program.constants import (
     LABEL_CONTENT_DELIVERED,
     LABEL_GRACE_WINDOW,
-    LABEL_SUBMITTED,
     PATH_CORE,
     PROGRAM_ACTIVE,
     STATE_GRACE_WAITING,
@@ -31,10 +36,14 @@ from tap_lms.summer_program.constants import (
 from tap_lms.summer_program.state_machine import (
     t0_enrollment,
     t5_escalation_to_grace,
+    t7_core_submission,
     t14_week_advance,
-    t17_grace_expired,
 )
 
+
+# ════════════════════════════════════════════════════════════
+# Test fixtures
+# ════════════════════════════════════════════════════════════
 
 def _ensure_batch(grace_days=14):
     name = frappe.get_value("Batch", {"name1": f"GraceTestBatch{grace_days}"}, "name")
@@ -68,6 +77,24 @@ def _ensure_student(suffix):
     return s.name
 
 
+def _ensure_video(suffix, points=10):
+    """Create or reuse a VideoClass with the given points value."""
+    name = frappe.get_value("VideoClass", {"video_id": f"GR-VID-{suffix}"}, "name")
+    if name:
+        frappe.db.set_value("VideoClass", name, "points", points,
+                            update_modified=False)
+        return name
+    v = frappe.new_doc("VideoClass")
+    v.video_id = f"GR-VID-{suffix}"
+    v.title = f"Grace Test Video {suffix}"
+    v.points = points
+    # VideoClass requires some additional fields depending on schema; insert
+    # may need ignore_mandatory if the doctype has reqd fields. Use
+    # ignore_mandatory to be tolerant of schema drift in the test env.
+    v.insert(ignore_permissions=True, ignore_mandatory=True)
+    return v.name
+
+
 def _make_pe(batch_name, student_name, suffix, **kwargs):
     pe = frappe.new_doc("ProgramEnrollment")
     pe.enrollment = f"PE-GR-{suffix}-{frappe.utils.random_string(6)}"
@@ -93,91 +120,306 @@ def _make_pe(batch_name, student_name, suffix, **kwargs):
     return pe.name
 
 
-class TestGraceClockSetAtWeekStart(FrappeTestCase):
+def _make_scl(student_name, video_name, suffix):
+    """Insert a StudentContentLog row representing a VideoClass completion."""
+    scl = frappe.new_doc("StudentContentLog")
+    scl.student = student_name
+    scl.content_id = video_name
+    scl.content_type = "VideoClass"
+    scl.action = "completed"
+    scl.completed_at = now_datetime()
+    # SCL.name auto-generated. Insert ignoring permissions; ignore_mandatory
+    # for tolerance of schema drift.
+    scl.insert(ignore_permissions=True, ignore_mandatory=True)
+    return scl
+
+
+# ════════════════════════════════════════════════════════════
+# CR-003 follow-up — Grace clock ARMED by activity-points handler
+# ════════════════════════════════════════════════════════════
+
+class TestActivityPointsArmsGraceClock(FrappeTestCase):
+    """The activity-points handler is now the sole arm path for the grace
+    clock. These tests exercise the atomic CASE WHEN UPDATE end-to-end.
+    """
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.batch_name = _ensure_batch(grace_days=14)
 
-    def test_t0_sets_grace_clock_from_batch(self):
-        """T0 (enrollment) arms grace_window_end_at = now + 14 days using
-        Batch.grace_window_days, sets grace_window_start, and flips
-        in_grace_window = 1.
+    def test_first_videoclass_of_week_arms_grace_clock(self):
+        """First VideoClass completion of the week (weekly_video_done = 0)
+        arms grace_window_end_at = NOW() + batch.grace_window_days * 24h,
+        sets grace_window_start, and flips in_grace_window = 1.
         """
-        s = _ensure_student("01")
-        pe_name = _make_pe(self.batch_name, s, "01")
+        from tap_lms.summer_program.activity_points import award_activity_points
+
+        student_name = _ensure_student("a1")
+        video_name = _ensure_video("a1", points=10)
+        pe_name = _make_pe(self.batch_name, student_name, "a1",
+                           weekly_video_done=0)
+
+        scl = _make_scl(student_name, video_name, "a1")
+        before = now_datetime()
+        with patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync"):
+            award_activity_points(scl)
+        after = now_datetime()
+
+        row = frappe.db.get_value(
+            "ProgramEnrollment", pe_name,
+            ["in_grace_window", "grace_window_start", "grace_window_end_at",
+             "weekly_video_done"],
+            as_dict=True,
+        )
+        self.assertEqual(row.in_grace_window, 1)
+        self.assertIsNotNone(row.grace_window_start)
+        self.assertIsNotNone(row.grace_window_end_at)
+        self.assertEqual(row.weekly_video_done, 1)
+
+        # End - start should be 14 days (give or take a few seconds).
+        delta = get_datetime(row.grace_window_end_at) - get_datetime(row.grace_window_start)
+        self.assertAlmostEqual(delta.total_seconds(), 14 * 86400, delta=120)
+
+        # Start should be ~ now() at the time of the call.
+        start = get_datetime(row.grace_window_start)
+        self.assertGreaterEqual(start, before - timedelta(seconds=2))
+        self.assertLessEqual(start, after + timedelta(seconds=2))
+
+    def test_second_videoclass_same_week_does_not_re_arm(self):
+        """Second VideoClass completion while weekly_video_done = 1 must
+        NOT change grace_window_end_at. The CASE WHEN should evaluate
+        ELSE grace_window_end_at (preserve) on the second call.
+        """
+        from tap_lms.summer_program.activity_points import award_activity_points
+
+        student_name = _ensure_student("a2")
+        video_name = _ensure_video("a2", points=10)
+        # Pre-arm: weekly_video_done = 1 and grace_window_end_at set.
+        original_end = add_to_date(now_datetime(), days=10)
+        pe_name = _make_pe(self.batch_name, student_name, "a2",
+                           weekly_video_done=1,
+                           grace_window_end_at=original_end)
+
+        scl = _make_scl(student_name, video_name, "a2")
+        with patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync"):
+            award_activity_points(scl)
+
+        new_end = frappe.db.get_value(
+            "ProgramEnrollment", pe_name, "grace_window_end_at"
+        )
+        new_end_dt = get_datetime(new_end)
+        # Preserved — within 2 seconds of the original.
+        self.assertAlmostEqual(
+            (new_end_dt - get_datetime(original_end)).total_seconds(),
+            0, delta=2,
+            msg="Second VideoClass of week must NOT re-arm grace_window_end_at",
+        )
+
+    def test_first_videoclass_next_week_re_arms_with_fresh_clock(self):
+        """After T19 resets weekly_video_done, the next VideoClass watch
+        re-arms grace_window_end_at to NOW() + grace_window_days * 24h.
+        The new timestamp must reflect the second arm, not the original.
+        """
+        from tap_lms.summer_program.activity_points import award_activity_points
+
+        student_name = _ensure_student("a3")
+        video_name = _ensure_video("a3", points=10)
+
+        # Simulate end-of-week-1: weekly_video_done = 1 and a stale clock.
+        old_end = add_to_date(now_datetime(), days=-3)
+        pe_name = _make_pe(self.batch_name, student_name, "a3",
+                           current_week=1,
+                           weekly_video_done=1,
+                           grace_window_end_at=old_end)
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
+
+        # T19 (week advance) — resets weekly_video_done to 0.
+        with patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
+            pe.resolved_flow_state = STATE_WEEK_COMPLETED
+            pe.save(ignore_permissions=True)
+            t14_week_advance(pe, 2, week_rule=None, trigger_source="test")
+
+        # After T19, weekly_video_done should be 0 and grace fields still
+        # whatever they were (T19 doesn't touch them — see follow-up).
+        row = frappe.db.get_value(
+            "ProgramEnrollment", pe_name,
+            ["weekly_video_done", "grace_window_end_at"], as_dict=True,
+        )
+        self.assertEqual(row.weekly_video_done, 0)
+
+        # Now fire activity-points; this is the new week's first VideoClass.
+        scl = _make_scl(student_name, video_name, "a3")
+        before = now_datetime()
+        with patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync"):
+            award_activity_points(scl)
+
+        new_end = frappe.db.get_value(
+            "ProgramEnrollment", pe_name, "grace_window_end_at"
+        )
+        new_end_dt = get_datetime(new_end)
+        # New end is in the future (>13 days from now) — definitely a new
+        # arm, not the stale 3-days-ago value.
+        self.assertGreater(new_end_dt, before)
+        delta = new_end_dt - now_datetime()
+        self.assertGreater(delta.total_seconds(), 13 * 86400)
+        self.assertLess(delta.total_seconds(), 15 * 86400)
+
+
+# ════════════════════════════════════════════════════════════
+# CR-003 follow-up — Grace clock CLEARED by primary submissions
+# ════════════════════════════════════════════════════════════
+
+class TestSubmissionClearsGraceClock(FrappeTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch(grace_days=14)
+
+    def test_submission_clears_grace_state(self):
+        """T7 (primary submission from normal_content_delivery) clears
+        in_grace_window, grace_window_end_at, and grace_window_start.
+        """
+        student_name = _ensure_student("b1")
+        original_end = add_to_date(now_datetime(), days=7)
+        pe_name = _make_pe(self.batch_name, student_name, "b1",
+                           resolved_flow_state=STATE_NORMAL_CONTENT,
+                           grace_window_end_at=original_end,
+                           weekly_video_done=1)
+        pe = frappe.get_doc("ProgramEnrollment", pe_name)
+        # Sanity: clock is armed.
+        self.assertEqual(pe.in_grace_window, 1)
+        self.assertIsNotNone(pe.grace_window_end_at)
+
+        with patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
+            t7_core_submission(pe, points=10, trigger_source="test")
+
+        pe.reload()
+        self.assertEqual(pe.in_grace_window, 0)
+        self.assertIsNone(pe.grace_window_end_at)
+        self.assertIsNone(pe.grace_window_start)
+
+
+# ════════════════════════════════════════════════════════════
+# CR-003 follow-up — T19 and T0 NO LONGER arm the grace clock
+# ════════════════════════════════════════════════════════════
+
+class TestT0T19DoNotArmGrace(FrappeTestCase):
+    """T0 (enrollment) and T19 (week advance) used to arm the grace clock
+    under the original CR-003. The 2026-05-13 follow-up moved arming into
+    the activity-points handler. These tests pin the new behaviour so a
+    regression that re-introduces T0/T19 arming would fail loudly.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch(grace_days=14)
+
+    def test_t0_does_not_arm_grace_clock(self):
+        """T0 (enrollment) does NOT arm the grace clock. The PE starts with
+        no grace_window_end_at; the clock arms only when the student watches
+        their first VideoClass.
+        """
+        student_name = _ensure_student("c1")
+        pe_name = _make_pe(self.batch_name, student_name, "c1")
+        pe = frappe.get_doc("ProgramEnrollment", pe_name)
+        # Sanity: nothing armed pre-T0.
+        self.assertFalse(pe.in_grace_window)
+        self.assertIsNone(pe.grace_window_end_at)
 
         with patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
             t0_enrollment(pe, "test")
 
         pe.reload()
-        self.assertEqual(pe.in_grace_window, 1)
-        self.assertIsNotNone(pe.grace_window_start)
-        self.assertIsNotNone(pe.grace_window_end_at)
+        # T0 does NOT arm.
+        self.assertFalse(pe.in_grace_window,
+                         "T0 must not arm in_grace_window (CR-003 follow-up)")
+        self.assertIsNone(pe.grace_window_end_at,
+                          "T0 must not set grace_window_end_at (CR-003 follow-up)")
+        self.assertIsNone(pe.grace_window_start,
+                          "T0 must not set grace_window_start (CR-003 follow-up)")
 
-        # End - start should be 14 days (give or take a few seconds of
-        # transition latency).
-        delta = get_datetime(pe.grace_window_end_at) - get_datetime(pe.grace_window_start)
-        self.assertAlmostEqual(delta.total_seconds(), 14 * 86400, delta=120)
-
-    def test_t19_re_arms_grace_clock_on_week_advance(self):
-        """t14_week_advance (function name for T19 in the architecture doc)
-        re-arms grace_window_start + grace_window_end_at for the new week.
+    def test_t19_does_not_arm_grace_clock(self):
+        """T19 (week advance) does NOT touch the grace clock fields. They
+        retain whatever the prior week left behind (None if cleared by a
+        submission, or an old timestamp if grace_expired already fired —
+        though that path lands in program_dropped, not here).
         """
-        s = _ensure_student("02")
-        pe_name = _make_pe(
-            self.batch_name, s, "02",
-            resolved_flow_state=STATE_WEEK_COMPLETED,
-            current_week=1,
-            grace_window_end_at=add_to_date(now_datetime(), days=-7),  # stale
-            grace_window_start=add_to_date(now_datetime(), days=-21),
-        )
+        student_name = _ensure_student("c2")
+        # PE entering T19 with no grace state (submission already cleared it).
+        pe_name = _make_pe(self.batch_name, student_name, "c2",
+                           resolved_flow_state=STATE_WEEK_COMPLETED,
+                           current_week=1)
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        # Stale clock at week 1, well in the past.
-        prior_end = get_datetime(pe.grace_window_end_at)
+        # Sanity: PE has no clock at the start.
+        self.assertIsNone(pe.grace_window_end_at)
 
         with patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
             t14_week_advance(pe, 2, week_rule=None, trigger_source="test")
 
         pe.reload()
-        new_end = get_datetime(pe.grace_window_end_at)
-        # New end is in the future, definitely > the old stale end.
-        self.assertGreater(new_end, prior_end)
-        # And ~14 days from now.
-        delta = new_end - now_datetime()
-        self.assertGreater(delta.total_seconds(), 13 * 86400)
-        self.assertLess(delta.total_seconds(), 15 * 86400)
+        # T19 did NOT arm.
+        self.assertIsNone(pe.grace_window_end_at,
+                          "T19 must not set grace_window_end_at (CR-003 follow-up)")
+        # weekly_video_done was reset, which is the gating signal for the
+        # activity-points handler's next arm.
+        self.assertEqual(pe.weekly_video_done, 0)
         self.assertEqual(pe.current_week, 2)
 
-    def test_grace_clock_resets_every_week(self):
-        """Two week advances produce two distinct grace_window_end_at values
-        — proving the clock truly resets on each advance, not just on T0.
+
+# ════════════════════════════════════════════════════════════
+# CR-003 follow-up — Multi-week grace span
+# ════════════════════════════════════════════════════════════
+
+class TestGraceCanSpanMultipleWeeks(FrappeTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch(grace_days=14)
+
+    def test_grace_can_span_multiple_weeks(self):
+        """A student who arms the grace clock on week 1 day 1 and doesn't
+        submit can carry their grace window across the T19 boundary into
+        week 2 — the clock is real-time, not weekly-bound. T19 preserves
+        grace_window_end_at and does not reset it.
+
+        (In production the dispatcher's escalation chain would normally
+        drop the student via t17_grace_expired before week 2 starts, but
+        the multi-week-grace semantic remains: an unsubmitted clock from
+        week 1 keeps ticking into week 2 if T19 happens to fire first.)
         """
-        s = _ensure_student("03")
-        pe_name = _make_pe(self.batch_name, s, "03",
+        student_name = _ensure_student("d1")
+        # Week 1, grace clock armed 10 days from now.
+        original_end = add_to_date(now_datetime(), days=10)
+        pe_name = _make_pe(self.batch_name, student_name, "d1",
+                           current_week=1,
                            resolved_flow_state=STATE_WEEK_COMPLETED,
-                           current_week=1)
+                           weekly_video_done=1,
+                           grace_window_end_at=original_end)
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
+        self.assertEqual(pe.in_grace_window, 1)
 
         with patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync"):
             t14_week_advance(pe, 2, week_rule=None, trigger_source="test")
-            pe.reload()
-            first_end = get_datetime(pe.grace_window_end_at)
 
-            # Move time forward by mutating: we can't actually wait, but we
-            # can compare two close calls. The state machine uses
-            # now_datetime() each time, so the second call's clock should
-            # be >= the first.
-            pe.resolved_flow_state = STATE_WEEK_COMPLETED
-            pe.save(ignore_permissions=True)
-            t14_week_advance(pe, 3, week_rule=None, trigger_source="test")
-            pe.reload()
-            second_end = get_datetime(pe.grace_window_end_at)
+        pe.reload()
+        # Grace window survives the week boundary.
+        self.assertEqual(pe.current_week, 2)
+        self.assertEqual(pe.in_grace_window, 1,
+                         "Grace must persist across T19 (CR-003 follow-up multi-week span)")
+        # grace_window_end_at unchanged from week-1 arm.
+        new_end = get_datetime(pe.grace_window_end_at)
+        self.assertAlmostEqual(
+            (new_end - get_datetime(original_end)).total_seconds(),
+            0, delta=2,
+            msg="T19 must preserve grace_window_end_at across the week boundary",
+        )
 
-        self.assertGreaterEqual(second_end, first_end)
-        self.assertEqual(pe.current_week, 3)
 
+# ════════════════════════════════════════════════════════════
+# CR-003 — preserved tests (T5 + handle_grace_check)
+# ════════════════════════════════════════════════════════════
 
 class TestGraceCheckHandler(FrappeTestCase):
     @classmethod
@@ -258,7 +500,10 @@ class TestT5PreservesGraceClock(FrappeTestCase):
 
     def test_t5_escalation_to_grace_preserves_existing_clock(self):
         """T5 (escalation exhausted with some activity → grace) does NOT
-        reset grace_window_end_at. CR-003: the clock was set at week start.
+        reset grace_window_end_at. CR-003 follow-up: the clock was armed
+        by the activity-points handler when the student watched their
+        week-1 first VideoClass; T5 just transitions the PE into the
+        dead-air tail state and schedules grace_check at that timestamp.
         """
         s = _ensure_student("21")
         original_end = add_to_date(now_datetime(), days=10)  # 10 days from now

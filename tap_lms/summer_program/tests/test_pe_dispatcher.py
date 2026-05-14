@@ -161,7 +161,14 @@ def _make_pe(
 
 
 class TestPeDispatcher(FrappeTestCase):
-    """Dispatcher-level (process_program_actions / dispatch_pending_actions) tests."""
+    """Dispatcher-level (process_program_actions) tests.
+
+    Task #15 (2026-05-13) renamed `dispatch_pending_actions` →
+    `process_program_actions` and bumped DISPATCH_BATCH_SIZE 500→1000. The
+    legacy name is preserved as a thin alias inside pe_dispatcher.py so
+    any caller still importing it via the old name continues to work
+    through one release cycle.
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -213,7 +220,7 @@ class TestPeDispatcher(FrappeTestCase):
         original = pe_dispatcher.HANDLER_MAP[ACTION_CONTENT_DELIVERY]
         pe_dispatcher.HANDLER_MAP[ACTION_CONTENT_DELIVERY] = fake_handler
         try:
-            result = pe_dispatcher.dispatch_pending_actions()
+            result = pe_dispatcher.process_program_actions()
         finally:
             pe_dispatcher.HANDLER_MAP[ACTION_CONTENT_DELIVERY] = original
 
@@ -282,7 +289,7 @@ class TestPeDispatcher(FrappeTestCase):
                 return result
 
             with patch.object(frappe.db, "sql", side_effect=maybe_race):
-                result = pe_dispatcher.dispatch_pending_actions()
+                result = pe_dispatcher.process_program_actions()
 
             # Handler must NOT have been called — atomic claim returned 0 rows.
             self.assertEqual(called, [])
@@ -318,7 +325,7 @@ class TestPeDispatcher(FrappeTestCase):
         original = pe_dispatcher.HANDLER_MAP[ACTION_PAUSE_CHECK]
         pe_dispatcher.HANDLER_MAP[ACTION_PAUSE_CHECK] = fake_pause_check
         try:
-            result = pe_dispatcher.dispatch_pending_actions()
+            result = pe_dispatcher.process_program_actions()
         finally:
             pe_dispatcher.HANDLER_MAP[ACTION_PAUSE_CHECK] = original
 
@@ -377,12 +384,44 @@ class TestPeDispatcher(FrappeTestCase):
 
         try:
             with patch.object(frappe.db, "sql", side_effect=maybe_race):
-                pe_dispatcher.dispatch_pending_actions()
+                pe_dispatcher.process_program_actions()
         finally:
             pe_dispatcher.HANDLER_MAP[ACTION_GRACE_CHECK] = original
 
         # Handler must NOT have been called.
         self.assertEqual(called, [])
+
+    def test_process_program_actions_logs_structured_metrics(self):
+        """Task #15: every tick emits a single structured info log with
+        `claimed`, `skipped`, `errors`, `queue_depth`. Operators monitor
+        these to decide when to scale parallel workers (architecture §8.8).
+
+        We don't assert exact values — they're empty-batch dependent — but
+        the logger MUST be called exactly once with a dict shape that
+        contains the four required keys."""
+        from tap_lms.summer_program import pe_dispatcher
+
+        # No PEs match the dispatcher SELECT (setUp wiped them); the
+        # function should still emit a log line (the empty-batch case is
+        # the most important to monitor — if it stops, the cron is down).
+        captured = []
+
+        class FakeLogger:
+            def info(self, payload):
+                captured.append(payload)
+
+        with patch.object(frappe, "logger", return_value=FakeLogger()):
+            pe_dispatcher.process_program_actions()
+
+        # Exactly one info call.
+        self.assertEqual(len(captured), 1)
+        payload = captured[0]
+        self.assertIsInstance(payload, dict)
+        # Required keys per the task #15 spec.
+        for required_key in ("claimed", "skipped", "errors", "queue_depth"):
+            self.assertIn(required_key, payload)
+        # `dispatcher` tag identifies the source.
+        self.assertEqual(payload.get("dispatcher"), "process_program_actions")
 
 
 class TestPeDispatcherHandlers(FrappeTestCase):

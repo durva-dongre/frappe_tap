@@ -44,7 +44,7 @@ PE_CONTEXT = {
     "current_path": "Core",
     "current_tier": "Basic",
     "course_level": "beginner",
-    "last_escalation_step": 0,
+    "current_escalation_step": 0,
 }
 
 
@@ -261,10 +261,10 @@ class TestFeedbackPipelineRetry(unittest.TestCase):
     def test_gcs_upload_is_idempotent_on_retry(
         self, mock_db, mock_enqueue, mock_log_error, mock_logger
     ):
-        """If ImgSubmission.img_url is already a GCS URL (a previous attempt
+        """If Submission.submission_url is already a GCS URL (a previous attempt
         succeeded at GCS but failed at the broker), the retry MUST NOT re-upload
         — that wastes GCS storage AND the Glific URL may have expired by then."""
-        # Simulate ImgSubmission.img_url already pointing at the GCS path.
+        # Simulate Submission.submission_url already pointing at the GCS path.
         mock_db.get_value.return_value = GCS_URL
 
         with patch("tap_lms.summer_program.save_submission.pika") as mock_pika, \

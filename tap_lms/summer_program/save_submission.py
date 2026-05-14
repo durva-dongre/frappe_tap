@@ -15,8 +15,14 @@ Atomic idempotent submission with:
 Called by:
   - SP_Content_Delivery wait node (Path A — inline submission)
   - SP_Escalation wait node (Path A — inline during escalation)
-  - SP_Grace_Entry / SP_Grace_Reminder wait node (Path A — during grace)
   - SP_Submission sub-flow (Path B — via SP_Incoming_Router)
+
+CR-003 follow-up (2026-05-13): SP_Grace_Entry / SP_Grace_Reminder
+references retired — both flows are deleted. Submissions during the grace
+window arrive via SP_Submission (Path B) or via inline wait nodes on
+SP_Content_Delivery / SP_Escalation if the student happens to be in those
+states when grace expires. Either way the primary-submission transitions
+(T7/T9/T17/T3) clear the grace clock.
 """
 import frappe
 import json
@@ -145,7 +151,7 @@ def save_submission(student_id, assignment_id, submission, week=None):
                   "submission_type": payload["submission_type"],
                   "points_awarded": points,
                   "week": current_week,
-                  "escalation_step_at_submit": pe.last_escalation_step or 0,
+                  "escalation_step_at_submit": pe.current_escalation_step or 0,
                   "transition": transition_id,
                   "submission_id": submission_doc.name if submission_doc else None,
               })
@@ -276,7 +282,7 @@ def _calculate_points(pe):
     if not steps:
         return 0
 
-    sent_count = pe.last_escalation_step or 0
+    sent_count = pe.current_escalation_step or 0
 
     if sent_count == 0:
         # Submitted before any escalation → highest points (step 1)
@@ -306,7 +312,7 @@ def _create_submission(pe, student_id, week, payload, assignment_id, is_primary)
     doc.status = "Pending" if is_primary else "Completed"
     doc.program_enrollment = pe.name
     doc.week = week
-    doc.escalation_step_at_submit = pe.last_escalation_step or 0
+    doc.escalation_step_at_submit = pe.current_escalation_step or 0
     doc.is_primary = 1 if is_primary else 0
     doc.created_at = now_datetime()
     doc.insert(ignore_permissions=True)
@@ -529,7 +535,7 @@ def _build_pe_context(pe):
         "current_path": pe.current_path,
         "current_tier": pe.current_tier,
         "course_level": pe.course_level,
-        "last_escalation_step": pe.last_escalation_step,
+        "current_escalation_step": pe.current_escalation_step,
     }
 
 
@@ -615,7 +621,7 @@ def enqueue_submission(submission_id, pe_context=None, retry_count=0):
             "escalation_step_at_submit": getattr(
                 submission,
                 "escalation_step_at_submit",
-                pe_context.get("last_escalation_step", 0),
+                pe_context.get("current_escalation_step", 0),
             ),
             "archetype": pe_context.get("archetype", ""),
             "experiment_arm": pe_context.get("experiment_arm", ""),

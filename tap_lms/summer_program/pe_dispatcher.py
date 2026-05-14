@@ -12,8 +12,8 @@ flows on entire groups, this dispatcher handles individual student timelines.
 Register in hooks.py:
     scheduler_events = {
         "cron": {
-            "*/2 * * * *": [
-                "tap_lms.summer_program.pe_dispatcher.dispatch_pending_actions",
+            "*/1 * * * *": [
+                "tap_lms.summer_program.pe_dispatcher.process_program_actions",
             ]
         }
     }
@@ -44,7 +44,6 @@ from tap_lms.summer_program.constants import (
     STATE_SUBMITTED_AWAITING,
     STATE_GRACE_WAITING, STATE_WEEK_COMPLETED,
     STATE_PAUSED_BINGE,
-    CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
 )
 from tap_lms.summer_program.event_log import log_event
 
@@ -53,13 +52,18 @@ from tap_lms.summer_program.event_log import log_event
 # DISPATCHER (entry point)
 # ════════════════════════════════════════════════════════════
 
-# Max PEs to process per dispatch cycle (prevents runaway)
-DISPATCH_BATCH_SIZE = 500
+# Max PEs to process per dispatch cycle. Bumped 500 → 1000 (task #15)
+# for the 100K-student MVP target: a week-boundary T19 burst can ship up
+# to 100K PEs into the "due" set within a minute, and 4 parallel workers
+# at LIMIT 1000 × 1-min cron = 240K/hour drains that burst in ~25 min.
+# See architecture.md §8.8 sizing math and ADR-003 audit log (2026-05-13).
+DISPATCH_BATCH_SIZE = 1000
 
 
-def dispatch_pending_actions():
+def process_program_actions():
     """
-    Main dispatcher entry point. Called every 1-2 minutes by Frappe scheduler.
+    Main dispatcher entry point. Called every 1 minute by Frappe scheduler
+    (cron `*/1 * * * *`). v4.1 §7.2 spec; architecture.md §8.1 / §8.8.
 
     Finds all PEs where:
       - next_action_at <= now
@@ -68,6 +72,11 @@ def dispatch_pending_actions():
       - next_action_type is a per-PE individual-timer action
 
     Routes each PE to the appropriate handler based on next_action_type.
+
+    Renamed from `dispatch_pending_actions` (task #15, 2026-05-13). The
+    legacy name is preserved below as a thin alias for one release cycle
+    so any cron entry that wasn't yet updated keeps working through the
+    cutover.
 
     Note: there is no batch-level partition. Collection-mode batchers (when
     built) filter on different next_action_type values; this dispatcher and
@@ -91,7 +100,7 @@ def dispatch_pending_actions():
         SELECT pe.name, pe.next_action_type, pe.next_action_at,
                pe.batch, pe.student, pe.glific_id,
                pe.resolved_flow_state, pe.current_week,
-               pe.last_escalation_step, pe.current_path,
+               pe.current_escalation_step, pe.current_path,
                pe.journey_label
         FROM `tabProgramEnrollment` pe
         WHERE pe.next_action_at IS NOT NULL
@@ -106,14 +115,11 @@ def dispatch_pending_actions():
         as_dict=True,
     )
 
-    if not candidates:
-        return {"dispatched": 0, "skipped": 0, "errors": 0}
-
     processed = 0
     skipped = 0
     errors = 0
 
-    for pe_row in candidates:
+    for pe_row in (candidates or []):
         # Atomic claim per P-001: clear next_action_at conditionally on the
         # journey_label still matching what we read. If 0 rows are updated,
         # another worker (or a flow callback) moved the state under us and
@@ -154,7 +160,37 @@ def dispatch_pending_actions():
     if processed or errors or skipped:
         frappe.db.commit()
 
+    # Observability for 100K-scale operations. Operators monitor `claimed`
+    # (throughput) and `queue_depth` (lag indicator) to decide when to scale
+    # parallel workers. See architecture §8.8.
+    try:
+        queue_depth = frappe.db.sql("""
+            SELECT COUNT(*)
+              FROM "tabProgramEnrollment"
+             WHERE next_action_at IS NOT NULL
+               AND next_action_at <= %s
+               AND program_status = ANY(%s)
+               AND next_action_type != ''
+        """, (now, [PROGRAM_ACTIVE, PROGRAM_PAUSED]))[0][0]
+    except Exception:
+        queue_depth = -1  # log "unknown" rather than crash the tick
+
+    frappe.logger("sp_dispatcher").info({
+        "dispatcher": "process_program_actions",
+        "claimed": processed,
+        "skipped": skipped,
+        "errors": errors,
+        "queue_depth": queue_depth,
+    })
+
     return {"dispatched": processed, "skipped": skipped, "errors": errors}
+
+
+# Backward-compat alias (task #15, 2026-05-13). Resolves any code path or
+# cron entry that still references the pre-rename name through one release
+# cycle. Delete once `bench show-scheduler-events` confirms no remaining
+# call site uses the old name.
+dispatch_pending_actions = process_program_actions
 
 
 def _dispatch_single(pe_row):
@@ -238,7 +274,7 @@ def handle_escalation(pe_row):
 
     pe = frappe.get_doc("ProgramEnrollment", pe_row.name)
     state = pe.resolved_flow_state
-    current_step = pe.last_escalation_step or 0
+    current_step = pe.current_escalation_step or 0
 
     # Get escalation steps config for this student
     steps = _get_escalation_steps_for_pe(pe)
@@ -274,33 +310,28 @@ def handle_escalation(pe_row):
     next_hours = step_config.get("hours_after_previous", 24)
     escalation_type = step_config.get("escalation_type") or "help_note_a"
 
-    # CR-003 §"Escalation flow — new semantics" step 3:
-    # Push escalation_order + escalation_type to Glific BEFORE any flow
-    # trigger or Vocallabs enqueue. This is the contract the updated
-    # SP_Escalation flow reads from to pick its per-channel branch.
-    # Failure to push is logged but does not block the dispatcher — the
-    # next state-transition's _enqueue_contact_field_sync will re-sync
-    # escalation_order, and the next handle_escalation tick will push
-    # escalation_type again on its branch.
-    if pe.glific_id:
-        _push_escalation_contact_fields(
-            pe.glific_id, pe.name, pe.student,
-            escalation_order=next_step,
-            escalation_type=escalation_type,
-        )
-
-    # Transition to escalation state + schedule next step.
-    # Note: t2/t4/t8/t10 do NOT fire Glific themselves — they just bump
-    # last_escalation_step and schedule next_action_at. The flow trigger
-    # (or Vocallabs enqueue) happens below, after the state transition.
+    # CR-003 §"Escalation flow — new semantics" step 3 (refined post-impl):
+    # escalation_order + escalation_type are now written to PE inside the
+    # T2/T4/T8/T10 transitions below, and the standard per-transition
+    # _enqueue_contact_field_sync pushes BOTH to Glific before the flow
+    # trigger fires (the contact-field job is enqueued via
+    # `enqueue_after_commit=True` inside transition(), which runs before this
+    # function returns to the dispatcher's row commit). The previous eager
+    # `_push_escalation_contact_fields` helper has been removed — one sync
+    # path, less duplication.
+    #
+    # Transition to escalation state + schedule next step. t2/t4/t8/t10
+    # bump current_escalation_step AND write current_escalation_type from
+    # the resolved step config. The flow trigger (or Vocallabs enqueue)
+    # happens below, after the state transition.
     if state == STATE_NORMAL_CONTENT:
-        t2_start_escalation(pe, next_step, "dispatcher")
+        t2_start_escalation(pe, next_step, escalation_type, "dispatcher")
     elif state == STATE_NORMAL_ESCALATION:
-        t4_next_escalation_step(pe, next_step, next_hours, "dispatcher")
+        t4_next_escalation_step(pe, next_step, next_hours, escalation_type, "dispatcher")
     elif state == STATE_REMEDIAL_CONTENT:
-        t8_start_remedial_escalation(pe, next_step, "dispatcher")
+        t8_start_remedial_escalation(pe, next_step, escalation_type, "dispatcher")
     elif state == STATE_REMEDIAL_ESCALATION:
-        t10_next_remedial_escalation(pe, next_step, next_hours, "dispatcher")
+        t10_next_remedial_escalation(pe, next_step, next_hours, escalation_type, "dispatcher")
     else:
         _clear_action(pe_row.name)
         return
@@ -329,41 +360,11 @@ def handle_escalation(pe_row):
         _trigger_flow(flow_id, pe.glific_id, pe.name, "escalation")
 
 
-def _push_escalation_contact_fields(glific_id, pe_name, student_id,
-                                    escalation_order, escalation_type):
-    """Push escalation_order + escalation_type to Glific via the same async
-    retry+DLQ pipeline used by transition syncs (pattern P-007 / L-015).
-
-    Reusing _sync_contact_fields_job keeps both pushes (the per-transition
-    full-cache push and this per-step delta push) going through one retry
-    machinery. We only push the two CR-003 fields here so the call is
-    cheap and targeted — Glific's update_contact_fields is per-field
-    idempotent, so partial pushes are safe.
-    """
-    fields = {
-        CF_ESCALATION_ORDER: str(escalation_order),
-        CF_ESCALATION_TYPE: str(escalation_type or ""),
-    }
-    try:
-        frappe.enqueue(
-            "tap_lms.summer_program.state_machine._sync_contact_fields_job",
-            queue="short",
-            timeout=30,
-            enqueue_after_commit=True,
-            glific_id=str(glific_id),
-            fields=fields,
-            pe_name=pe_name,
-            retry_count=0,
-            student_id=student_id,
-        )
-    except Exception as e:
-        # Don't crash the dispatcher tick if the queue is briefly down —
-        # log and continue. The Glific contact cache will catch up on the
-        # next state-transition sync.
-        frappe.log_error(
-            f"CR-003 escalation contact-field enqueue failed for PE {pe_name}: {e}",
-            "SP Escalation Contact Field Sync",
-        )
+# CR-003 follow-up: `_push_escalation_contact_fields` removed. The two
+# CR-003 fields (escalation_order, escalation_type) now flow via PE columns
+# (current_escalation_step, current_escalation_type) written by the
+# T2/T4/T8/T10 transitions, then pushed to Glific by the standard
+# _enqueue_contact_field_sync. One push path, no duplication.
 
 
 def handle_feedback_timeout(pe_row):
@@ -652,3 +653,56 @@ def _get_next_week_open_date(batch, target_week):
     # Each week opens 7 days after the previous
     days_offset = (target_week - 1) * 7
     return add_to_date(get_datetime(batch.start_date), days=days_offset)
+
+
+def _record_delivery_failure(pe_name):
+    """Bump `delivery_failure_count`; chain to T23 when the threshold is hit.
+
+    Intended to be called from `_trigger_flow` (or any other per-PE delivery
+    helper) when a Glific API call fails after retries. Currently `_trigger_flow`
+    catches exceptions and only calls `frappe.log_error` — the per-PE failure
+    counter is NOT incremented from there yet because `start_contact_flow` is a
+    fire-and-forget request without delivery confirmation. The proper wire-up
+    point is the Glific webhook for delivery-status events (Phase 1), at which
+    point this helper becomes the canonical T25→T23 chain. The helper is shipped
+    now so the state-machine plumbing is in place when the webhook lands.
+
+    Idempotent on already-terminal PEs (completed / dropped) — the helper
+    early-returns without touching the counter so a late delivery-failure event
+    can't resurrect a dropped PE.
+
+    Atomic increment uses the COALESCE-update pattern (P-002) on the column to
+    survive races against quiz/submission counter writes that may share the
+    same row. We load the PE doc only to read the post-update value for the
+    threshold check; the increment itself is the atomic SQL.
+    """
+    from tap_lms.summer_program.state_machine import t23_auto_drop
+    from tap_lms.summer_program.constants import (
+        MAX_DELIVERY_FAILURES,
+        PROGRAM_ACTIVE,
+        PROGRAM_PAUSED,
+    )
+
+    # Atomic increment with the status filter folded INTO the UPDATE WHERE,
+    # so a PE that transitions to terminal between this caller's intent and
+    # the UPDATE doesn't get its counter bumped. The 0-row return means the
+    # PE was already terminal — short-circuit. Eliminates the race between
+    # a preliminary status read and the increment (M1 fix, 2026-05-13;
+    # L-018 concurrency rule).
+    rows = frappe.db.sql(
+        """
+        UPDATE "tabProgramEnrollment"
+           SET delivery_failure_count = COALESCE(delivery_failure_count, 0) + 1
+         WHERE name = %s
+           AND program_status = ANY(%s)
+        RETURNING delivery_failure_count
+        """,
+        (pe_name, [PROGRAM_ACTIVE, PROGRAM_PAUSED]),
+    )
+    if not rows:
+        return  # PE was already terminal, or didn't exist
+
+    new_count = rows[0][0]
+    if new_count >= MAX_DELIVERY_FAILURES:
+        pe = frappe.get_doc("ProgramEnrollment", pe_name)
+        t23_auto_drop(pe, reason="delivery_failure", trigger_source="dispatcher")

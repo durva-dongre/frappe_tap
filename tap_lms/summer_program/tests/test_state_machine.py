@@ -6,8 +6,8 @@ Covers:
     counter bumps and `weekly_submission_done` sticky flag.
   - T19 (`t14_week_advance`) restructured to compute streak/gem updates from
     sticky flags before resetting weeklies.
-  - `_enqueue_contact_field_sync` extended to push gamification fields
-    (cache size 27 total, 18 existing + 9 gamification). `weekly_video_done` is NOT
+  - `_enqueue_contact_field_sync` extended to push 8 new gamification fields
+    (cache size 26 total, 18 existing + 8 new). `weekly_video_done` is NOT
     pushed. CR-003 adds 1 more (escalation_order) to the per-transition push
     for a total of 20 fields per transition; the 28th cache field
     (escalation_type) is pushed by the dispatcher per-step.
@@ -99,7 +99,6 @@ def _make_pe(
     weekly_submission_points=0,
     weekly_activity_points=0,
     weekly_quiz_points=0,
-    bonus_quiz_points=0,
     total_activity_points=0,
     total_quiz_points=0,
 ):
@@ -123,7 +122,6 @@ def _make_pe(
     pe.weekly_submission_points = weekly_submission_points
     pe.weekly_activity_points = weekly_activity_points
     pe.weekly_quiz_points = weekly_quiz_points
-    pe.bonus_quiz_points = bonus_quiz_points
     pe.total_activity_points = total_activity_points
     pe.total_quiz_points = total_quiz_points
     pe.insert(ignore_permissions=True)
@@ -358,8 +356,8 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
 class TestSyncContactFieldsExtended(FrappeTestCase):
     """`_enqueue_contact_field_sync` must include the 8 CR-002 v2 gamification
     fields alongside the existing 18 plus the 2 new CR-003 escalation-routing
-    fields (escalation_order, escalation_type — though escalation_type is
-    pushed explicitly by the dispatcher per-step, not by this helper).
+    fields (escalation_order AND escalation_type — post-2026-05-13 follow-up
+    both flow via this standard sync; the eager dispatcher push was removed).
     """
 
     @classmethod
@@ -370,18 +368,18 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
     @patch("tap_lms.summer_program.state_machine.frappe.enqueue")
     def test_sync_contact_fields_pushes_expected_fields(self, mock_enqueue):
         """The fields dict serialized into the background job includes the
-        11 state-mutating fields plus 8 new gamification fields plus 1 new
-        CR-003 field (escalation_order) = 20 per-transition push fields.
-        Plus the 7 immutable enrollment-time fields = 27 total in the
-        Glific cache (escalation_type is the 28th, pushed by the dispatcher
-        on each step rather than per-transition)."""
+        11 state-mutating fields plus 8 new gamification fields plus 2 new
+        CR-003 fields (escalation_order + escalation_type) = 21 per-transition
+        push fields. Plus the 7 immutable enrollment-time fields = 28 total
+        in the Glific cache. Post 2026-05-13 follow-up both CR-003 fields
+        flow via this standard sync; the eager dispatcher push was deleted."""
         student = _ensure_student("CFSYNC")
         pe = _make_pe(
             self.batch_name, student, "CFSYNC",
             current_streak=2, special_gems=3,
             weekly_submission_done=1, weekly_video_done=1,
             total_activity_points=42, weekly_activity_points=10,
-            total_quiz_points=33, weekly_quiz_points=8, bonus_quiz_points=6,
+            total_quiz_points=33, weekly_quiz_points=8,
             total_submission_points=51, weekly_submission_points=25,
         )
 
@@ -391,12 +389,11 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         kwargs = mock_enqueue.call_args.kwargs
         fields = kwargs.get("fields") or {}
 
-        # All per-transition gamification fields must be present
+        # All 8 new gamification fields must be present
         self.assertIn("total_activity_points", fields)
         self.assertIn("weekly_activity_points", fields)
         self.assertIn("total_quiz_points", fields)
         self.assertIn("weekly_quiz_points", fields)
-        self.assertIn("bonus_quiz_points", fields)
         self.assertIn("total_submission_points", fields)
         self.assertIn("weekly_submission_points", fields)
         self.assertIn("special_gems", fields)
@@ -407,7 +404,6 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         self.assertEqual(fields["weekly_activity_points"], "10")
         self.assertEqual(fields["total_quiz_points"], "33")
         self.assertEqual(fields["weekly_quiz_points"], "8")
-        self.assertEqual(fields["bonus_quiz_points"], "6")
         self.assertEqual(fields["total_submission_points"], "51")
         self.assertEqual(fields["weekly_submission_points"], "25")
         self.assertEqual(fields["special_gems"], "3")
@@ -423,18 +419,25 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
             "current_tier", "program_status", "total_points", "current_streak",
             "grace_window_end_at", "current_expected_submission_type",
             "last_escalation_step", "submission_count",
+            # last_escalation_step is the Glific CONTACT FIELD name (public
+            # contract per L-008). The PE column was renamed to
+            # current_escalation_step but the contact field name stays.
         ):
             self.assertIn(k, fields, f"existing field {k} missing from sync")
 
-        # CR-003: escalation_order is included in the per-transition sync
-        # (escalation_type is pushed separately by the dispatcher per-step).
+        # CR-003 (post-impl): escalation_order AND escalation_type are both
+        # included in the per-transition sync. The eager
+        # _push_escalation_contact_fields helper was removed — the dispatcher
+        # writes current_escalation_step + current_escalation_type to PE
+        # inside T2/T4/T8/T10, and this sync map pushes both to Glific.
         self.assertIn("escalation_order", fields)
+        self.assertIn("escalation_type", fields)
 
         # Total count = 11 state-mutating + 8 CR-002 v2 gamification +
-        # 1 CR-003 (escalation_order) = 20 per-transition push fields.
-        # (The other 7 immutables + escalation_type live elsewhere.)
+        # 2 CR-003 (escalation_order + escalation_type) = 21 per-transition
+        # push fields. (The other 7 immutables live elsewhere.)
         self.assertEqual(
-            len(fields), 20,
+            len(fields), 21,
             "Per-transition sync pushes 11 existing + 8 gamification + "
-            "1 CR-003 (escalation_order) = 20 fields",
+            "2 CR-003 (escalation_order + escalation_type) = 21 fields",
         )
