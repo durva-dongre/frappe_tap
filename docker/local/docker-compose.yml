@@ -1,0 +1,60 @@
+name: tap_lms_local
+
+services:
+  dev:
+    build:
+      context: ../..
+      dockerfile: docker/local/Dockerfile
+    container_name: tap_lms_dev
+    command: sleep infinity
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
+    env_file:
+      - ../../env.local
+    environment:
+      SHELL: /bin/bash
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+      - "${SOCKETIO_PORT:-9000}:9000"
+    volumes:
+      - bench-data:/home/frappe/frappe-bench
+      - ../..:/workspace/frappe_tap:cached
+    working_dir: /home/frappe
+
+  postgres:
+    image: postgres:15
+    container_name: tap_lms_postgres
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_DB: "${POSTGRES_DB:-postgres}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  redis-cache:
+    image: redis:7-alpine
+    container_name: tap_lms_redis_cache
+    ports:
+      - "${REDIS_CACHE_PORT:-6379}:6379"
+
+  redis-queue:
+    image: redis:7-alpine
+    container_name: tap_lms_redis_queue
+    ports:
+      - "${REDIS_QUEUE_PORT:-6380}:6379"
+
+volumes:
+  bench-data:
+  postgres-data:

@@ -6,3 +6,7 @@ tags
 node_modules
 .vscode
 Postman/
+.env
+.env.*
+!.env.example
+env.local
