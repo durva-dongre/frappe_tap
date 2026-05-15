@@ -636,7 +636,7 @@ def process_submission_async(submission_id, submission_url=None, pe_context=None
         submission = frappe.get_doc("Submission", submission_id)
 
         if submission.submission_type in URL_SUBMISSION_TYPES:
-            from tap_lms.imgana.submission import upload_to_gcs
+            from tap_lms.imgana.gcs_client import upload_to_gcs
 
             uploaded_url = upload_to_gcs(submission_url, submission.name)
             submission.submission_url = uploaded_url

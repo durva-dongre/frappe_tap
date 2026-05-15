@@ -3,10 +3,15 @@ import json
 import pika
 import requests
 from urllib.parse import urlparse
-from google.cloud import storage
 import os
 from frappe.utils.file_manager import get_file_path
 import base64
+from tap_lms.imgana.gcs_client import (
+    AUTHENTICATED_BUCKET_TYPE,
+    upload_audio_feedback_to_gcs,
+    upload_to_gcs as _upload_to_gcs,
+    get_gcs_client as _get_gcs_client,
+)
 
 
 def get_rabbitmq_settings():
@@ -30,18 +35,7 @@ def get_gcs_client():
     Get GCS client using credentials from GCS Settings DocType.
     Returns tuple of (client, bucket_name) or None if disabled.
     """
-    settings = frappe.get_single("GCS Settings")
-    
-    if not settings.enabled:
-        return None
-    
-    # Parse credentials JSON
-    credentials_dict = json.loads(settings.credentials_json)
-    
-    # Create client from credentials
-    client = storage.Client.from_service_account_info(credentials_dict)
-    
-    return client, settings.bucket_name
+    return _get_gcs_client(AUTHENTICATED_BUCKET_TYPE)
 
 
 def get_content_type_from_response(response, filename):
@@ -159,56 +153,7 @@ def upload_audio_to_gcs(local_audio_path: str, submission_id: str, original_file
     Returns:
         Public URL of the uploaded audio file
     """
-    try:
-        # Get GCS client
-        result = get_gcs_client()
-        
-        if result is None:
-            frappe.throw("GCS Storage is not enabled. Enable it in GCS Settings.")
-        
-        client, bucket_name = result
-        
-        # Ensure the local file exists
-        if not os.path.exists(local_audio_path):
-            raise FileNotFoundError(f"Audio file not found at {local_audio_path}")
-        
-        # Get file extension and determine content type
-        ext = os.path.splitext(original_filename)[1].lower()
-        content_type_map = {
-            '.mp3': 'audio/mpeg',
-            '.wav': 'audio/wav',
-            '.ogg': 'audio/ogg',
-            '.m4a': 'audio/mp4',
-            '.aac': 'audio/aac',
-        }
-        content_type = content_type_map.get(ext, 'audio/mpeg')
-        
-        # Create GCS path: feedback/{submission_id}_{original_filename}
-        gcs_filename = f"audio_feedback/{submission_id}_{original_filename}"
-        
-        # Upload to GCS
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(gcs_filename)
-        
-        # Upload file with explicit content type
-        with open(local_audio_path, 'rb') as f:
-            blob.upload_from_file(f, content_type=content_type)
-        
-        # Generate public URL
-        public_url = f"https://storage.googleapis.com/{bucket_name}/{gcs_filename}"
-        
-        frappe.logger("submission").info(
-            f"Audio uploaded to GCS: {local_audio_path} -> {public_url} (content_type: {content_type})"
-        )
-        
-        return public_url
-        
-    except FileNotFoundError as e:
-        frappe.logger("submission").error(f"Audio file not found: {str(e)}")
-        raise frappe.ValidationError(f"Audio file not found: {str(e)}")
-    except Exception as e:
-        frappe.logger("submission").error(f"Failed to upload audio to GCS: {str(e)}")
-        raise frappe.ValidationError(f"Failed to upload audio to GCS: {str(e)}")
+    return upload_audio_feedback_to_gcs(local_audio_path, submission_id, original_filename)
 
 
 def upload_audio_url_to_gcs(audio_url: str, submission_id: str) -> str:
@@ -362,24 +307,7 @@ def upload_to_gcs(submission_url, submission_name):
     Detect media type (image or video) from the URL extension and upload to GCS.
     Returns the public URL.
     """
-    # Supported image, video, and audio extensions
-    image_exts = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'}
-    video_exts = {'mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv'}
-    audio_exts = {'mp3', 'wav', 'ogg', 'opus', 'm4a', 'aac', 'flac'}
-
-    url_without_query = submission_url.split("?", 1)[0].lower()
-    if "." in url_without_query:
-        ext = url_without_query.rsplit(".", 1)[-1]
-        if ext in image_exts:
-            return upload_image_to_gcs(submission_url, submission_name)
-        if ext in video_exts:
-            return upload_video_to_gcs(submission_url, submission_name)
-        if ext in audio_exts:
-            return upload_audio_url_to_gcs(submission_url, submission_name)
-
-
-    # If no extension is detected, default to image upload
-    return upload_image_to_gcs(submission_url, submission_name)
+    return _upload_to_gcs(submission_url, submission_name)
 
 
 @frappe.whitelist(allow_guest=True)
