@@ -111,8 +111,8 @@ def get_student_progress(student_id: str, course_level: str) -> dict:
         "total_time_spent_seconds": 0
     })
     doc.insert(ignore_permissions=True)
-    frappe.db.commit()
-    
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
+
     return frappe.db.get_value(
         "StudentStageProgress", doc.name,
         ["name", "student", "stage", "status", "current_week", "current_tier",
@@ -129,7 +129,7 @@ def update_progress(progress_name: str, updates: dict):
     """Update progress record."""
     updates["last_activity_timestamp"] = now_datetime()
     frappe.db.set_value("StudentStageProgress", progress_name, updates)
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
 
 def get_first_learning_unit(course_level: str, week_no: int, tier: str) -> str:

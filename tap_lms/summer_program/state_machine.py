@@ -28,7 +28,7 @@ from tap_lms.summer_program.constants import (
     LABEL_COMPLETED, LABEL_DROPPED, LABEL_WEEK_ADVANCED,
     PROGRAM_ACTIVE, PROGRAM_PAUSED, PROGRAM_COMPLETED, PROGRAM_DROPPED,
     PATH_CORE, PATH_REMEDIAL,
-    ACTION_ESCALATION, ACTION_CONTENT_DELIVERY, ACTION_FEEDBACK_NOTIFICATION,
+    ACTION_ESCALATION, ACTION_CONTENT_DELIVERY,
     ACTION_FEEDBACK_TIMEOUT, ACTION_WEEK_ADVANCEMENT,
     ACTION_GRACE_CHECK,
     ACTION_PAUSE_CHECK,
@@ -377,10 +377,15 @@ def t3_escalation_submission(pe, points=0, trigger_source="flow_callback"):
     (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
     primary submission ends the week's grace window even if the student
     submitted before the dispatcher escalated all the way to grace_waiting.
+
+    NOTE: submission_count is owned by save_submission._try_claim_primary
+    (atomic claim); state-machine transitions no longer bump it — see
+    task #80 / audit 2026-05-15. Removing the bump here prevents the
+    double-increment that occurred when _try_claim_primary's UPDATE +
+    this transition's update both incremented the column.
     """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
-        "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
         # CR-002 v2: submission-points split + streak/gems/sticky flag
@@ -511,10 +516,13 @@ def t7_core_submission(pe, points=0, trigger_source="flow_callback"):
     (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
     primary submission ends the week's grace window (which the activity-points
     handler armed when the student watched their first VideoClass).
+
+    NOTE: submission_count is owned by save_submission._try_claim_primary
+    (atomic claim); state-machine transitions no longer bump it — see
+    task #80 / audit 2026-05-15.
     """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
-        "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
         # CR-002 v2: submission-points split + streak/gems/sticky flag
@@ -559,10 +567,13 @@ def t9_remedial_submission(pe, points=0, trigger_source="flow_callback"):
     CR-003 follow-up (2026-05-13): also clears the grace clock fields
     (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
     primary submission ends the week's grace window.
+
+    NOTE: submission_count is owned by save_submission._try_claim_primary
+    (atomic claim); state-machine transitions no longer bump it — see
+    task #80 / audit 2026-05-15.
     """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
-        "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
         # CR-002 v2: submission-points split + streak/gems/sticky flag
@@ -771,13 +782,16 @@ def t17_grace_submission(pe, points=0, trigger_source="flow_callback"):
     sticky `weekly_submission_done` flag, and increment `current_streak` and
     `special_gems` — all in the same atomic save. Streak/gems increment AT
     SUBMISSION TIME, not deferred to T19.
+
+    NOTE: submission_count is owned by save_submission._try_claim_primary
+    (atomic claim); state-machine transitions no longer bump it — see
+    task #80 / audit 2026-05-15.
     """
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "in_grace_window": 0,
         "grace_window_start": None,
         "grace_window_end_at": None,
-        "submission_count": (pe.submission_count or 0) + 1,
         "last_submission_at": now_datetime(),
         "total_points": (pe.total_points or 0) + points,
         # CR-002 v2: submission-points split + streak/gems/sticky flag

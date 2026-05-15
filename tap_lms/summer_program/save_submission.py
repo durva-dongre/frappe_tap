@@ -44,7 +44,7 @@ URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 
 
 @frappe.whitelist(allow_guest=True)
-def save_submission(student_id, assignment_id, submission, week=None):
+def save_submission(student_id, assignment_id=None, submission=None, week=None, content_id=None):
     """
     API A3: save_submission
 
@@ -56,11 +56,34 @@ def save_submission(student_id, assignment_id, submission, week=None):
                        (e.g. "B2_FL_L1_RA12-Basic")
         submission: URL, text, or emoji submitted by the student
         week: Override week number (defaults to PE.current_week)
+        content_id: DEPRECATED alias for assignment_id. Older Glific flows
+                    use this name; pattern P-006 keeps it around for one
+                    cycle with a deprecation log. New flows should use
+                    assignment_id. Restored 2026-05-15 (task #78 / audit).
 
     Returns:
         dict with: status (accepted|duplicate|rejected), is_primary,
                    points_awarded, submission_count, submission_id
     """
+    # P-006 deprecation alias (L-009): older Glific flows pass `content_id`.
+    # Map it to `assignment_id` and log so we can track call-sites that still
+    # use the legacy name before removing the alias.
+    if assignment_id is None and content_id is not None:
+        frappe.log_error(
+            f"save_submission called with legacy 'content_id' param "
+            f"(student_id={student_id}). Update Glific flow to use 'assignment_id'.",
+            "SP API Deprecation",
+        )
+        assignment_id = content_id
+
+    if not assignment_id:
+        frappe.local.response.update({
+            "success": False,
+            "status": "missing_param",
+            "error_detail": "assignment_id (or legacy content_id) is required",
+        })
+        return
+
     student_id = _resolve_student(student_id)
     if not student_id:
         frappe.local.response.update({
@@ -99,27 +122,66 @@ def save_submission(student_id, assignment_id, submission, week=None):
         pe=pe,
     )
 
-    # ── Atomic is_primary check ─────────────────────────────
-    # Use atomic UPDATE to claim primary submission.
-    # Only succeeds if journey_label is still 'content_delivered'
-    # (or any pre-submission label). If it's already 'submitted',
-    # this is a duplicate.
+    # ── Create Submission record FIRST (task #81 / audit 2026-05-15) ─
+    # Insert the Submission inside a savepoint BEFORE claiming primary.
+    # Previous order (claim → insert) could leave the PE with
+    # journey_label='submitted' + submission_count bumped but no Submission
+    # row if the insert failed — retries would then see "duplicate" and
+    # silently drop the real submission. With this order, an insert failure
+    # rolls back the savepoint and leaves PE state untouched.
+    #
+    # is_primary=0 is a placeholder; we flip it after the atomic claim
+    # succeeds via a targeted set_value (no full reload needed).
+    sp_name = f"sub_create_{frappe.utils.random_string(8)}"
+    submission_doc = None
+    try:
+        frappe.db.savepoint(sp_name)
+        submission_doc = _create_submission(
+            pe=pe,
+            student_id=student_id,
+            week=current_week,
+            payload=payload,
+            assignment_id=assignment_id,
+            is_primary=False,  # provisional — flipped after claim succeeds
+        )
+        frappe.db.release_savepoint(sp_name)
+    except Exception as e:
+        frappe.db.rollback(save_point=sp_name)
+        frappe.log_error(
+            f"Submission insert failed for student {student_id}, "
+            f"week {current_week}: {e}",
+            "SP Save Submission",
+        )
+        frappe.local.response.update({
+            "success": False,
+            "status": "insert_failed",
+            "error_detail": "Could not record submission",
+        })
+        return
+
+    # ── Atomic is_primary claim ─────────────────────────────
+    # Atomic UPDATE on PE.journey_label decides who is primary. Race window
+    # is shorter now that the Submission row is already on disk: even if a
+    # parallel call wins the claim, the loser's Submission still exists as
+    # a duplicate record.
     is_primary = _try_claim_primary(pe, current_week)
+
+    # Flip the Submission.is_primary flag now that we know the truth.
+    # status="Pending" for primary (feedback pipeline picks it up),
+    # "Completed" for duplicates (no further processing).
+    if is_primary:
+        frappe.db.set_value(
+            "Submission", submission_doc.name,
+            {"is_primary": 1, "status": "Pending"},
+            update_modified=False,
+        )
+        submission_doc.is_primary = 1
+        submission_doc.status = "Pending"
 
     # ── Calculate points ────────────────────────────────────
     points = 0
     if is_primary:
         points = _calculate_points(pe)
-
-    # ── Create Submission record ────────────────────────────
-    submission_doc = _create_submission(
-        pe=pe,
-        student_id=student_id,
-        week=current_week,
-        payload=payload,
-        assignment_id=assignment_id,
-        is_primary=is_primary,
-    )
 
     # ── Apply state transition ──────────────────────────────
     if is_primary:
@@ -163,7 +225,7 @@ def save_submission(student_id, assignment_id, submission, week=None):
             pe_context=_build_pe_context(pe),
         )
 
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
     return _build_submission_response(
         pe=pe,
@@ -220,42 +282,31 @@ def _try_claim_primary(pe, week):
     Uses UPDATE WHERE to prevent race conditions.
 
     Returns True if this is the primary (first) submission, False if duplicate.
+
+    Postgres-only — relies on UPDATE ... RETURNING. The previous MariaDB
+    fallback branch was removed (task #79 / audit 2026-05-15): on Postgres the
+    primary UPDATE's failure poisons the transaction (L-030), so the fallback
+    would always read stale state. The fallback also reproduced the same
+    `IN %s` bug fixed below — see L-005.
+
+    L-005 fix (task #77 / audit 2026-05-15): the previous `journey_label IN %s`
+    binding mangles tuple-of-strings on Postgres (Frappe's `modify_values`
+    flattens the inner sequence). Use flat `IN (%s, %s, ...)` with scalar
+    params — same shape as validators.py:197 and pe_dispatcher.py:108.
     """
-    # Atomic UPDATE: only succeeds if journey_label is still pre-submission
-    pre_submission_labels = [
-        "enrolled", "content_delivered", "grace_window",
-        "resumed", "week_advanced",
-    ]
+    # Atomic UPDATE: only succeeds if journey_label is still pre-submission.
+    result = frappe.db.sql("""
+        UPDATE `tabProgramEnrollment`
+        SET journey_label = 'submitted',
+            last_label_change_at = NOW(),
+            submission_count = COALESCE(submission_count, 0) + 1,
+            last_submission_at = NOW()
+        WHERE name = %s
+          AND journey_label IN (%s, %s, %s, %s, %s)
+        RETURNING name
+    """, (pe.name, "enrolled", "content_delivered", "grace_window", "resumed", "week_advanced"))
 
-    # Use RETURNING (Postgres) to atomically check if the UPDATE matched.
-    # On MariaDB, frappe.db.sql for UPDATE returns nothing, so we fall back
-    # to cursor.rowcount via frappe.db._cursor.rowcount.
-    try:
-        result = frappe.db.sql("""
-            UPDATE `tabProgramEnrollment`
-            SET journey_label = 'submitted',
-                last_label_change_at = NOW(),
-                submission_count = COALESCE(submission_count, 0) + 1,
-                last_submission_at = NOW()
-            WHERE name = %s
-              AND journey_label IN %s
-            RETURNING name
-        """, (pe.name, pre_submission_labels))
-        rows_affected = len(result) if result else 0
-    except Exception:
-        # MariaDB doesn't support RETURNING — fall back to non-RETURNING UPDATE
-        frappe.db.sql("""
-            UPDATE `tabProgramEnrollment`
-            SET journey_label = 'submitted',
-                last_label_change_at = NOW(),
-                submission_count = COALESCE(submission_count, 0) + 1,
-                last_submission_at = NOW()
-            WHERE name = %s
-              AND journey_label IN %s
-        """, (pe.name, pre_submission_labels))
-        rows_affected = frappe.db._cursor.rowcount
-
-    if rows_affected > 0:
+    if result:
         pe.reload()
         return True
 

@@ -127,12 +127,12 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
     handler = _get_handler(flow_name, status)
     if handler:
         handler(pe, flow_name, status, metadata or {})
-        frappe.db.commit()
+        # Removed mid-handler commit per L-017 — Frappe commits at request-end.
         return
 
     # Default: just acknowledge the callback
     pe.save(ignore_permissions=True)
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
     _response(pe, "acknowledged", flow_name=flow_name, status=status)
 
 

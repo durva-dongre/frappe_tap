@@ -378,7 +378,7 @@ def get_next_content(student_id, course_level=None):
                 "current_content_index": 0,
                 "last_activity_timestamp": now_datetime(),
             })
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
             progress_data["stage"] = learning_unit
             progress_data["current_content_index"] = 0
 
@@ -398,7 +398,7 @@ def get_next_content(student_id, course_level=None):
                 "status": "in_progress",
                 "last_activity_timestamp": now_datetime(),
             })
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
             return _flat_content_response(
                 item=item,
@@ -426,7 +426,7 @@ def get_next_content(student_id, course_level=None):
                 "content_started_at": None,
                 "last_activity_timestamp": now_datetime(),
             })
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
             content_items = _get_content_items(next_lu)
             if content_items:
@@ -454,7 +454,7 @@ def get_next_content(student_id, course_level=None):
                 "status": "completed",
                 "last_activity_timestamp": now_datetime(),
             })
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
             return {
                 "success": True,
                 "status": "course_complete",
@@ -477,7 +477,7 @@ def get_next_content(student_id, course_level=None):
                 "content_started_at": None,
                 "last_activity_timestamp": now_datetime(),
             })
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
             return {
                 "success": True,
                 "status": "stage_complete",
@@ -811,7 +811,7 @@ def _advance_to_next_content(progress_data, course_level):
             "content_started_at": None,
             "last_activity_timestamp": now_datetime(),
         })
-        frappe.db.commit()
+        # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
         next_item = content_items[new_index]
         return {
@@ -841,7 +841,7 @@ def _advance_to_next_content(progress_data, course_level):
             "content_started_at": None,
             "last_activity_timestamp": now_datetime(),
         })
-        frappe.db.commit()
+        # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
         content_items = _get_content_items(next_lu)
         first_content = content_items[0] if content_items else None
@@ -958,7 +958,7 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
             "answers": [],
         })
         attempt.insert(ignore_permissions=True)
-        frappe.db.commit()
+        # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
         # Update progress
         frappe.db.set_value("StudentStageProgress", progress_data["name"], {
@@ -969,7 +969,7 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
             "question_started_at": now_datetime(),
             "last_activity_timestamp": now_datetime(),
         })
-        frappe.db.commit()
+        # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
         first_q = _get_question_details(questions[0].question, language)
         # Flat shape per docs/api-standard-glific.md (Rules 2 + 3): no nested
@@ -1021,7 +1021,7 @@ def _resume_quiz(attempt, progress_data, language=None):
     })
     attempt.question_started_at = now_datetime()
     attempt.save(ignore_permissions=True)
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
     q_row = questions[next_index - 1]
     q_details = _get_question_details(q_row.question, language)
@@ -1157,7 +1157,7 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=
         # More questions — save and return next
         attempt.question_started_at = now_datetime()
         attempt.save(ignore_permissions=True)
-        frappe.db.commit()
+        # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
         progress_name = attempt.student_progress
         if progress_name:
@@ -1165,7 +1165,7 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=
                 "question_started_at": now_datetime(),
                 "last_activity_timestamp": now_datetime(),
             })
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
         next_q_row = questions[question_index]  # 0-based → next question
         next_q = _get_question_details(next_q_row.question, language)
@@ -1227,7 +1227,7 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
     attempt.passed = 1 if passed else 0
     attempt.time_spent_seconds = total_time
     attempt.save(ignore_permissions=True)
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
     # Get progress
     progress_data = frappe.db.get_value(
@@ -1248,7 +1248,7 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
         "question_started_at": None,
         "last_activity_timestamp": now_datetime(),
     })
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
     # Background jobs
     frappe.enqueue(
@@ -2174,7 +2174,7 @@ def _get_or_create_sp_progress(student_id, course_level, week, tier, learning_un
                 "is_on_remedial": 1 if tier == REMEDIAL_TIER else 0,
                 "last_activity_timestamp": now_datetime(),
             })
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
         return progress.name
 
     # Create new
@@ -2197,7 +2197,7 @@ def _get_or_create_sp_progress(student_id, course_level, week, tier, learning_un
         "total_time_spent_seconds": 0,
     })
     doc.insert(ignore_permissions=True)
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
     return doc.name
 
 

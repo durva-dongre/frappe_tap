@@ -25,7 +25,6 @@ from tap_lms.summer_program.constants import (
     PER_STUDENT_ACTIONS,
     ARCHETYPE_DORMANT,
     ARCHETYPE_FENCE_SITTER,
-    PROGRAM_PAUSED,
 )
 # CR-003: ACTION_REENGAGEMENT and ACTION_GRACE_REMINDER removed from constants.
 # _run_reengagement and _run_grace_notifications were the daily-scheduler

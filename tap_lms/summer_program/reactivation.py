@@ -97,7 +97,7 @@ def reactivate_student(student_id):
             log_event(pe, "resume", trigger_source="glific_flow",
                       details={"reactivation_type": "binge_eligible"})
 
-            frappe.db.commit()
+            # Removed mid-handler commit per L-017 — Frappe commits at request-end.
             frappe.local.response.update({
                 "success": True,
                 "status": "reactivated",

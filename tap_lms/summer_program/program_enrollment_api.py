@@ -421,7 +421,7 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
                   "batch": batch_id,
               })
 
-    frappe.db.commit()
+    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
     return {
         "success": True,
