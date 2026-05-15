@@ -25,6 +25,15 @@ def execute():
     # the chain would otherwise block every query in this patch.
     frappe.db.rollback()
 
+    # CR-005 (2026-05-16): force the PGCollection doctype JSON to sync to the
+    # schema BEFORE we query/write the new `kind`, `is_active`, `member_count`
+    # columns. Otherwise this patch races the doctype sync that normally runs
+    # after pre_model_sync patches — and on Frappe versions where the
+    # `[post_model_sync]` marker in patches.txt is not honored (or the marker
+    # was lost), the columns won't exist when we hit `frappe.db.exists(...)`.
+    # `reload_doc` is idempotent and safe to call from a patch.
+    frappe.reload_doc("tap_lms", "doctype", "pgcollection")
+
     # ── 1. Create the 5 kind-keyed PGCollections + Glific groups per active BPR ──
     active_bprs = frappe.get_all(
         "BatchProgramRun",
@@ -110,16 +119,24 @@ def execute():
     # Legacy rows have `kind IS NULL` / '' and an archetype/arm value.
     # Setting `is_active = 0` makes them invisible to the new code path
     # without losing the historical record.
+    #
+    # L-005 (Postgres + Frappe modify_values): use `IN %s` with a tuple param.
+    # Earlier draft used `ANY(%s::text[])` with a list, but Frappe's
+    # `modify_values()` rewrites a (list,) param to [(tuple,)] before psycopg2
+    # sees it, which then renders the tuple as composite syntax `('x')` not
+    # array syntax `'{x}'` — Postgres rejects the cast to text[] with
+    # "malformed array literal". `IN %s` + tuple is the canonical Postgres-safe
+    # pattern Frappe's modify_values was designed for.
     legacy_bpr_names = [b["name"] for b in active_bprs]
     if legacy_bpr_names:
         frappe.db.sql(
             """
             UPDATE "tabPGCollection"
                SET is_active = 0
-             WHERE parent = ANY(%s::text[])
+             WHERE parent IN %s
                AND (kind IS NULL OR kind = '')
             """,
-            (legacy_bpr_names,),
+            (tuple(legacy_bpr_names),),
         )
 
     frappe.db.commit()
