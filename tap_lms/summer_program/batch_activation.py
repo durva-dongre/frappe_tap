@@ -199,14 +199,32 @@ def activate_bpr(bpr_name):
     bpr.save(ignore_permissions=True)
     frappe.db.commit()
 
-    # Seed next_action_at on all PEs for first content delivery
-    seeded = _seed_pe_actions(bpr, batch)
+    # CR-005 (2026-05-15): create the 5 kind-keyed PGCollections + Glific
+    # groups for this BPR (`main`, `escalation`, `binge_paused`,
+    # `program_dropped`, `program_completed`). Idempotent — if a row or
+    # group with the same label already exists, reuse it. Replaces the old
+    # archetype-keyed PGCollection scheme (deactivated by the migration
+    # patch). The first weekly cron tick after activation fires
+    # SP_Content_Delivery on the `main` group; no fire-on-activation here.
+    _ensure_kind_keyed_pg_collections(bpr)
+
+    # CR-005 (locked decision #4, 2026-05-15): NO fire-on-activation.
+    # The previous per-PE seeding via `_seed_pe_actions` (legacy) is removed —
+    # content delivery is now batch-triggered every Tuesday 09:00 IST via
+    # `scheduler.weekly_content_delivery_trigger` against the `main` collection.
+    # Newly-activated BPRs wait up to 6 days for the first content delivery;
+    # admins time activations Mon/Tue to land the first sweep within a day.
+    #
+    # `_seed_pe_actions` is preserved as dead code (parallel to the
+    # `handle_content_delivery` preservation pattern in pe_dispatcher.py) — can
+    # be used for operator escape-hatch scenarios (e.g., manual catch-up push
+    # for a single batch). Call it directly from `bench console` if needed.
 
     return {
         "success": True,
         "message": f"BatchProgramRun {bpr_name} is now active. "
-        f"{seeded} students seeded for content delivery.",
-        "seeded_count": seeded,
+                   f"First content delivery on next Tuesday 09:00 IST (collection-mode, CR-005).",
+        "seeded_count": 0,
     }
 
 
@@ -357,3 +375,65 @@ def check_auto_activate():
             )
 
     return activated
+
+
+# ── CR-005: kind-keyed PGCollection bootstrap ──
+
+def _ensure_kind_keyed_pg_collections(bpr):
+    """CR-005 (2026-05-15): idempotently create the 5 kind-keyed
+    PGCollection rows + Glific groups for the BPR.
+
+    PGCollection is a child table (istable=1) embedded under BatchProgramRun;
+    the parent BPR is referenced via the standard Frappe `parent` column.
+    The 5 kinds are imported from collection_membership.COLLECTION_KINDS so
+    one canonical source defines the topology.
+
+    Idempotent:
+      - If a child row with (parent=bpr.name, kind) already exists, skip.
+      - The Glific group lookup-or-create is handled by
+        `create_group_if_missing` — re-runs find the existing group.
+    """
+    from tap_lms.glific_integration import create_group_if_missing
+    from tap_lms.summer_program.collection_membership import COLLECTION_KINDS
+
+    created = 0
+    for kind in COLLECTION_KINDS:
+        existing = frappe.db.exists(
+            "PGCollection",
+            {"parent": bpr.name, "kind": kind},
+        )
+        if existing:
+            continue
+
+        label = f"SP_{bpr.batch}_{kind}"
+        glific_group_id = create_group_if_missing(
+            label,
+            description=f"CR-005 {kind} collection for BPR {bpr.name}",
+        )
+        if not glific_group_id:
+            frappe.log_error(
+                f"_ensure_kind_keyed_pg_collections: could not create or "
+                f"resolve Glific group '{label}' for BPR {bpr.name}",
+                "SP Collection Bootstrap",
+            )
+            continue
+
+        pg_col = frappe.new_doc("PGCollection")
+        pg_col.parent = bpr.name
+        pg_col.parenttype = "BatchProgramRun"
+        pg_col.parentfield = "pg_collections"
+        pg_col.kind = kind
+        pg_col.collection_label = label
+        pg_col.glific_group_id = str(glific_group_id)
+        pg_col.member_count = 0
+        pg_col.is_active = 1
+        pg_col.insert(ignore_permissions=True)
+        created += 1
+
+    if created:
+        frappe.db.commit()
+        frappe.logger().info(
+            f"_ensure_kind_keyed_pg_collections: created {created} kind-keyed "
+            f"PGCollection rows for BPR {bpr.name}"
+        )
+    return created

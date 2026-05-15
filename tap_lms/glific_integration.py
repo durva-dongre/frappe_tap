@@ -611,6 +611,97 @@ def create_or_get_glific_group_for_batch(set_id):
     # Failed to create group
     return None
 
+def remove_contact_from_group(contact_id, group_id):
+    """Remove a single contact from a single Glific group.
+
+    CR-005 (2026-05-15): used by collection_membership state-driven writes.
+    Wraps the same updateGroupContacts mutation as add_contact_to_group,
+    routing the contact through `deleteContactIds` instead of
+    `addContactIds`. Idempotent on the Glific side — removing a contact
+    not in the group is a no-op.
+    """
+    if not contact_id or not group_id:
+        return False
+
+    settings = get_glific_settings()
+    url = f"{settings.api_url}/api"
+    headers = get_glific_auth_headers()
+
+    payload = {
+        "query": """
+        mutation updateGroupContacts($input: GroupContactsInput!) {
+          updateGroupContacts(input: $input) {
+            groupContacts {
+              id
+            }
+            numberDeleted
+          }
+        }
+        """,
+        "variables": {
+            "input": {
+                "groupId": group_id,
+                "addContactIds": [],
+                "deleteContactIds": [contact_id]
+            }
+        }
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        if "errors" in data:
+            frappe.logger().error(
+                f"Glific API Error removing contact from group: {data['errors']}"
+            )
+            return False
+
+        if "data" in data and "updateGroupContacts" in data["data"]:
+            if (
+                "errors" in data["data"]["updateGroupContacts"]
+                and data["data"]["updateGroupContacts"]["errors"]
+            ):
+                errors = data["data"]["updateGroupContacts"]["errors"]
+                frappe.logger().error(
+                    f"Glific API Error removing contact from group: {errors}"
+                )
+                return False
+            return True
+
+        return False
+    except Exception as e:
+        frappe.logger().error(f"Error removing contact from group: {str(e)}")
+        return False
+
+
+def create_group_if_missing(label, description=""):
+    """Idempotent Glific group helper used by CR-005 collection bootstrap.
+
+    Looks up `label` first; if a group with that label exists, returns its
+    Glific group id. Otherwise creates the group and returns the new id.
+    Returns None on API failure (caller decides whether to retry).
+
+    Used by `activate_bpr` and the `backfill_pg_collection_kinds` patch to
+    create the 5 kind-keyed collections per BPR without duplicating groups
+    on re-runs.
+    """
+    existing = check_glific_group_exists(label)
+    if existing and existing.get("id"):
+        return existing["id"]
+
+    new_group = create_glific_group(label, description)
+    if new_group and new_group.get("id"):
+        return new_group["id"]
+
+    frappe.log_error(
+        f"create_group_if_missing: failed to look up or create '{label}'",
+        "Glific Group Bootstrap",
+    )
+    return None
+
+
 def add_contact_to_group(contact_id, group_id):
     """Add a single contact to a single group"""
     if not contact_id or not group_id:

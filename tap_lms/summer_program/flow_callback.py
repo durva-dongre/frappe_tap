@@ -53,7 +53,7 @@ from tap_lms.summer_program.event_log import log_event
 # MUST return these four fields so Glific flows can read @results.webhook.* for
 # immediate routing without waiting for the async contact-field sync.
 
-def _response(pe, action, **extras):
+def _response(pe, status_value, **extras):
     """Build a v3.0-compliant webhook response AND write it to frappe.local.response.
 
     Per docs/api-standard-glific.md Rule 1, whitelisted endpoints consumed by
@@ -63,12 +63,22 @@ def _response(pe, action, **extras):
     outer whitelisted method still returns None (Frappe accepts that), but the
     dict in local.response is what Glific sees.
 
-    Always emits: success, action, resolved_flow_state, next_action_type,
-    next_action_at, program_status. Additional fields can be passed as **extras.
+    Glific Rule 6 (docs/api-standard-glific.md): the outcome field must be
+    `status`, not `action`. As of task #73 (2026-XX-XX) we write BOTH keys for
+    one release cycle so existing Glific flows that read
+    `@results.webhook.action` keep working (L-009 — whitelisted-output renames
+    are public-contract breaks without back-compat). DROP the `action` key in
+    a follow-up CR after all SP_* flows are audited to read
+    `@results.webhook.status` instead.
+
+    Always emits: success, status, action (deprecated alias), resolved_flow_state,
+    next_action_type, next_action_at, program_status. Additional fields can be
+    passed as **extras.
     """
     base = {
         "success": True,
-        "action": action,
+        "status": status_value,
+        "action": status_value,  # DEPRECATED (task #73); remove after Glific flows audit
         "resolved_flow_state": pe.resolved_flow_state or "",
         "next_action_type": pe.next_action_type or "",
         "next_action_at": str(pe.next_action_at) if pe.next_action_at else "",
@@ -130,10 +140,13 @@ def update_flow_status(student_id, flow_name, status, metadata=None):
         # Removed mid-handler commit per L-017 — Frappe commits at request-end.
         return
 
-    # Default: just acknowledge the callback
+    # Default: just acknowledge the callback.
+    # Note: we pass the inbound flow `status` as `flow_status` because task #73
+    # renamed the helper's outcome field to `status` (Glific Rule 6). Passing
+    # `status=status` here would clobber the outcome key via **extras.
     pe.save(ignore_permissions=True)
     # Removed mid-handler commit per L-017 — Frappe commits at request-end.
-    _response(pe, "acknowledged", flow_name=flow_name, status=status)
+    _response(pe, "acknowledged", flow_name=flow_name, flow_status=status)
 
 
 def _get_handler(flow_name, status):

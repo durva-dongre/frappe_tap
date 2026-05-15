@@ -216,3 +216,77 @@ def _get_students_for_bpr(bpr):
     """Get all student names linked to a BPR."""
     from tap_lms.summer_program.enrollment import _get_students_for_bpr as get_students
     return get_students(bpr)
+
+
+# ── CR-005 (2026-05-15): Weekly content delivery via main collection ──
+
+def weekly_content_delivery_trigger():
+    """CR-005: Tuesday 09:00 IST (03:30 UTC). For each active BPR, fire
+    SP_Content_Delivery against the `main` Glific collection. Membership is
+    already current because state transitions wrote it continuously throughout
+    the week (Approach B). No recompute, no reconcile.
+
+    Idempotency: re-running produces another start_group_flow call for each
+    active BPR. Glific deduplicates identical group-flow starts within a short
+    window; operator discipline (don't manually invoke during the cron window)
+    is the documented mitigation. No code-level mutex per locked decision
+    2026-05-15.
+    """
+    active_bprs = frappe.db.sql(
+        """
+        SELECT name, batch, content_delivery_flow
+          FROM "tabBatchProgramRun"
+         WHERE status = 'active'
+           AND content_delivery_flow IS NOT NULL
+        """,
+        as_dict=True,
+    )
+
+    for bpr in active_bprs:
+        main_col = frappe.db.sql(
+            """
+            SELECT name, glific_group_id, collection_label, member_count
+              FROM "tabPGCollection"
+             WHERE parent = %s
+               AND kind = %s
+               AND COALESCE(is_active, 0) = 1
+             LIMIT 1
+            """,
+            (bpr["name"], "main"),
+            as_dict=True,
+        )
+        if not main_col:
+            continue
+        main_col = main_col[0]
+
+        if not main_col.get("glific_group_id"):
+            continue
+
+        # Skip BPRs whose main collection has zero members. Reading
+        # member_count avoids a needless Glific call (which would either
+        # error or no-op). The count is maintained by the state-driven
+        # collection_membership writes (Approach B); if a deployment doesn't
+        # yet maintain member_count, treat NULL as zero to be safe.
+        if (main_col.get("member_count") or 0) <= 0:
+            frappe.logger().info(
+                f"weekly_content_delivery_trigger: skipping BPR "
+                f"{bpr['name']} — main collection empty"
+            )
+            continue
+
+        try:
+            start_group_flow(
+                flow_id=str(bpr["content_delivery_flow"]),
+                group_id=str(main_col["glific_group_id"]),
+            )
+            frappe.logger().info(
+                f"weekly_content_delivery_trigger: fired flow "
+                f"{bpr['content_delivery_flow']} for BPR {bpr['name']} "
+                f"(main members: {main_col.get('member_count', 0)})"
+            )
+        except Exception as e:
+            frappe.log_error(
+                f"weekly_content_delivery_trigger failed for BPR "
+                f"{bpr['name']}: {e}",
+                "SP Weekly Content Delivery",
+            )

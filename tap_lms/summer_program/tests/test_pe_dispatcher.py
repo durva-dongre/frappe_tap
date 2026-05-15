@@ -11,13 +11,15 @@ the bug classes the prior code review (CR-2026-05-10) flagged:
   simulates a parallel worker by manipulating journey_label between SELECT
   and dispatch and asserts the second pass is a no-op (P-001).
 - B3: WHERE filter `program_status = 'active'` excluded paused PEs and made
-  pause_check / re_engagement handlers unreachable. Test enrols a paused
-  PE with `next_action_type = pause_check` and asserts the dispatcher picks
-  it up.
-- #52 (counter race): handle_feedback_timeout, handle_re_engagement, and
-  t25_delivery_failure must use COALESCE-update SQL to be race-tolerant.
-  Test calls the handler twice in sequence and asserts the counter equals
-  exactly 2 (no read-then-write loss).
+  the pause_check handler unreachable. Test enrols a paused PE with
+  `next_action_type = pause_check` and asserts the dispatcher picks it up.
+  (Pre-CR-003 also covered the now-retired handle_re_engagement; that handler
+  is gone — see task #51 / CR-003.)
+- #52 (counter race): handle_feedback_timeout and t25_delivery_failure must
+  use COALESCE-update SQL to be race-tolerant. Test calls the handler twice
+  in sequence and asserts the counter equals exactly 2 (no read-then-write
+  loss). Pre-CR-003 this also covered handle_re_engagement which has been
+  retired (task #51).
 
 Glific is mocked via unittest.mock.patch so we never hit the network.
 No frappe.db.commit() in tests — the runner relies on transaction rollback
@@ -52,8 +54,9 @@ from tap_lms.summer_program.constants import (
     STATE_WEEK_COMPLETED,
     VALIDATION_PASSED,
 )
-# CR-003: ACTION_GRACE_REMINDER and ACTION_RE_ENGAGEMENT removed from the
-# constants module. The tests that exercised handle_grace_reminder /
+# CR-003 / task #51: ACTION_GRACE_REMINDER and ACTION_RE_ENGAGEMENT removed
+# from the constants module; handle_re_engagement and handle_grace_reminder
+# removed from pe_dispatcher. The tests that exercised handle_grace_reminder /
 # handle_re_engagement / t17b_grace_reminder have been deleted; the
 # `test_journey_label_changes_skip_dispatch` test below has been retargeted
 # to use ACTION_GRACE_CHECK which is the live grace action post-CR-003.

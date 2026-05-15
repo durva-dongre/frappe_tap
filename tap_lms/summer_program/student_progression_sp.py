@@ -190,9 +190,14 @@ def get_weekly_content(student_id, course_level=None):
 # hits these paths, they will now get a 404. That's intentional — we'd rather
 # fail loud than silently accept submissions that don't transition state.
 #
-# Some helpers (_log_submission, _validate_submission_type, _reset_escalation,
+# Orphan-helper audit completed in task #72 (2026-05-15): the following
+# private helpers — only ever called by the three removed endpoints — were
+# deleted: _log_submission, _validate_submission_type, _reset_escalation,
 # _get_next_escalation_step, _record_escalation_step, _has_submitted_this_week,
-# _get_submission_history) MAY now be orphaned. Audit + remove in a follow-up.
+# _get_submission_history, _calculate_submission_points, _update_engagement_state,
+# _mark_week_submitted. Each was confirmed to have zero callers via grep across
+# app/tap_lms + tests before deletion. Removed helpers also accounted for
+# 4 stray frappe.db.commit() calls (L-017 cleanup, task #87).
 
 
 # ============================================================
@@ -1492,11 +1497,6 @@ def _get_escalation_steps(student, batch):
 # SUBMISSION TRACKING
 # ============================================================
 
-def _has_submitted_this_week(student_id, current_week):
-    """Check if student has submitted for the current week."""
-    return _has_submitted_week(student_id, current_week)
-
-
 def _has_submitted_week(student_id, week):
     """Check if student has a submission logged for a specific week."""
     return frappe.db.exists("StudentContentLog", {
@@ -1541,230 +1541,6 @@ def _get_submission_validity(student_id, week):
             pass
 
     return {"submitted": True, "is_valid": is_valid}
-
-
-def _get_submission_history(student_id, total_weeks):
-    """Get per-week submission status."""
-    submissions = []
-    for w in range(1, total_weeks + 1):
-        log = frappe.db.get_value(
-            "StudentContentLog",
-            {
-                "student": student_id,
-                "stage_no": w,
-                "content_type": "Assignment",
-                "action": "completed",
-            },
-            ["completed_at", "content_id", "score", "metadata"],
-            as_dict=True,
-        )
-        submissions.append({
-            "week": w,
-            "submitted": bool(log),
-            "completed_at": str(log.completed_at) if log and log.completed_at else None,
-            "content_id": log.content_id if log else None,
-        })
-
-    return submissions
-
-
-def _log_submission(student_id, course_level, week, submission_type, content_id, is_valid, points):
-    """Log a submission to StudentContentLog."""
-    log = frappe.new_doc("StudentContentLog")
-    log.student = student_id
-    log.course_level = course_level
-    log.stage_no = week
-    log.content_type = "Assignment"
-    log.content_id = content_id or f"sp_week_{week}_submission"
-    log.content_name = f"Week {week} Submission"
-    log.action = "completed"
-    log.started_at = now_datetime()
-    log.completed_at = today()
-    log.tier = "Core"  # We record submission regardless of path
-    log.metadata = json.dumps({
-        "submission_type": submission_type,
-        "is_valid": is_valid,
-        "points_awarded": points,
-        "source": "summer_program",
-    })
-    log.insert(ignore_permissions=True)
-    frappe.db.commit()
-
-
-def _validate_submission_type(actual_type, expected_type):
-    """
-    Check if the actual submission matches the expected type.
-    Some types are compatible (e.g., photo_video_artefact accepts both photo and video).
-    """
-    if not actual_type or not expected_type:
-        return True
-
-    actual = actual_type.lower().strip()
-    expected = expected_type.lower().strip()
-
-    if actual == expected:
-        return True
-
-    # Compatibility rules
-    compatible = {
-        "photo_video_artefact": ["photo", "video"],
-        "voice_note_text_summary": ["voice_note", "text_word"],
-    }
-
-    accepted = compatible.get(expected, [])
-    return actual in accepted
-
-
-# ============================================================
-# ESCALATION TRACKING
-# ============================================================
-
-def _get_next_escalation_step(student, batch, current_week):
-    """
-    Determine the next escalation step for a student who hasn't submitted.
-    Checks how many escalation steps have already been sent this week.
-    """
-    steps = _get_escalation_steps(student, batch)
-    if not steps:
-        return None
-
-    # Count escalations already sent this week
-    sent_count = frappe.db.count("StudentContentLog", {
-        "student": student.name,
-        "stage_no": current_week,
-        "action": "started",  # We use 'started' action for escalation logs
-        "content_type": "Assignment",
-        "tier": "Escalation",
-    })
-
-    if sent_count >= len(steps):
-        return None  # All steps exhausted
-
-    return steps[sent_count]  # Return next unsent step
-
-
-def _record_escalation_step(student_id, week, step):
-    """Record that an escalation step was sent."""
-    log = frappe.new_doc("StudentContentLog")
-    log.student = student_id
-    log.stage_no = week
-    log.content_type = "Assignment"
-    log.content_id = f"escalation_step_{step['escalation_order']}"
-    # CR-003: step shape now uses `escalation_type` (Select) not `message_type` (Data).
-    log.content_name = f"Escalation: {step.get('escalation_type', 'help_note_a')}"
-    log.action = "started"  # 'started' = escalation sent, 'completed' = submission received
-    log.tier = "Escalation"
-    log.started_at = now_datetime()
-    log.metadata = json.dumps({
-        "escalation_order": step["escalation_order"],
-        "escalation_type": step.get("escalation_type", "help_note_a"),
-        "points_if_submit": step.get("points_awarded", 0),
-        "source": "summer_program",
-    })
-    log.insert(ignore_permissions=True)
-    frappe.db.commit()
-
-
-def _reset_escalation(student_id, week):
-    """
-    When a student submits, mark escalation as resolved.
-    We don't delete the escalation logs — they're useful for analytics.
-    """
-    # No destructive action needed. The _has_submitted_this_week check
-    # will prevent further escalation. Escalation logs remain for reporting.
-    pass
-
-
-def _calculate_submission_points(student, batch, bpr, current_week):
-    """
-    Calculate points for a submission based on which escalation step
-    the student is at. Earlier submission = more points.
-
-    Points come from EscalationStep.points_awarded.
-    If student submits before any escalation, they get max points.
-    """
-    steps = _get_escalation_steps(student, batch)
-    if not steps:
-        return 0
-
-    # How many escalations were sent before this submission?
-    sent_count = frappe.db.count("StudentContentLog", {
-        "student": student.name,
-        "stage_no": current_week,
-        "action": "started",
-        "content_type": "Assignment",
-        "tier": "Escalation",
-    })
-
-    if sent_count == 0:
-        # Submitted before any escalation → highest points
-        # Use points from step 1 (the max)
-        return steps[0].get("points_awarded", 0) if steps else 0
-
-    if sent_count <= len(steps):
-        # Get points for current step (decreasing)
-        return steps[sent_count - 1].get("points_awarded", 0)
-
-    return 0
-
-
-# ============================================================
-# ENGAGEMENT STATE
-# ============================================================
-
-def _update_engagement_state(student_id):
-    """
-    Update EngagementState when student submits.
-    Sets last_activity_date, updates streak, completion rate.
-    """
-    try:
-        es = frappe.db.get_value(
-            "EngagementState",
-            {"student": student_id},
-            ["name", "last_activity_date", "current_streak", "completion_rate"],
-            as_dict=True,
-        )
-
-        today_date = getdate(today())
-
-        if es:
-            updates = {
-                "last_activity_date": today_date,
-                "last_updated": now_datetime(),
-            }
-
-            # Update streak
-            last = es.last_activity_date
-            if last:
-                if isinstance(last, str):
-                    last = getdate(last)
-                days_diff = (today_date - last).days
-                if days_diff == 1:
-                    updates["current_streak"] = (es.current_streak or 0) + 1
-                elif days_diff > 1:
-                    updates["current_streak"] = 1
-                # days_diff == 0: same day, no streak change
-            else:
-                updates["current_streak"] = 1
-
-            frappe.db.set_value("EngagementState", es.name, updates)
-        else:
-            # Create EngagementState if it doesn't exist
-            new_es = frappe.new_doc("EngagementState")
-            new_es.student = student_id
-            new_es.last_activity_date = today_date
-            new_es.current_streak = 1
-            new_es.completion_rate = "0"
-            new_es.last_updated = now_datetime()
-            new_es.insert(ignore_permissions=True)
-
-        frappe.db.commit()
-
-    except Exception as e:
-        frappe.log_error(
-            f"Error updating EngagementState for {student_id}: {str(e)}",
-            "SP EngagementState Update",
-        )
 
 
 # ============================================================
@@ -2201,37 +1977,3 @@ def _get_or_create_sp_progress(student_id, course_level, week, tier, learning_un
     return doc.name
 
 
-def _mark_week_submitted(student_id, course_level, week, total_weeks=0):
-    """Mark the current week as submitted in StudentStageProgress.
-
-    Only sets status='completed' when the student finishes the LAST week.
-    For earlier weeks, status stays 'in_progress' and the week advancement
-    logic in get_next_content handles progression.
-    """
-    progress_name = frappe.db.get_value(
-        "StudentStageProgress",
-        {
-            "student": student_id,
-            "course_context": course_level,
-            "stage_type": "LearningUnit",
-        },
-        "name",
-    )
-
-    if progress_name:
-        updates = {
-            "last_activity_timestamp": now_datetime(),
-        }
-        # Only mark completed on the LAST week
-        if total_weeks and week >= total_weeks:
-            updates["status"] = "completed"
-
-        frappe.db.set_value("StudentStageProgress", progress_name, updates)
-
-        # Atomic increment for total_content_completed
-        frappe.db.sql("""
-            UPDATE `tabStudentStageProgress`
-            SET total_content_completed = COALESCE(total_content_completed, 0) + 1
-            WHERE name = %s
-        """, (progress_name,))
-        frappe.db.commit()

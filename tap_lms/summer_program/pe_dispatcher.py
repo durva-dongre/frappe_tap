@@ -68,7 +68,7 @@ def process_program_actions():
     Finds all PEs where:
       - next_action_at <= now
       - program_status is active OR paused (paused PEs need pause_check
-        / re_engagement handlers to be reachable; B3 fix)
+        to be reachable for binge-resume; B3 fix)
       - next_action_type is a per-PE individual-timer action
 
     Routes each PE to the appropriate handler based on next_action_type.
@@ -92,8 +92,10 @@ def process_program_actions():
     # the atomic claim below can guard against state moving under us.
     #
     # program_status filter includes both ACTIVE and PAUSED so paused-state
-    # handlers (handle_pause_check for binge-resume, handle_re_engagement)
-    # are reachable. Earlier ACTIVE-only filter excluded them entirely (B3).
+    # handlers (handle_pause_check for binge-resume) are reachable. Earlier
+    # ACTIVE-only filter excluded them entirely (B3). Post-CR-003 the
+    # re-engagement handler is gone; only binge-pause keeps PAUSED status
+    # alive on the read.
     # Per L-005: avoid `= ANY(%s)` with a list-in-tuple — Frappe's
     # modify_values mangles a 2-element list into a Postgres record
     # `('active','paused')` instead of a `text[]` array, producing the
@@ -234,6 +236,12 @@ def _clear_action(pe_name):
 # ════════════════════════════════════════════════════════════
 
 
+# CR-005 (2026-05-15): preserved for future use; NOT reached in the normal flow.
+# Weekly content delivery now fires via `weekly_content_delivery_trigger` on the
+# BPR's `main` Glific collection — `t0_enrollment` and `t14_week_advance` no
+# longer arm `ACTION_CONTENT_DELIVERY` on individual PEs. This handler stays in
+# place as: (1) an operator escape hatch for per-PE re-delivery, (2) rollback
+# safety, and (3) future per-student catch-up flows. See CR-005 §4.
 def handle_content_delivery(pe_row):
     """
     Handler: content_delivery
@@ -244,7 +252,17 @@ def handle_content_delivery(pe_row):
 
     After triggering, clears next_action since the flow callback
     will set the next one.
+
+    CR-005: under normal operation no PE has `next_action_type =
+    content_delivery` armed (the weekly cron drives delivery via the main
+    collection). An unexpected fire here surfaces in logs.
     """
+    frappe.logger().info(
+        f"handle_content_delivery fired for PE {pe_row.name} "
+        f"(CR-005: this handler is preserved but not part of the normal flow; "
+        f"check whether someone manually armed content_delivery on this PE)"
+    )
+
     flow_id = _get_flow_id(pe_row.batch, ACTION_CONTENT_DELIVERY)
     if not flow_id:
         _clear_action(pe_row.name)
@@ -278,7 +296,7 @@ def handle_escalation(pe_row):
     """
     from tap_lms.summer_program.state_machine import (
         t2_start_escalation, t4_next_escalation_step,
-        t5_escalation_to_grace, t6_escalation_to_remedial,
+        t5_escalation_to_grace,
         t8_start_remedial_escalation, t10_next_remedial_escalation,
         t11_remedial_to_grace,
     )
@@ -302,14 +320,14 @@ def handle_escalation(pe_row):
     next_step = current_step + 1
 
     if next_step > len(steps):
-        # All steps exhausted — transition to grace or remedial.
+        # All steps exhausted — route to grace regardless of submission history.
+        # CR-006 (2026-05-15): T6 (escalation_to_remedial) is removed.
+        # Remedial is now reserved for failed-feedback students (T6b, CR-004).
+        # Students who never submitted go to grace, then drop per CR-001.
         # CR-003: the grace clock is already armed at the week start; T5/T11
-        # preserve it. T6 (zero-activity → remedial) is unchanged.
+        # preserve it.
         if state in (STATE_NORMAL_CONTENT, STATE_NORMAL_ESCALATION):
-            if pe.submission_count and pe.submission_count > 0:
-                t5_escalation_to_grace(pe, "dispatcher")
-            else:
-                t6_escalation_to_remedial(pe, trigger_source="dispatcher")
+            t5_escalation_to_grace(pe, "dispatcher")
         elif state in (STATE_REMEDIAL_CONTENT, STATE_REMEDIAL_ESCALATION):
             t11_remedial_to_grace(pe, "dispatcher")
         else:

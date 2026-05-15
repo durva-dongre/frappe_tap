@@ -441,3 +441,57 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
             "Per-transition sync pushes 11 existing + 8 gamification + "
             "2 CR-003 (escalation_order + escalation_type) = 21 fields",
         )
+
+
+# ════════════════════════════════════════════════════════════
+# CR-006 — T6 deprecation + T6b regression guard
+# ════════════════════════════════════════════════════════════
+
+class TestCR006T6Deprecation(FrappeTestCase):
+    """CR-006 (2026-05-15): T6 (escalation_to_remedial) is removed.
+
+    Verifies:
+      - Calling t6_escalation_to_remedial directly raises with CR-006 in msg.
+      - T6b (failed-feedback → remedial) is unchanged — the SOLE path to
+        remedial post-CR-006.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    def test_t6_deprecation_stub_raises(self):
+        """CR-006: calling t6_escalation_to_remedial directly must raise.
+        The function is kept as a deprecation stub for one release cycle so
+        any hidden caller surfaces loudly.
+        """
+        from tap_lms.summer_program.state_machine import t6_escalation_to_remedial
+
+        student = _ensure_student("CR006T6")
+        pe = _make_pe(
+            self.batch_name, student, "CR006T6",
+            resolved_flow_state=STATE_NORMAL_ESCALATION,
+        )
+        with self.assertRaises(frappe.ValidationError) as ctx:
+            t6_escalation_to_remedial(pe)
+        self.assertIn("CR-006", str(ctx.exception))
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_t6b_unchanged_by_cr_006(self, mock_sync):
+        """CR-006 regression guard — T6b (CR-004) is the SOLE path to remedial.
+
+        Setup a PE in submitted_awaiting_feedback (the source state of T6b),
+        fire T6b, assert PE ends up in remedial_content_delivery.
+        """
+        from tap_lms.summer_program.state_machine import t6b_failed_feedback_to_remedial
+
+        student = _ensure_student("CR006T6b")
+        pe = _make_pe(
+            self.batch_name, student, "CR006T6b",
+            resolved_flow_state=STATE_SUBMITTED_AWAITING,
+            journey_label=LABEL_SUBMITTED,
+        )
+        t6b_failed_feedback_to_remedial(pe, trigger_source="microservice")
+        pe.reload()
+        self.assertEqual(pe.resolved_flow_state, STATE_REMEDIAL_CONTENT)

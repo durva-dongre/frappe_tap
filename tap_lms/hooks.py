@@ -80,6 +80,13 @@ scheduler_events = {
         "0 0 * * 1": [
             "tap_lms.summer_program.batch_admin.auto_advance_batch_week",
         ],
+        # CR-005 (2026-05-15): Tuesday 03:30 UTC = Tuesday 09:00 IST.
+        # Fires SP_Content_Delivery against each active BPR's `main`
+        # Glific collection. Membership is maintained continuously by
+        # state-machine transitions (Approach B) — this cron just fires.
+        "30 3 * * 2": [
+            "tap_lms.summer_program.scheduler.weekly_content_delivery_trigger",
+        ],
     },
 }
 

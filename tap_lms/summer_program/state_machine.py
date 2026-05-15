@@ -50,6 +50,11 @@ from tap_lms.summer_program.constants import (
     TIER_BY_WEEK, DEFAULT_TIER,
 )
 from tap_lms.summer_program.event_log import log_event, log_state_transition
+# CR-005 (2026-05-15): module-level import so tests can patch
+# `tap_lms.summer_program.state_machine.maintain_collections` cleanly.
+# (A function-local import would force tests to patch the source module,
+# which is fragile against future refactors.)
+from tap_lms.summer_program.collection_membership import maintain_collections
 
 
 # ════════════════════════════════════════════════════════════
@@ -89,6 +94,12 @@ def transition(pe, new_state, trigger_source="scheduler", extra_updates=None, sk
     # Update Glific contact fields (async — runs in background worker)
     if not skip_glific and pe.glific_id:
         _enqueue_contact_field_sync(pe)
+
+        # CR-005 (2026-05-15): maintain Glific group membership (audit + main)
+        # via state-driven writes (Approach B). The weekly Tuesday cron just
+        # fires the flow against the main collection — no membership recompute.
+        # See collection_membership.py for the delta-based decision logic.
+        maintain_collections(pe, from_state=old_state, to_state=new_state)
 
     return True
 
@@ -450,25 +461,24 @@ def t5_escalation_to_grace(pe, trigger_source="scheduler"):
     return transition(pe, STATE_GRACE_WAITING, trigger_source, grace_updates)
 
 
-# ── T6: Escalation exhausted + ZERO activity → remedial ──
+# ── T6: REMOVED per CR-006 (2026-05-15) — kept as deprecation stub ──
 def t6_escalation_to_remedial(pe, week_rule=None, trigger_source="scheduler"):
-    """T6: normal_escalation → remedial_content_delivery."""
-    updates = {
-        # CR-004: distinguishes remedial entry from Core content for analytics.
-        # Shared with T6b — both routes into remedial write the same label.
-        "journey_label": LABEL_REMEDIAL_STARTED,
-        "current_path": PATH_REMEDIAL,
-        "current_escalation_step": 0,
-        "current_escalation_type": "",
-        "next_action_at": now_datetime(),
-        "next_action_type": ACTION_CONTENT_DELIVERY,
-    }
-    if week_rule:
-        updates["current_expected_submission_type"] = week_rule.get("expected_submission_type", "")
+    """T6: DEPRECATED per CR-006 (2026-05-15).
 
-    log_event(pe, "path_changed", PATH_CORE, PATH_REMEDIAL, trigger_source)
+    Previously transitioned `normal_escalation → remedial_content_delivery`
+    when the escalation chain exhausted with zero submissions. Removed
+    because remedial is now reserved for failed-feedback students (T6b,
+    CR-004). Zero-submission exhausters go to grace via T5, then drop at
+    grace end per CR-001.
 
-    return transition(pe, STATE_REMEDIAL_CONTENT, trigger_source, updates)
+    This stub raises so any hidden caller surfaces loudly. The function
+    will be removed entirely in a follow-up cleanup CR.
+    """
+    frappe.throw(
+        "t6_escalation_to_remedial is removed per CR-006. "
+        "Use t5_escalation_to_grace for escalation exhaustion, "
+        "or t6b_failed_feedback_to_remedial for failed AI feedback."
+    )
 
 
 # ── T6b: Failed AI feedback → remedial (CR-004) ──
@@ -715,8 +725,16 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         "quiz_completed": 0,
         "current_escalation_step": 0,
         "current_escalation_type": "",
-        "next_action_at": now_datetime(),
-        "next_action_type": ACTION_CONTENT_DELIVERY,
+        # CR-005 (2026-05-15): content_delivery is now batch-triggered via the
+        # weekly Tuesday cron (`weekly_content_delivery_trigger`) firing
+        # SP_Content_Delivery against the BPR's `main` Glific collection. T14
+        # no longer arms `next_action_type = ACTION_CONTENT_DELIVERY` — that
+        # would re-introduce the per-PE dispatcher path we're moving off of.
+        # `handle_content_delivery` in pe_dispatcher.py is preserved as an
+        # operator escape hatch (see CR-005 §4) but is no longer reached in
+        # the normal weekly cadence.
+        "next_action_at": None,
+        "next_action_type": "",
         # CR-002 v2: apply streak/gem update + reset all weeklies + flags
         "current_streak": streak_update,
         "special_gems": gems_update,

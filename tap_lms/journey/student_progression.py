@@ -778,8 +778,16 @@ def start_quiz(student_id: str, course_level: str, quiz_id: str, language: str =
             "answers": []
         })
         attempt.insert(ignore_permissions=True)
+        # L-017: commit kept — legacy journey/ endpoint. The new StudentQuizAttempt
+        # row needs to be visible before update_progress() writes
+        # `active_quiz_attempt = attempt.name` onto StudentStageProgress, because
+        # the teacher dashboard (other consumer of this endpoint) cross-reads
+        # both tables and historically relied on the pointer being resolvable
+        # after start_quiz returns. Removing this commit changes that assumption
+        # without coordinating with the dashboard. Revisit when journey/ is
+        # consolidated with summer_program/.
         frappe.db.commit()
-        
+
         # Update progress
         update_progress(progress["name"], {
             "active_quiz_attempt": attempt.name,
@@ -837,8 +845,15 @@ def resume_quiz(attempt, progress: dict, language: str = None) -> dict:
     update_progress(progress["name"], {"question_started_at": now_datetime()})
     attempt.question_started_at = now_datetime()
     attempt.save(ignore_permissions=True)
+    # L-017: commit kept — legacy journey/ resume_quiz. This is a mid-handler
+    # safety commit on a refresh-time write (`question_started_at`); strictly,
+    # removing it would only mean a Frappe request-end commit a few ms later.
+    # Conservative: kept because other consumers of resume_quiz (teacher
+    # dashboard) may observe `question_started_at` from a parallel read; the
+    # explicit commit makes that read-after-write boundary unambiguous. Cheap
+    # to remove once journey/ has its own test coverage.
     frappe.db.commit()
-    
+
     # Get question details
     question_row = questions[next_index - 1]
     question_details = get_question_details(question_row.question, language)
@@ -1020,8 +1035,16 @@ def submit_answer(student_id: str, quiz_attempt_id: str, question_index: int, an
         # Update for next question
         attempt.question_started_at = now_datetime()
         attempt.save(ignore_permissions=True)
+        # L-017: commit kept — legacy journey/ submit_answer mid-quiz path.
+        # The commit is between saving the answer row and the subsequent
+        # update_progress() write on StudentStageProgress. Removing it would
+        # rely on Frappe's end-of-request commit, which is fine in the happy
+        # path but loses durability of the answer if a downstream call later
+        # raises. The teacher dashboard reads answers + progress together;
+        # keeping the commit preserves the historical "answers are durable
+        # the moment submit_answer returns" guarantee for that consumer.
         frappe.db.commit()
-        
+
         # Update progress
         progress = frappe.db.get_value(
             "StudentStageProgress", attempt.student_progress,
@@ -1089,8 +1112,15 @@ def complete_quiz(attempt, quiz_doc, questions, language: str = None) -> dict:
     attempt.passed = 1 if passed else 0
     attempt.time_spent_seconds = total_time
     attempt.save(ignore_permissions=True)
+    # L-017: commit kept — legacy journey/ complete_quiz. The terminal write
+    # marks the attempt completed and stores final score. Downstream work in
+    # complete_quiz reads back StudentStageProgress (different table) and may
+    # invoke remediation logic that the teacher dashboard expects to be
+    # idempotent against the committed attempt row. Removing this commit
+    # would couple attempt-completion durability to whatever happens after
+    # this return, including any caller that might raise. Conservative: keep.
     frappe.db.commit()
-    
+
     # Get progress
     progress = frappe.db.get_value(
         "StudentStageProgress", attempt.student_progress,
