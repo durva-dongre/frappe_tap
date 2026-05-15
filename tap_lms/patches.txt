@@ -1,3 +1,4 @@
 tap_lms.patches.cr_004_scale.idx_pe_next_action
 tap_lms.patches.cr_004_batch_id_unique.batch_id_unique_constraint
 tap_lms.patches.v0_2.backfill_pg_collection_kinds
+tap_lms.patches.v0_2.add_pgcollection_unique_index

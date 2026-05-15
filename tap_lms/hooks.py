@@ -87,6 +87,13 @@ scheduler_events = {
         "30 3 * * 2": [
             "tap_lms.summer_program.scheduler.weekly_content_delivery_trigger",
         ],
+        # Task #56 (2026-05-16): hourly watchdog for PEs stuck in
+        # feedback_ready because Glific's F5 callback dropped silently.
+        # LOG-only — does NOT auto-transition; operator replays manually.
+        # See pre_launch.feedback_ready_watchdog for full rationale.
+        "0 * * * *": [
+            "tap_lms.summer_program.pre_launch.feedback_ready_watchdog",
+        ],
     },
 }
 

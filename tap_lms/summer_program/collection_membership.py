@@ -106,15 +106,34 @@ def _enqueue_group_write(pe, kind, action):
         contact_id=str(pe.glific_id),
         action=action,
         pe_name=pe.name,
+        pg_collection_name=col["name"],
         retry_count=0,
     )
 
 
-def _group_write_job(glific_group_id, contact_id, action, pe_name, retry_count=0):
+def _group_write_job(
+    glific_group_id,
+    contact_id,
+    action,
+    pe_name,
+    pg_collection_name=None,
+    retry_count=0,
+):
     """Background worker — actual Glific API call with retry + DLQ (P-007).
 
     Failures re-enqueue up to GLIFIC_SYNC_MAX_RETRIES; exhausted retries
     land in the DLQ log so operators can replay manually.
+
+    On successful API call, atomically maintains `member_count` on the
+    PGCollection row (CR-005 follow-up 2026-05-16): +1 on add,
+    GREATEST(0, count - 1) on remove. The GREATEST guard prevents the
+    counter from going negative if a remove fires for a contact that
+    was never in the group (idempotent on the Glific side, but our
+    local counter shouldn't lie about it).
+
+    `pg_collection_name` is optional — old in-flight jobs enqueued before
+    this kwarg landed will pass None, in which case we skip the counter
+    update. They still get retry+DLQ behaviour on the Glific call itself.
     """
     from tap_lms.summer_program.constants import (
         GLIFIC_SYNC_MAX_RETRIES,
@@ -130,6 +149,12 @@ def _group_write_job(glific_group_id, contact_id, action, pe_name, retry_count=0
             add_contact_to_group(contact_id, glific_group_id)
         elif action == "remove":
             remove_contact_from_group(contact_id, glific_group_id)
+
+        # Glific call succeeded — maintain member_count atomically.
+        # Skipped on old in-flight jobs (pg_collection_name=None).
+        if pg_collection_name:
+            _bump_member_count(pg_collection_name, action)
+
     except Exception as e:
         retry_count = (retry_count or 0) + 1
         if retry_count <= GLIFIC_SYNC_MAX_RETRIES:
@@ -142,6 +167,7 @@ def _group_write_job(glific_group_id, contact_id, action, pe_name, retry_count=0
                     contact_id=contact_id,
                     action=action,
                     pe_name=pe_name,
+                    pg_collection_name=pg_collection_name,
                     retry_count=retry_count,
                 )
             except Exception as enqueue_err:
@@ -160,6 +186,39 @@ def _group_write_job(glific_group_id, contact_id, action, pe_name, retry_count=0
                 f"pe={pe_name}, retries={retry_count}, error={e}",
                 GLIFIC_SYNC_DLQ_LOG_TITLE,
             )
+
+
+def _bump_member_count(pg_collection_name, action):
+    """Atomically maintain PGCollection.member_count.
+
+    Single-statement UPDATE so two concurrent workers can't clobber each
+    other. `GREATEST(0, ...)` on remove guards against the counter going
+    negative if Glific reports success for a remove of a non-member.
+
+    NOTE: `member_count` is a denormalized counter, not the source of truth.
+    Glific itself is the SSOT for group membership. We maintain this column
+    so the weekly cron can cheaply skip empty BPRs without an API round-trip.
+    If it ever drifts by ±1 due to a partial failure, that's expected — the
+    cron's `member_count > 0` check still gates correctly.
+    """
+    if action == "add":
+        frappe.db.sql(
+            """
+            UPDATE "tabPGCollection"
+               SET member_count = COALESCE(member_count, 0) + 1
+             WHERE name = %s
+            """,
+            (pg_collection_name,),
+        )
+    elif action == "remove":
+        frappe.db.sql(
+            """
+            UPDATE "tabPGCollection"
+               SET member_count = GREATEST(0, COALESCE(member_count, 0) - 1)
+             WHERE name = %s
+            """,
+            (pg_collection_name,),
+        )
 
 
 def _get_pg_collection_by_kind(batch_name, kind):
