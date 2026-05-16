@@ -8,8 +8,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "program",
-  "course_level"
+  "program"
  ],
  "fields": [
   {
@@ -17,12 +16,6 @@
    "fieldtype": "Data",
    "label": "Program",
    "reqd": 1
-  },
-  {
-   "fieldname": "course_level",
-   "fieldtype": "Link",
-   "label": "Course Level",
-   "options": "Course Level"
   }
  ],
  "index_web_pages_for_search": 1,
