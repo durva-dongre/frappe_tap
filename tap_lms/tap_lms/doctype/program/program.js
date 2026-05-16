@@ -3,31 +3,31 @@ frappe.ui.form.on("Program", {
     refresh(frm) {
         frm.trigger("set_field_descriptions");
         frm.trigger("add_custom_buttons");
-        frm.trigger("highlight_status");
+        frm.trigger("render_batches_dashboard");
     },
 
     set_field_descriptions(frm) {
         frm.set_df_property(
-            "reg_end_date",
+            "course_level",
             "description",
-            "Must be on or before the program start date."
-        );
-        frm.set_df_property(
-            "batch_id",
-            "description",
-            "Unique identifier for this batch. Cannot be changed after creation."
+            "The course level associated with this program."
         );
     },
 
     add_custom_buttons(frm) {
         if (!frm.is_new()) {
             frm.add_custom_button(
-                __("View Active Programs"),
+                __("Create Batch"),
                 () => {
-                    frappe.set_route("List", "Program", {
-                        start: ["<=", frappe.datetime.get_today()],
-                        end: [">=", frappe.datetime.get_today()],
-                    });
+                    frappe.new_doc("Batch", { program: frm.doc.name });
+                },
+                __("Actions")
+            );
+
+            frm.add_custom_button(
+                __("View Batches"),
+                () => {
+                    frappe.set_route("List", "Batch", { program: frm.doc.name });
                 },
                 __("Actions")
             );
@@ -41,17 +41,34 @@ frappe.ui.form.on("Program", {
                         callback(r) {
                             if (r.message) {
                                 const d = r.message;
+                                const batch_rows = d.batches.map(b => `
+                                    <tr>
+                                        <td>${b.name1 || "-"}</td>
+                                        <td>${b.batch_id || "-"}</td>
+                                        <td>${b.start_date || "-"}</td>
+                                        <td>${b.end_date || "-"}</td>
+                                        <td>${b.active ? "Yes" : "No"}</td>
+                                    </tr>
+                                `).join("");
+
                                 frappe.msgprint({
                                     title: __("Program Summary"),
                                     message: `
-                                        <table class="table table-bordered">
-                                            <tr><td><b>Program</b></td><td>${d.program || "-"}</td></tr>
-                                            <tr><td><b>Batch ID</b></td><td>${d.batch_id || "-"}</td></tr>
-                                            <tr><td><b>Batch</b></td><td>${d.batch || "-"}</td></tr>
-                                            <tr><td><b>Course Level</b></td><td>${d.course_level || "-"}</td></tr>
-                                            <tr><td><b>Start</b></td><td>${d.start || "-"}</td></tr>
-                                            <tr><td><b>End</b></td><td>${d.end || "-"}</td></tr>
-                                            <tr><td><b>Reg End Date</b></td><td>${d.reg_end_date || "-"}</td></tr>
+                                        <p><b>Program:</b> ${d.program || "-"}</p>
+                                        <p><b>Course Level:</b> ${d.course_level || "-"}</p>
+                                        <p><b>Total Batches:</b> ${d.total_batches}</p>
+                                        <p><b>Active Batches:</b> ${d.active_batches}</p>
+                                        <table class="table table-bordered" style="margin-top:10px;">
+                                            <thead>
+                                                <tr>
+                                                    <th>Name</th>
+                                                    <th>Batch ID</th>
+                                                    <th>Start</th>
+                                                    <th>End</th>
+                                                    <th>Active</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>${batch_rows || "<tr><td colspan='5'>No batches found.</td></tr>"}</tbody>
                                         </table>
                                     `,
                                     indicator: "blue",
@@ -65,62 +82,22 @@ frappe.ui.form.on("Program", {
         }
     },
 
-    highlight_status(frm) {
+    render_batches_dashboard(frm) {
         if (frm.is_new()) return;
 
-        const today = frappe.datetime.get_today();
-        const start = frm.doc.start;
-        const end = frm.doc.end;
-
-        if (start && end) {
-            if (today >= start && today <= end) {
-                frm.dashboard.set_headline_alert(
-                    __("This program is currently active."),
-                    "green"
-                );
-            } else if (today < start) {
-                frm.dashboard.set_headline_alert(
-                    __("This program has not started yet."),
-                    "blue"
-                );
-            } else {
-                frm.dashboard.set_headline_alert(
-                    __("This program has ended."),
-                    "orange"
-                );
-            }
-        }
-    },
-
-    start(frm) {
-        frm.trigger("validate_date_order");
-    },
-
-    end(frm) {
-        frm.trigger("validate_date_order");
-    },
-
-    reg_end_date(frm) {
-        if (frm.doc.reg_end_date && frm.doc.start) {
-            if (frm.doc.reg_end_date > frm.doc.start) {
-                frappe.msgprint({
-                    message: __("Registration End Date should be on or before the Start date."),
-                    indicator: "orange",
-                });
-                frm.set_value("reg_end_date", "");
-            }
-        }
-    },
-
-    validate_date_order(frm) {
-        if (frm.doc.start && frm.doc.end) {
-            if (frm.doc.start >= frm.doc.end) {
-                frappe.msgprint({
-                    message: __("End date must be after Start date."),
-                    indicator: "red",
-                });
-                frm.set_value("end", "");
-            }
-        }
+        frappe.call({
+            method: "tap_lms.tap_lms.doctype.program.program.get_batches",
+            args: { program_name: frm.doc.name },
+            callback(r) {
+                if (r.message) {
+                    const total = r.message.length;
+                    const active = r.message.filter(b => b.active).length;
+                    frm.dashboard.set_headline_alert(
+                        __("{0} batch(es) — {1} active", [total, active]),
+                        active > 0 ? "green" : "orange"
+                    );
+                }
+            },
+        });
     },
 });

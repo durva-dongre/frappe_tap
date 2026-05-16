@@ -1,16 +1,15 @@
 import frappe
 from frappe.model.document import Document
-from frappe.utils import getdate, nowdate
 
 
 class Program(Document):
 
     def validate(self):
-        self.validate_dates()
-        self.validate_registration_end_date()
+        self.validate_course_level()
 
-    def before_insert(self):
-        self.validate_duplicate_batch()
+    def validate_course_level(self):
+        if self.course_level and not frappe.db.exists("Course Level", self.course_level):
+            frappe.throw(frappe._("Course Level {0} does not exist.").format(self.course_level))
 
     def after_insert(self):
         frappe.msgprint(
@@ -19,55 +18,36 @@ class Program(Document):
             alert=True,
         )
 
-    def validate_dates(self):
-        if self.start and self.end:
-            if getdate(self.start) >= getdate(self.end):
-                frappe.throw(frappe._("End date must be after Start date."))
 
-    def validate_registration_end_date(self):
-        if self.reg_end_date and self.start:
-            if getdate(self.reg_end_date) > getdate(self.start):
-                frappe.throw(
-                    frappe._("Registration End Date must be on or before the Start date.")
-                )
-
-    def validate_duplicate_batch(self):
-        existing = frappe.db.exists(
-            "Program",
-            {
-                "batch_id": self.batch_id,
-                "name": ("!=", self.name),
-            },
-        )
-        if existing:
-            frappe.throw(
-                frappe._("A Program with Batch ID {0} already exists.").format(self.batch_id)
-            )
+@frappe.whitelist()
+def get_batches(program_name):
+    return frappe.get_all(
+        "Batch",
+        filters={"program": program_name},
+        fields=[
+            "name",
+            "name1",
+            "batch_id",
+            "start_date",
+            "end_date",
+            "active",
+            "regist_end_date",
+            "program_type",
+            "total_weeks",
+            "current_calendar_week",
+        ],
+        order_by="start_date asc",
+    )
 
 
 @frappe.whitelist()
 def get_program_summary(program_name):
     doc = frappe.get_doc("Program", program_name)
+    batches = get_batches(program_name)
     return {
         "program": doc.program,
-        "batch_id": doc.batch_id,
-        "batch": doc.batch,
         "course_level": doc.course_level,
-        "start": doc.start,
-        "end": doc.end,
-        "reg_end_date": doc.reg_end_date,
+        "total_batches": len(batches),
+        "active_batches": len([b for b in batches if b.active]),
+        "batches": batches,
     }
-
-
-@frappe.whitelist()
-def get_active_programs():
-    today = nowdate()
-    return frappe.get_all(
-        "Program",
-        filters={
-            "start": ("<=", today),
-            "end": (">=", today),
-        },
-        fields=["name", "program", "batch_id", "batch", "course_level", "start", "end"],
-        order_by="start asc",
-    )
