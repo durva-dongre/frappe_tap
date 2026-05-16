@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:{program}-{####}",
+ "autoname": "format:{program}",
  "creation": "2026-05-16 00:00:00.000000",
  "default_view": "List",
  "doctype": "DocType",
