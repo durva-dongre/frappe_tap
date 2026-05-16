@@ -11,6 +11,7 @@
   "name1",
   "vertical",
   "stage",
+  "program",
   "kit_less",
   "course_description",
   "course_summary",
@@ -37,6 +38,12 @@
    "fieldtype": "Link",
    "label": "Stage",
    "options": "Stage Grades"
+  },
+  {
+   "fieldname": "program",
+   "fieldtype": "Link",
+   "label": "Program",
+   "options": "Program"
   },
   {
    "default": "0",
