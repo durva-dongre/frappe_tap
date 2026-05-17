@@ -19,6 +19,7 @@ def _import_save_submission_with_stubs():
     state_machine = types.ModuleType("tap_lms.summer_program.state_machine")
     state_machine.get_active_pe = MagicMock()
     state_machine.apply_submission_transition = MagicMock(return_value=("T7", True))
+    state_machine.t22_duplicate_submission = MagicMock()
 
     event_log = types.ModuleType("tap_lms.summer_program.event_log")
     event_log.log_event = MagicMock()
@@ -259,6 +260,54 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
             deprecation_logged,
             f"Expected deprecation log; got calls: {mock_frappe.log_error.call_args_list}",
         )
+
+    def test_duplicate_submission_gets_stock_feedback_in_student_language(self):
+        save_submission = _import_save_submission_with_stubs()
+        pe = self._build_pe(journey_label="submitted")
+        pe.language = "Hindi"
+        submission_doc = MagicMock()
+        submission_doc.name = "SUB-DUP-001"
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
+                patch.object(save_submission, "get_active_pe", return_value=pe), \
+                patch.object(save_submission, "_try_claim_primary", return_value=False), \
+                patch.object(save_submission, "_calculate_points", return_value=0), \
+                patch.object(save_submission, "_create_submission", return_value=submission_doc), \
+                patch.object(save_submission, "_update_engagement"), \
+                patch.object(save_submission, "_queue_submission_processing") as mock_queue, \
+                patch.object(save_submission, "log_event"):
+            mock_frappe.local.response = {}
+            mock_frappe.utils.random_string = lambda n: "abcd1234"
+
+            response = save_submission.save_submission(
+                student_id="STU-001",
+                assignment_id="ASN-001",
+                submission="my answer",
+            )
+
+        self.assertTrue(response.get("success"))
+        self.assertEqual(response.get("status"), "duplicate")
+        mock_queue.assert_not_called()
+
+        duplicate_update = mock_frappe.db.set_value.call_args
+        self.assertEqual(duplicate_update.args[0], "Submission")
+        self.assertEqual(duplicate_update.args[1], "SUB-DUP-001")
+        updates = duplicate_update.args[2]
+        self.assertEqual(updates["result_status"], "Success - Flagged")
+        self.assertEqual(
+            updates["overall_feedback"],
+            "Hey champ, you've already submitted this activity! Hang tight — the next one is coming soon. 🏆",
+        )
+        self.assertEqual(
+            updates["overall_feedback_translated"],
+            "अरे चैंप, तुमने इस activity को पहले ही submit कर दिया है! थोड़ा रुको — अगली activity जल्द आ रही है। 🏆",
+        )
+        self.assertEqual(
+            updates["audio_feedback_url"],
+            "https://storage.googleapis.com/tap-lms-submissions/audio_feedback/double_submission_hindi.mp3",
+        )
+        self.assertEqual(submission_doc.result_status, "Success - Flagged")
 
     def test_save_submission_missing_assignment_id_is_rejected(self):
         """Companion to the previous: with neither param the call must fail

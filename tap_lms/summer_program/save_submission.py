@@ -26,6 +26,7 @@ states when grace expires. Either way the primary-submission transitions
 """
 import frappe
 import json
+import os
 from frappe.utils import now_datetime, today, getdate, cint
 from urllib.parse import urlparse
 
@@ -202,6 +203,8 @@ def save_submission(student_id, assignment_id=None, submission=None, week=None, 
         from tap_lms.summer_program.state_machine import t22_duplicate_submission
         t22_duplicate_submission(pe, "flow_callback")
         transition_id = "T22"
+        if submission_doc:
+            _apply_duplicate_submission_feedback(submission_doc, getattr(pe, "language", None))
 
     # ── Update EngagementState ──────────────────────────────
     _update_engagement(student_id)
@@ -368,6 +371,86 @@ def _create_submission(pe, student_id, week, payload, assignment_id, is_primary)
     doc.created_at = now_datetime()
     doc.insert(ignore_permissions=True)
     return doc
+
+
+def _apply_duplicate_submission_feedback(submission_doc, language):
+    """Mark duplicate submissions with stock feedback, without queueing AI review."""
+    english_feedback = _get_stock_feedback("English", "double_submission") or {}
+    translated_feedback = _get_stock_feedback(language, "double_submission") or english_feedback
+
+    overall_feedback = english_feedback.get("translated_feedback")
+    overall_feedback_translated = translated_feedback.get("translated_feedback") or overall_feedback
+    audio_feedback_url = translated_feedback.get("audio_feedback_url") or english_feedback.get("audio_feedback_url")
+
+    updates = {
+        "result_status": "Success - Flagged",
+        "overall_feedback": overall_feedback,
+        "overall_feedback_translated": overall_feedback_translated,
+        "audio_feedback_url": audio_feedback_url,
+    }
+    frappe.db.set_value(
+        "Submission",
+        submission_doc.name,
+        updates,
+        update_modified=False,
+    )
+    for field, value in updates.items():
+        setattr(submission_doc, field, value)
+
+
+def _get_stock_feedback(language, message_type):
+    stock_data = _load_stock_feedback_data()
+    language_entries = _find_stock_feedback_language_entries(stock_data, language)
+    if not language_entries:
+        language_entries = stock_data.get("English", [])
+
+    for entry in language_entries:
+        if entry.get("message_type") == message_type:
+            return entry
+    return None
+
+
+def _find_stock_feedback_language_entries(stock_data, language):
+    language_name = _normalize_stock_feedback_language(language)
+    for stock_language, entries in stock_data.items():
+        if stock_language.lower() == language_name.lower():
+            return entries
+    return None
+
+
+def _normalize_stock_feedback_language(language):
+    if not language:
+        return "English"
+
+    normalized = str(language).strip()
+    language_aliases = {
+        "en": "English",
+        "hi": "Hindi",
+        "pa": "Punjabi",
+        "mr": "Marathi",
+        "ka": "Kannada",
+        "kn": "Kannada",
+    }
+    return language_aliases.get(normalized.lower(), normalized)
+
+
+def _load_stock_feedback_data():
+    data_path = os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "feedback_handler",
+            "stock_feedback_and_audio.json",
+        )
+    )
+    try:
+        with open(data_path, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        frappe.logger("submission").error(
+            f"Could not load stock feedback for duplicate submission: {exc}"
+        )
+        return {}
 
 
 def _log_student_content_submission(
