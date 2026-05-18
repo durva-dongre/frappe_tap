@@ -111,6 +111,56 @@ def _enqueue_contact_field_sync(pe):
     Serializes the PE fields into a plain dict so the background worker
     doesn't need to reload the doc. This keeps the API response fast
     (~50ms) while Glific sync happens in the background (~200-500ms).
+
+    ── Field provenance — the 28 SP contact fields ────────────────────
+    This function builds the recurring 21-field STATE payload pushed on
+    every state-machine transition. The 7 IDENTITY fields below (immutable
+    after enrollment) are pushed ONCE by `_process_pe_chunk` at PE creation
+    and never re-synced from here. Total cache size on Glific: 28 fields.
+
+    21 STATE fields (this function — re-synced on every transition):
+        resolved_flow_state         pe.resolved_flow_state
+        current_week                pe.current_week
+        current_path                pe.current_path
+        current_tier                pe.current_tier
+        program_status              pe.program_status
+        total_points                pe.total_points (stored, not summed)
+        current_streak              pe.current_streak
+        grace_window_end_at         pe.grace_window_end_at
+        current_expected_submission_type
+                                    pe.current_expected_submission_type
+                                    (denormalized — written at enrollment +
+                                     T14 week advance, read directly here)
+        last_escalation_step        pe.current_escalation_step
+        submission_count            pe.submission_count
+        # CR-002 v2 gamification (8):
+        total_activity_points       pe.total_activity_points
+        weekly_activity_points      pe.weekly_activity_points
+        total_quiz_points           pe.total_quiz_points
+        weekly_quiz_points          pe.weekly_quiz_points
+        total_submission_points     pe.total_submission_points
+        weekly_submission_points    pe.weekly_submission_points
+        special_gems                pe.special_gems
+        weekly_submission_done      pe.weekly_submission_done
+        # CR-003 escalation routing (2):
+        escalation_order            pe.current_escalation_step (re-aliased)
+        escalation_type             pe.current_escalation_type (denormalized,
+                                    written by dispatcher T2/T4/T8/T10
+                                    escalation handlers)
+
+    7 IDENTITY fields (pushed once by _process_pe_chunk, immutable):
+        student_id, student_name, batch_id, archetype, language,
+        experiment_arm, course_level
+
+    INTENTIONALLY EXCLUDED:
+        bonus_quiz_points — constant defined for future use; not awarded
+                            in this version; skip in sync payload.
+        weekly_video_done — internal state-machine flag for T19 streak/gem
+                            penalty branch; never pushed to Glific.
+
+    If you add a new contact field to the SP, update both this function
+    AND _process_pe_chunk's enrollment-time push so the cache is consistent
+    from day-one rather than only after the first transition.
     """
     fields = {
         CF_RESOLVED_FLOW_STATE: pe.resolved_flow_state or "",

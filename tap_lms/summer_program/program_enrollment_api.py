@@ -24,6 +24,14 @@ from tap_lms.summer_program.constants import (
     CF_EXPERIMENT_ARM,
     CF_COURSE_LEVEL, CF_STUDENT_NAME,
     CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
+    # CR-002 v2 gamification (8 fields, all initialized to 0 at enrollment)
+    CF_TOTAL_ACTIVITY_POINTS, CF_WEEKLY_ACTIVITY_POINTS,
+    CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
+    CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
+    CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
+    # CR-003 escalation routing (2 fields, initialized to empty/0 — no
+    # escalation at enrollment time)
+    CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
     ALL_ARCHETYPES, TERMINAL_STATES,
     ENROLLMENT_CHUNK_SIZE, ENROLLMENT_QUEUE,
     BPR_COLLECTIONS_READY,
@@ -197,14 +205,27 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
             pe.next_action_type = ""
             pe.insert(ignore_permissions=True)
 
-            # Set 18 Glific contact fields — async via retry-aware background job
+            # Set 28 Glific contact fields — async via retry-aware background job
             # so transient Glific outages don't lose the enrollment-time push.
+            #
+            # Cache size = 28 fields = 7 identity + 21 state. The 8 CR-002 v2
+            # gamification fields and 2 CR-003 escalation fields are all
+            # initialized to "0" (or "" for escalation_type) so Glific flows
+            # see consistent values from day-one, not just after the first
+            # state transition fires _enqueue_contact_field_sync. See the
+            # field-provenance docstring on _enqueue_contact_field_sync for
+            # the complete list of fields and their sources.
             if glific_id:
                 fields = {
+                    # ── 7 IDENTITY fields (immutable post-enrollment) ──
                     CF_STUDENT_ID: sid,
                     CF_BATCH_ID: batch.batch_id or batch_name,
                     CF_ARCHETYPE: archetype,
                     CF_LANGUAGE: language or "",
+                    CF_EXPERIMENT_ARM: experiment_arm or "",
+                    CF_COURSE_LEVEL: course_level or "",
+                    CF_STUDENT_NAME: get_student_display_name(student),
+                    # ── 11 base STATE fields (re-synced on transitions) ──
                     CF_RESOLVED_FLOW_STATE: STATE_NORMAL_CONTENT,
                     CF_CURRENT_WEEK: "1",
                     CF_CURRENT_PATH: PATH_CORE,
@@ -214,11 +235,22 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
                     CF_CURRENT_STREAK: "0",
                     CF_GRACE_WINDOW_END: "",
                     CF_EXPECTED_SUBMISSION: expected_submission or "",
-                    CF_EXPERIMENT_ARM: experiment_arm or "",
-                    CF_COURSE_LEVEL: course_level or "",
-                    CF_STUDENT_NAME: get_student_display_name(student),
                     CF_LAST_ESCALATION_STEP: "0",
                     CF_SUBMISSION_COUNT: "0",
+                    # ── 8 CR-002 v2 gamification (all 0 at enrollment) ──
+                    # bonus_quiz_points is intentionally excluded — see the
+                    # docstring on _enqueue_contact_field_sync.
+                    CF_TOTAL_ACTIVITY_POINTS: "0",
+                    CF_WEEKLY_ACTIVITY_POINTS: "0",
+                    CF_TOTAL_QUIZ_POINTS: "0",
+                    CF_WEEKLY_QUIZ_POINTS: "0",
+                    CF_TOTAL_SUBMISSION_POINTS: "0",
+                    CF_WEEKLY_SUBMISSION_POINTS: "0",
+                    CF_SPECIAL_GEMS: "0",
+                    CF_WEEKLY_SUBMISSION_DONE: "0",
+                    # ── 2 CR-003 escalation routing (empty at enrollment) ──
+                    CF_ESCALATION_ORDER: "0",
+                    CF_ESCALATION_TYPE: "",
                 }
                 frappe.enqueue(
                     "tap_lms.summer_program.state_machine._sync_contact_fields_job",
@@ -367,15 +399,22 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
 
     pe.insert(ignore_permissions=True)
 
-    # ── Set 18 Glific Contact Fields ────────────────────────
+    # ── Set 28 Glific Contact Fields ────────────────────────
     # Async via retry-aware background job (pattern P-007) so transient Glific
     # outages don't lose the enrollment-time push.
+    # Mirror of _process_pe_chunk's enrollment push — keep these two in sync.
+    # See _enqueue_contact_field_sync for the field-provenance docstring.
     if glific_id:
         fields = {
+            # ── 7 IDENTITY fields ──
             CF_STUDENT_ID: student_id,
             CF_BATCH_ID: batch.batch_id or batch_id,
             CF_ARCHETYPE: archetype,
             CF_LANGUAGE: language or "",
+            CF_EXPERIMENT_ARM: experiment_arm or "",
+            CF_COURSE_LEVEL: course_level or "",
+            CF_STUDENT_NAME: get_student_display_name(student),
+            # ── 11 base STATE fields ──
             CF_RESOLVED_FLOW_STATE: STATE_NORMAL_CONTENT,
             CF_CURRENT_WEEK: "1",
             CF_CURRENT_PATH: PATH_CORE,
@@ -385,11 +424,20 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
             CF_CURRENT_STREAK: "0",
             CF_GRACE_WINDOW_END: "",
             CF_EXPECTED_SUBMISSION: expected_submission or "",
-            CF_EXPERIMENT_ARM: experiment_arm or "",
-            CF_COURSE_LEVEL: course_level or "",
-            CF_STUDENT_NAME: get_student_display_name(student),
             CF_LAST_ESCALATION_STEP: "0",
             CF_SUBMISSION_COUNT: "0",
+            # ── 8 CR-002 v2 gamification (all 0 at enrollment) ──
+            CF_TOTAL_ACTIVITY_POINTS: "0",
+            CF_WEEKLY_ACTIVITY_POINTS: "0",
+            CF_TOTAL_QUIZ_POINTS: "0",
+            CF_WEEKLY_QUIZ_POINTS: "0",
+            CF_TOTAL_SUBMISSION_POINTS: "0",
+            CF_WEEKLY_SUBMISSION_POINTS: "0",
+            CF_SPECIAL_GEMS: "0",
+            CF_WEEKLY_SUBMISSION_DONE: "0",
+            # ── 2 CR-003 escalation routing (empty at enrollment) ──
+            CF_ESCALATION_ORDER: "0",
+            CF_ESCALATION_TYPE: "",
         }
         frappe.enqueue(
             "tap_lms.summer_program.state_machine._sync_contact_fields_job",
