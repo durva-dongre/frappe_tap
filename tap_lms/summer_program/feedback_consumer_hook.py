@@ -90,7 +90,7 @@ def on_feedback_ready(submission_name, student_id=None):
         # handle the commit so that submission update + state transition are atomic.
         result_status = frappe.db.get_value("Submission", submission_name, "result_status")
 
-        if result_status == "failed":
+        if result_status == "Failed" or result_status == "Success - Flagged":
             from tap_lms.summer_program.state_machine import t6b_failed_feedback_to_remedial
             t6b_failed_feedback_to_remedial(pe, trigger_source="microservice")
             return {"status": "transitioned", "pe": pe_name, "branch": "remedial"}

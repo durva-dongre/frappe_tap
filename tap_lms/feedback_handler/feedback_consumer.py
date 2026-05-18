@@ -185,7 +185,9 @@ class FeedbackConsumer:
                 frappe.logger().error(f"Invalid message format: {str(e)}. Body: {body}")
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
+            
 
+            print(f"Received feedback for submission: {submission_id}")
             frappe.logger().info(f"Processing feedback for submission: {submission_id}")
 
             # Check if submission exists
