@@ -18,11 +18,11 @@ Usage from `bench execute`:
 
     bench --site tap_lms.dev execute \\
         tap_lms.summer_program.dev_tools.reset_pe_to_state_0 \\
-        --kwargs '{"pe_name": "h2i6sbirph", "dry_run": true}'
+        --kwargs '{"student_id": "STU-0001", "dry_run": true}'
 
     bench --site tap_lms.dev execute \\
         tap_lms.summer_program.dev_tools.reset_pe_to_state_0 \\
-        --kwargs '{"pe_name": "h2i6sbirph"}'
+        --kwargs '{"student_id": "STU-0001"}'
 
     bench --site tap_lms.dev execute \\
         tap_lms.summer_program.dev_tools.reset_pes_for_batch \\
@@ -31,8 +31,8 @@ Usage from `bench execute`:
 Usage from `bench console`:
 
     >>> from tap_lms.summer_program.dev_tools import reset_pe_to_state_0
-    >>> reset_pe_to_state_0("h2i6sbirph", dry_run=True)
-    >>> reset_pe_to_state_0("h2i6sbirph")
+    >>> reset_pe_to_state_0("STU-0001", dry_run=True)
+    >>> reset_pe_to_state_0("STU-0001")
 """
 import frappe
 
@@ -40,6 +40,7 @@ from tap_lms.summer_program.constants import (
     STATE_NORMAL_CONTENT,
     LABEL_ENROLLED,
     PROGRAM_ACTIVE,
+    PROGRAM_PAUSED,
     PATH_CORE,
 )
 # Hoisted at module level so tests can patch at the canonical location
@@ -199,15 +200,16 @@ _HISTORY_DOCTYPES = (
 )
 
 
+@frappe.whitelist(allow_guest=False)
 def reset_pe_to_state_0(
-    pe_name,
+    student_id,
     dry_run=False,
     delete_history=True,
     push_to_glific=True,
     verbose=True,
     i_know_this_is_destructive=False,
 ):
-    """Reset a single ProgramEnrollment to its initial post-enrollment state.
+    """Reset a student's active ProgramEnrollment to its initial state.
 
     Resets:
       - PE state machine fields → state 0 (normal_content_delivery, week 1,
@@ -234,7 +236,7 @@ def reset_pe_to_state_0(
       - Batch / ArchetypeConfig / WeekRule (configuration)
 
     Args:
-        pe_name: ProgramEnrollment.name (e.g. 'h2i6sbirph')
+        student_id: Student.name whose active/paused ProgramEnrollment is reset
         dry_run: if True, print intended changes without writing
         delete_history: if True, delete journey audit rows for this student
         push_to_glific: if True, enqueue a contact-field sync job
@@ -246,13 +248,47 @@ def reset_pe_to_state_0(
 
     Raises:
         frappe.PermissionError if site name suggests production.
-        frappe.DoesNotExistError if pe_name is invalid.
+        frappe.DoesNotExistError if student_id is invalid.
+        frappe.ValidationError if student has no active/paused PE.
     """
+    dry_run = _coerce_bool(dry_run)
+    delete_history = _coerce_bool(delete_history)
+    push_to_glific = _coerce_bool(push_to_glific)
+    verbose = _coerce_bool(verbose)
+    i_know_this_is_destructive = _coerce_bool(i_know_this_is_destructive)
+
     _assert_dev_site(i_know_this_is_destructive=i_know_this_is_destructive)
 
     frappe.db.rollback()  # PG txn hygiene
 
-    pe = frappe.get_doc("ProgramEnrollment", pe_name)
+    if not frappe.db.exists("Student", student_id):
+        frappe.throw(f"Student not found: {student_id}", frappe.DoesNotExistError)
+
+    pe = _get_active_pe_for_student(student_id)
+    if not pe:
+        frappe.throw(
+            f"No active/paused ProgramEnrollment found for student {student_id}",
+            frappe.ValidationError,
+        )
+
+    return _reset_pe_doc_to_state_0(
+        pe,
+        dry_run=dry_run,
+        delete_history=delete_history,
+        push_to_glific=push_to_glific,
+        verbose=verbose,
+    )
+
+
+def _reset_pe_doc_to_state_0(
+    pe,
+    dry_run=False,
+    delete_history=True,
+    push_to_glific=True,
+    verbose=True,
+):
+    """Reset an already-resolved PE doc. Keep public API resolution separate."""
+    pe_name = pe.name
     student_id = pe.student
 
     # ── Snapshot history counts ──────────────────────────
@@ -376,43 +412,47 @@ def reset_pes_for_batch(
 
     Returns the per-PE result dicts keyed by PE name.
     """
+    dry_run = _coerce_bool(dry_run)
+    delete_history = _coerce_bool(delete_history)
+    push_to_glific = _coerce_bool(push_to_glific)
+    i_know_this_is_destructive = _coerce_bool(i_know_this_is_destructive)
+
     _assert_dev_site(i_know_this_is_destructive=i_know_this_is_destructive)
 
     frappe.db.rollback()
 
-    pe_names = [
-        r[0] for r in frappe.db.sql(
-            """
-            SELECT name FROM "tabProgramEnrollment"
+    rows = frappe.db.sql(
+        """
+            SELECT name, student FROM "tabProgramEnrollment"
              WHERE batch = %s AND program_status IN ('active', 'paused')
              ORDER BY name
-            """,
-            (batch_name,),
-        )
-    ]
+        """,
+        (batch_name,),
+        as_dict=True,
+    )
 
-    if not pe_names:
+    if not rows:
         print(f"No active/paused PEs in batch {batch_name}.")
         return {}
 
     if dry_run:
-        print(f"DRY RUN — would reset {len(pe_names)} PEs in batch {batch_name}:")
-        for n in pe_names:
-            print(f"  {n}")
+        print(f"DRY RUN — would reset {len(rows)} PEs in batch {batch_name}:")
+        for row in rows:
+            print(f"  {row.name}  student={row.student}")
         return {}
 
-    print(f"Resetting {len(pe_names)} PEs in batch {batch_name}…")
+    print(f"Resetting {len(rows)} PEs in batch {batch_name}…")
     results = {}
-    for pe_name in pe_names:
+    for row in rows:
+        pe_name = row.name
         try:
-            result = reset_pe_to_state_0(
-                pe_name,
+            pe = frappe.get_doc("ProgramEnrollment", pe_name)
+            result = _reset_pe_doc_to_state_0(
+                pe,
                 dry_run=False,
                 delete_history=delete_history,
                 push_to_glific=push_to_glific,
                 verbose=False,
-                # Already passed the gate at function entry.
-                i_know_this_is_destructive=i_know_this_is_destructive,
             )
             results[pe_name] = result
             print(f"  {pe_name}  reset OK")
@@ -421,13 +461,36 @@ def reset_pes_for_batch(
             print(f"  {pe_name}  FAILED: {e}")
 
     ok = sum(1 for r in results.values() if "error" not in r)
-    print(f"\nDone — {ok}/{len(pe_names)} succeeded.")
+    print(f"\nDone — {ok}/{len(rows)} succeeded.")
     return results
 
 
 # ════════════════════════════════════════════════════════════
 # Internal helpers
 # ════════════════════════════════════════════════════════════
+
+def _get_active_pe_for_student(student_id):
+    """Return the most recently modified active/paused PE for a student."""
+    pe_name = frappe.db.get_value(
+        "ProgramEnrollment",
+        {
+            "student": student_id,
+            "program_status": ["in", [PROGRAM_ACTIVE, PROGRAM_PAUSED]],
+        },
+        "name",
+        order_by="modified desc",
+    )
+    if pe_name:
+        return frappe.get_doc("ProgramEnrollment", pe_name)
+    return None
+
+
+def _coerce_bool(value):
+    """Coerce API form-string booleans while preserving existing bool callers."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
 
 def _snapshot(pe):
     """Return the small subset of PE fields we care about for before/after."""

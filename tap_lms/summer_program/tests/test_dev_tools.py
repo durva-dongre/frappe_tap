@@ -119,10 +119,9 @@ class TestResetPeToState0(FrappeTestCase):
     ):
         student = _ensure_student("HP")
         pe = _make_advanced_pe(self.batch_name, student, "HP")
-        pe_name = pe.name
 
         result = reset_pe_to_state_0(
-            pe_name,
+            student,
             delete_history=False,   # keep test isolated from history doctypes
             push_to_glific=True,
             verbose=False,
@@ -202,9 +201,8 @@ class TestResetPeDryRun(FrappeTestCase):
     def test_dry_run_no_writes(self, mock_maintain, mock_sync, _mock_guard):
         student = _ensure_student("DRY")
         pe = _make_advanced_pe(self.batch_name, student, "DRY")
-        pe_name = pe.name
 
-        result = reset_pe_to_state_0(pe_name, dry_run=True, verbose=False)
+        result = reset_pe_to_state_0(student, dry_run=True, verbose=False)
 
         # State unchanged
         pe.reload()
