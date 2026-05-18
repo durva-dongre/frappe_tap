@@ -182,11 +182,20 @@ _FIELDS_TO_CLEAR = (
 #   - Submission.program_enrollment is a Link to ProgramEnrollment
 #   - StudentQuizAttempt.student / StudentContentLog.student are Link to Student
 #   - ProgramEventLog.enrollment is the PE link (NOT 'program_enrollment')
+#   - StudentStageProgress.student is a Link to Student. CRITICAL: this is
+#     the doctype `get_next_content` reads to track current_content_index /
+#     is_on_remedial / active_content_type / current_question_index — without
+#     clearing it, the next-content API stays stuck on the old position even
+#     after the PE row is reset.
+#   - StudentReflection.student / TransitionHistory.student are Link to Student.
 _HISTORY_DOCTYPES = (
-    ("Submission",         "program_enrollment", "pe_name"),
-    ("StudentQuizAttempt", "student",            "student"),
-    ("StudentContentLog",  "student",            "student"),
-    ("ProgramEventLog",    "enrollment",         "pe_name"),
+    ("Submission",            "program_enrollment", "pe_name"),
+    ("StudentQuizAttempt",    "student",            "student"),
+    ("StudentContentLog",     "student",            "student"),
+    ("StudentStageProgress",  "student",            "student"),
+    ("StudentReflection",     "student",            "student"),
+    ("TransitionHistory",     "student",            "student"),
+    ("ProgramEventLog",       "enrollment",         "pe_name"),
 )
 
 
