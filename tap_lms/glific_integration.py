@@ -418,6 +418,7 @@ def start_contact_flow(flow_id, contact_id, default_results):
         data = response.json()
         
         if "errors" in data:
+            frappe.logger().error(f"{data}")
             frappe.logger().error(f"Glific API Error in starting flow: {data['errors']}")
             return False
         
