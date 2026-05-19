@@ -106,7 +106,7 @@ def save_submission(student_id, assignment_id=None, submission=None, week=None, 
                 time.sleep(SAVE_SUBMISSION_DB_RETRY_DELAY_SECONDS * attempt)
                 continue
 
-    frappe.error(
+    frappe.log_error(
         f"save_submission exhausted serialization retries for "
         f"student_id={student_id}, assignment_id={assignment_id}: {last_error}",
         "SP Save Submission",
@@ -130,7 +130,7 @@ def _save_submission_once(student_id, assignment_id=None, submission=None, week=
     # Map it to `assignment_id` and log so we can track call-sites that still
     # use the legacy name before removing the alias.
     if assignment_id is None and content_id is not None:
-        frappe.error(
+        frappe.log_error(
             f"save_submission called with legacy 'content_id' param "
             f"(student_id={student_id}). Update Glific flow to use 'assignment_id'.",
             "SP API Deprecation",
