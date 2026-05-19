@@ -188,12 +188,19 @@ VALIDATION_FAILED = "failed"
 
 
 # ── Glific Contact Field Keys ─────────────────────────────
-# These are the 26 contact field names set on Glific contacts.
-# CR-002 v2 expands the baseline from 18 to 26 by adding the 8 gamification
-# fields below (activity/quiz/submission points split + special_gems +
-# weekly_submission_done sticky flag). `weekly_video_done` is intentionally
-# NOT added — it is an internal-only state-machine flag and is never pushed
-# to Glific (see CR-002 v2 §"Five gamification dimensions on PE").
+# These are the 28 contact field names set on Glific contacts (post CR-003).
+# Cache size evolution:
+#   - Original baseline: 18 fields
+#   - +CR-002 v2: +8 gamification fields (activity/quiz/submission points split,
+#     special_gems, weekly_submission_done sticky flag) → 26
+#   - +CR-003: +2 escalation routing fields (escalation_order, escalation_type)
+#     → 28
+# `weekly_video_done` is intentionally NOT pushed — internal-only state-machine
+# flag (see CR-002 v2 §"Five gamification dimensions on PE").
+# `bonus_quiz_points` constant exists below for future use but is intentionally
+# excluded from the sync payload in this version (no bonus quiz scoring yet).
+# See state_machine._enqueue_contact_field_sync for the canonical field
+# provenance docstring listing all 28 fields and their sources.
 CF_STUDENT_ID = "student_id"
 CF_BATCH_ID = "batch_id"
 CF_ARCHETYPE = "archetype"
