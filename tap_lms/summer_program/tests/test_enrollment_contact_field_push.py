@@ -20,7 +20,7 @@ from unittest.mock import patch
 from tap_lms.summer_program.constants import (
     # All 28 contact field names — explicit list so this test fails fast
     # if any CF_* constant is renamed or removed.
-    CF_STUDENT_ID, CF_BATCH_ID, CF_ARCHETYPE, CF_LANGUAGE,
+    CF_STUDENT_ID, CF_BATCH_ID, CF_ARCHETYPE, CF_LANGUAGE_ID,
     CF_EXPERIMENT_ARM, CF_COURSE_LEVEL, CF_STUDENT_NAME,
     CF_RESOLVED_FLOW_STATE, CF_CURRENT_WEEK, CF_CURRENT_PATH,
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
@@ -37,7 +37,7 @@ from tap_lms.summer_program.constants import (
 
 EXPECTED_FIELDS_AT_ENROLLMENT = {
     # Identity (7)
-    CF_STUDENT_ID, CF_BATCH_ID, CF_ARCHETYPE, CF_LANGUAGE,
+    CF_STUDENT_ID, CF_BATCH_ID, CF_ARCHETYPE, CF_LANGUAGE_ID,
     CF_EXPERIMENT_ARM, CF_COURSE_LEVEL, CF_STUDENT_NAME,
     # Base state (11)
     CF_RESOLVED_FLOW_STATE, CF_CURRENT_WEEK, CF_CURRENT_PATH,

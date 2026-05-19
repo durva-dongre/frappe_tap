@@ -204,7 +204,15 @@ VALIDATION_FAILED = "failed"
 CF_STUDENT_ID = "student_id"
 CF_BATCH_ID = "batch_id"
 CF_ARCHETYPE = "archetype"
-CF_LANGUAGE = "language"
+# CF_LANGUAGE_ID (2026-05-19 rename, was CF_LANGUAGE="language"):
+#   Avoids name collision with Glific's CORE `language` field (a built-in
+#   that stores the Glific language integer ID and is set via the
+#   updateContact mutation's `languageId` input, NOT via `fields`).
+#   Our custom `language_id` field acts as a flow-readable BACKUP/cache;
+#   the authoritative value lives on Glific CORE.
+#   Value is the Glific INTEGER language ID resolved from
+#   TAP Language.glific_language_id at push time — NOT the language NAME.
+CF_LANGUAGE_ID = "language_id"
 CF_RESOLVED_FLOW_STATE = "resolved_flow_state"
 CF_CURRENT_WEEK = "current_week"
 CF_CURRENT_PATH = "current_path"

@@ -130,9 +130,10 @@ def create_contact(name, phone, school_name, model_name, language_id, batch_id):
         frappe.logger().error(f"Exception occurred while creating Glific contact: {str(e)}", exc_info=True)
         return None
 
-def update_contact_fields(contact_id, fields_to_update):
+def update_contact_fields(contact_id, fields_to_update, language_id=None):
     """
-    Update Glific contact fields using fetch-merge-update pattern.
+    Update Glific contact fields using fetch-merge-update pattern, optionally
+    updating the contact's CORE language at the same time.
 
     Uses 2 GraphQL calls:
       1. Fetch existing contact fields (preserves fields set by other tools)
@@ -144,7 +145,16 @@ def update_contact_fields(contact_id, fields_to_update):
 
     Args:
         contact_id: Glific contact ID (string or int)
-        fields_to_update: dict of {field_name: value} to set
+        fields_to_update: dict of {field_name: value} to set. Can be empty
+                          if you only want to update language_id.
+        language_id: Optional Glific INTEGER language ID. When provided, sets
+                     the contact's CORE `language` field as part of the same
+                     updateContact mutation — no extra network round-trip.
+                     Pass None (default) to skip core-language update; pass
+                     an integer (or numeric string) to set it. Distinct from
+                     the custom `language_id` contact field — this updates
+                     Glific's built-in language attribute. Added 2026-05-19
+                     to fix the existing-contact-language-not-updated gap.
 
     Returns:
         True on success, False on failure
@@ -200,6 +210,23 @@ def update_contact_fields(contact_id, fields_to_update):
             }
 
         # ── Step 3: Write merged fields back ───────────────────
+        # If language_id was passed, include it in the mutation input so
+        # Glific's CORE language attribute is updated alongside the custom
+        # fields blob — single round-trip.
+        mutation_input = {
+            "name": contact_data.get("name", ""),
+            "fields": json.dumps(existing_fields),
+        }
+        if language_id is not None and language_id != "":
+            try:
+                mutation_input["languageId"] = int(language_id)
+            except (TypeError, ValueError):
+                frappe.logger().warning(
+                    f"Glific update_contact_fields: language_id={language_id!r} "
+                    f"is not a valid integer; skipping core-language update "
+                    f"for contact {contact_id}."
+                )
+
         update_payload = {
             "query": """
             mutation updateContact($id: ID!, $input: ContactInput!) {
@@ -217,11 +244,8 @@ def update_contact_fields(contact_id, fields_to_update):
             """,
             "variables": {
                 "id": str(contact_id),
-                "input": {
-                    "name": contact_data.get("name", ""),
-                    "fields": json.dumps(existing_fields)
-                }
-            }
+                "input": mutation_input,
+            },
         }
 
         update_response = requests.post(url, json=update_payload, headers=headers, timeout=15)
@@ -828,7 +852,17 @@ def add_student_to_glific_for_onboarding(student_name, phone, school_name, batch
         if grade:
             fields_to_update["grade"] = grade
 
-        update_contact_fields(existing_contact['id'], fields_to_update)
+        # 2026-05-19 — defensive existing-contact branch should also update
+        # the CORE language. Reached when process_glific_contact's initial
+        # lookup missed a contact (race / late-creation) but this function
+        # re-found one. Pass language_id so it's set in the same mutation
+        # as the field updates — parity with process_glific_contact's main
+        # existing-contact path.
+        update_contact_fields(
+            existing_contact['id'],
+            fields_to_update,
+            language_id=language_id,
+        )
 
         return existing_contact
     else:

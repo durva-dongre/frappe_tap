@@ -579,12 +579,25 @@ def process_glific_contact(student, glific_group, course_level=None):
         if student.grade:
             fields_to_update["grade"] = student.grade
         
-        # Update the contact fields
+        # Update the contact fields — and CORE language at the same time.
+        # 2026-05-19 fix: previously the existing-contact path didn't update
+        # Glific's CORE `language` field at all (it was only set at
+        # create_contact time). Pass language_id to update_contact_fields so
+        # it's pushed in the same updateContact mutation — no extra network
+        # call. New-contact path below already handles language correctly via
+        # create_contact's languageId arg.
         from tap_lms.glific_integration import update_contact_fields
-        update_result = update_contact_fields(existing_contact['id'], fields_to_update)
-        
+        update_result = update_contact_fields(
+            existing_contact['id'],
+            fields_to_update,
+            language_id=language_id,
+        )
+
         # SHORTENED LOG - just print, don't use #frappe.log_error
-        print(f"Updated {student.student_name}: {len(fields_to_update)} fields")
+        print(
+            f"Updated {student.student_name}: {len(fields_to_update)} fields"
+            f"{' + core language' if language_id else ''}"
+        )
         
         return existing_contact
     else:

@@ -17,7 +17,7 @@ from tap_lms.summer_program.constants import (
     STATE_NORMAL_CONTENT,
     LABEL_ENROLLED, PROGRAM_ACTIVE,
     PATH_CORE, TIER_BY_WEEK, DEFAULT_TIER,
-    CF_STUDENT_ID, CF_BATCH_ID, CF_ARCHETYPE, CF_LANGUAGE,
+    CF_STUDENT_ID, CF_BATCH_ID, CF_ARCHETYPE, CF_LANGUAGE_ID,
     CF_RESOLVED_FLOW_STATE, CF_CURRENT_WEEK, CF_CURRENT_PATH,
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
@@ -314,12 +314,24 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
             # field-provenance docstring on _enqueue_contact_field_sync for
             # the complete list of fields and their sources.
             if glific_id:
+                # Resolve TAP Language → Glific integer language ID for the
+                # custom `language_id` contact field. The CORE Glific
+                # language is set separately on the contact record (via
+                # create_contact's languageId arg in the chunk worker's
+                # downstream path / process_glific_contact for existing).
+                glific_language_id = ""
+                if language:
+                    glific_language_id = str(
+                        frappe.db.get_value(
+                            "TAP Language", language, "glific_language_id"
+                        ) or ""
+                    )
                 fields = {
                     # ── 7 IDENTITY fields (immutable post-enrollment) ──
                     CF_STUDENT_ID: sid,
                     CF_BATCH_ID: batch.batch_id or batch_name,
                     CF_ARCHETYPE: archetype,
-                    CF_LANGUAGE: language or "",
+                    CF_LANGUAGE_ID: glific_language_id,
                     CF_EXPERIMENT_ARM: experiment_arm or "",
                     CF_COURSE_LEVEL: course_level or "",
                     CF_STUDENT_NAME: get_student_display_name(student),
@@ -533,12 +545,22 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
     # Mirror of _process_pe_chunk's enrollment push — keep these two in sync.
     # See _enqueue_contact_field_sync for the field-provenance docstring.
     if glific_id:
+        # Resolve TAP Language → Glific integer language ID for the custom
+        # `language_id` contact field. CORE Glific language is set separately
+        # on the contact record by create_contact / process_glific_contact.
+        glific_language_id = ""
+        if language:
+            glific_language_id = str(
+                frappe.db.get_value(
+                    "TAP Language", language, "glific_language_id"
+                ) or ""
+            )
         fields = {
             # ── 7 IDENTITY fields ──
             CF_STUDENT_ID: student_id,
             CF_BATCH_ID: batch.batch_id or batch_id,
             CF_ARCHETYPE: archetype,
-            CF_LANGUAGE: language or "",
+            CF_LANGUAGE_ID: glific_language_id,
             CF_EXPERIMENT_ARM: experiment_arm or "",
             CF_COURSE_LEVEL: course_level or "",
             CF_STUDENT_NAME: get_student_display_name(student),
