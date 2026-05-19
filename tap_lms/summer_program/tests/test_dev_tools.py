@@ -43,6 +43,9 @@ def _ensure_batch():
     batch.name1 = "DevToolsTestBatch"
     batch.start_date = "2026-01-01"
     batch.end_date = "2026-04-30"
+    # Registration window (mandatory on Batch doctype as of current schema)
+    batch.regist_start_date = "2025-12-01"
+    batch.regist_end_date = "2025-12-31"
     batch.batch_id = "DTT01"
     batch.program_type = "Summer"
     batch.total_weeks = 12

@@ -92,6 +92,43 @@ def start_program_enrollment(bpr_name):
     ))
     new_students = [sid for sid in student_ids if sid not in existing_pes]
 
+    # ── Sibling-skip preview (interim, pre-sibling-PRD) ─────────────
+    # Pre-compute which candidates will hit the sibling-skip in
+    # _process_pe_chunk so we can surface the count up-front rather than
+    # silently dropping them in the chunk workers. The chunk workers
+    # still do their own re-check (race-safe with the partial unique
+    # index), but the preview gives operators visibility into the
+    # expected drop count before the chunks fire.
+    #
+    # KNOWN UNDERCOUNT: this preview only catches siblings of ALREADY-
+    # enrolled PEs. If two candidates in the same `new_students` list
+    # share a glific_id (intra-batch sibling cluster, neither yet
+    # enrolled), neither shows up here — the count understates by 1 per
+    # such cluster. The chunk worker still skips correctly (first wins,
+    # second hits the sibling check OR the DB unique index), so this is
+    # a display-only undercount, not a correctness bug.
+    siblings_to_skip = 0
+    if new_students:
+        # Glific IDs already in use by active/paused PEs in this batch
+        existing_glific_ids = set(frappe.db.sql_list("""
+            SELECT DISTINCT glific_id FROM "tabProgramEnrollment"
+             WHERE batch = %s
+               AND program_status IN ('active', 'paused')
+               AND glific_id IS NOT NULL
+               AND glific_id != ''
+        """, (bpr.batch,)))
+        if existing_glific_ids:
+            # Look up each candidate's glific_id and count collisions
+            candidate_gids = frappe.db.sql("""
+                SELECT name, glific_id FROM "tabStudent"
+                 WHERE name IN %s
+                   AND glific_id IS NOT NULL
+                   AND glific_id != ''
+            """, (tuple(new_students),), as_dict=True)
+            for row in candidate_gids:
+                if row["glific_id"] in existing_glific_ids:
+                    siblings_to_skip += 1
+
     if not new_students:
         return {
             "success": True,
@@ -99,6 +136,7 @@ def start_program_enrollment(bpr_name):
             "total": len(student_ids),
             "already_enrolled": len(existing_pes),
             "new": 0,
+            "siblings_to_skip": 0,
         }
 
     # Enqueue in chunks
@@ -115,9 +153,15 @@ def start_program_enrollment(bpr_name):
             chunk_index=i // ENROLLMENT_CHUNK_SIZE,
         )
 
+    expected_to_create = len(new_students) - siblings_to_skip
+    sibling_note = (
+        f" ({siblings_to_skip} will be skipped as siblings of existing PEs.)"
+        if siblings_to_skip else ""
+    )
     frappe.msgprint(
-        f"Program Enrollment started: {len(new_students)} new students "
-        f"in {total_chunks} chunks. ({len(existing_pes)} already enrolled, skipped.)",
+        f"Program Enrollment started: {len(new_students)} candidates in "
+        f"{total_chunks} chunks; ~{expected_to_create} new PEs expected. "
+        f"({len(existing_pes)} already enrolled, skipped.)" + sibling_note,
         alert=True,
     )
 
@@ -126,6 +170,7 @@ def start_program_enrollment(bpr_name):
         "total": len(student_ids),
         "already_enrolled": len(existing_pes),
         "new": len(new_students),
+        "siblings_to_skip": siblings_to_skip,
         "chunks": total_chunks,
     }
 
@@ -167,6 +212,38 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
                 errors.append(f"{sid}: no archetype")
                 continue
 
+            # ── Sibling skip (interim, pre-sibling-PRD) ──────────────
+            # If another active/paused PE in this batch already uses the
+            # same glific_id, this candidate is a sibling on a shared
+            # household WhatsApp number. Per the pending sibling PRD,
+            # the interim policy is "one PE per Glific contact per
+            # batch" — skip the duplicate at enrollment time.
+            #
+            # The partial unique index on (batch, glific_id) WHERE
+            # glific_id != '' AND program_status IN ('active','paused')
+            # — installed by patches/v0_2/add_pe_glific_id_unique_index.py
+            # — is the race-safe DB guarantee. This app-level check is
+            # the friendly UX layer that logs structured context so ops
+            # can find skipped siblings via grep.
+            if glific_id:
+                sibling_pe = frappe.db.get_value(
+                    "ProgramEnrollment",
+                    {
+                        "batch": batch_name,
+                        "glific_id": glific_id,
+                        "program_status": ["in", ["active", "paused"]],
+                    },
+                    "name",
+                )
+                if sibling_pe:
+                    frappe.logger().info(
+                        f"sp_enrollment_skipped_sibling: "
+                        f"student={sid}, glific_id={glific_id}, "
+                        f"existing_pe={sibling_pe}, batch={batch_name}"
+                    )
+                    skipped += 1
+                    continue
+
             course_level = _resolve_course_level(student, batch)
             expected_submission = _get_week1_submission_type(batch, archetype, experiment_arm)
 
@@ -203,7 +280,28 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
             pe.re_engagement_count = 0
             pe.next_action_at = None
             pe.next_action_type = ""
-            pe.insert(ignore_permissions=True)
+
+            # Race-safety: even with the pre-flight sibling check above, two
+            # parallel chunk workers could both see "no sibling" and both
+            # attempt to insert. The partial unique index on (batch,
+            # glific_id) WHERE active/paused — installed by
+            # patches/v0_2/add_pe_glific_id_unique_index.py — guarantees only
+            # one insert wins. The loser raises DuplicateEntryError, which we
+            # treat as another sibling-skip (a sibling chunk worker got there
+            # first). rollback() is required to clear the failed transaction
+            # before we continue with the next student in this chunk.
+            try:
+                pe.insert(ignore_permissions=True)
+            except frappe.DuplicateEntryError:
+                frappe.db.rollback()
+                frappe.logger().info(
+                    f"sp_enrollment_skipped_sibling_race: "
+                    f"student={sid}, glific_id={glific_id}, batch={batch_name} "
+                    f"— DB unique index rejected the insert; a parallel worker "
+                    f"won the race for this glific_id."
+                )
+                skipped += 1
+                continue
 
             # Set 28 Glific contact fields — async via retry-aware background job
             # so transient Glific outages don't lose the enrollment-time push.
@@ -360,6 +458,36 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
             "error": "Student already enrolled in this batch",
             "enrollment": existing,
         }
+
+    # ── Sibling skip (interim, pre-sibling-PRD) ──────────────
+    # If another active/paused PE in this batch already uses the same
+    # glific_id, this candidate is a sibling sharing a household WhatsApp
+    # number. Skip the duplicate at enrollment time. See _process_pe_chunk
+    # for the matching logic in the batch path, and patches/v0_2/
+    # add_pe_glific_id_unique_index.py for the race-safe DB constraint.
+    if glific_id:
+        sibling_pe = frappe.db.get_value(
+            "ProgramEnrollment",
+            {
+                "batch": batch_id,
+                "glific_id": glific_id,
+                "program_status": ["in", ["active", "paused"]],
+            },
+            "name",
+        )
+        if sibling_pe:
+            frappe.logger().info(
+                f"sp_enrollment_skipped_sibling: "
+                f"student={student_id}, glific_id={glific_id}, "
+                f"existing_pe={sibling_pe}, batch={batch_id}"
+            )
+            return {
+                "success": False,
+                "skipped": True,
+                "reason": "sibling_enrolled",
+                "error": f"Glific contact already enrolled in this batch (PE {sibling_pe})",
+                "existing_pe": sibling_pe,
+            }
 
     # ── Create ProgramEnrollment ────────────────────────────
     pe = frappe.new_doc("ProgramEnrollment")

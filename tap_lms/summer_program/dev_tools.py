@@ -6,9 +6,16 @@ journey from state 0. Used during integration testing where the same dev
 contacts need to be cycled through many times.
 
 **USE FOR DEV/TEST ONLY.** Every function in this module DESTROYS journey
-history (Submission / StudentQuizAttempt / StudentContentLog /
-ProgramEventLog rows). A safety guard refuses to run on sites whose name
-suggests a production environment unless the caller explicitly opts in.
+history (StudentQuizAttempt / StudentContentLog / StudentStageProgress /
+StudentReflection / TransitionHistory / ProgramEventLog rows). A safety
+guard refuses to run on sites whose name suggests a production environment
+unless the caller explicitly opts in.
+
+**Submission rows are deliberately PRESERVED across resets** so the team
+can analyse AI-feedback quality and submission-pipeline behaviour across
+many test cycles for the same student. If you need a truly clean slate
+(e.g. to test the save_submission claim logic), delete the rows manually
+via console.
 
 Usage from `bench execute`:
 
@@ -179,8 +186,8 @@ _FIELDS_TO_CLEAR = (
 # Historical/audit rows to delete when delete_history=True.
 # Tuple shape: (doctype, FK field name ON that doctype, source-key — either
 # 'student' to fill with pe.student, or 'pe_name' to fill with the PE name).
+#
 # FK names verified against the doctype JSONs (2026-05-16):
-#   - Submission.program_enrollment is a Link to ProgramEnrollment
 #   - StudentQuizAttempt.student / StudentContentLog.student are Link to Student
 #   - ProgramEventLog.enrollment is the PE link (NOT 'program_enrollment')
 #   - StudentStageProgress.student is a Link to Student. CRITICAL: this is
@@ -189,8 +196,16 @@ _FIELDS_TO_CLEAR = (
 #     clearing it, the next-content API stays stuck on the old position even
 #     after the PE row is reset.
 #   - StudentReflection.student / TransitionHistory.student are Link to Student.
+#
+# Submission is DELIBERATELY OMITTED from this list (2026-05-18 product
+# decision). The team analyses AI-feedback quality across many test cycles
+# for the same student, so historical Submission rows must persist. Trade-
+# offs accepted: (a) PE.submission_count is reset to 0 while old Submission
+# rows persist — counter is intentionally inconsistent with row count, and
+# (b) re-submitting the same week may hit save_submission's claim logic
+# depending on uniqueness constraints. Both are dev-only nuisances; the
+# benefit of feedback-quality analysis outweighs them.
 _HISTORY_DOCTYPES = (
-    ("Submission",            "program_enrollment", "pe_name"),
     ("StudentQuizAttempt",    "student",            "student"),
     ("StudentContentLog",     "student",            "student"),
     ("StudentStageProgress",  "student",            "student"),
@@ -221,8 +236,12 @@ def reset_pe_to_state_0(
       - Scheduler pointers (next_action_at, next_action_type) → cleared
 
     Optionally:
-      - Deletes journey history (Submission/StudentQuizAttempt/StudentContentLog/
-        ProgramEventLog rows) when `delete_history=True` (default).
+      - Deletes journey history when `delete_history=True` (default):
+        StudentQuizAttempt, StudentContentLog, StudentStageProgress,
+        StudentReflection, TransitionHistory, ProgramEventLog.
+        NOTE: Submission rows are DELIBERATELY PRESERVED so the team can
+        analyse AI-feedback quality across many reset cycles for the same
+        student. See the comment on `_HISTORY_DOCTYPES` for the rationale.
       - Pushes fresh contact fields to Glific when `push_to_glific=True`
         (default), so Glific flows see the reset state immediately.
       - Calls `maintain_collections(pe, from_state, to_state=normal)` so the

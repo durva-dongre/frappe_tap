@@ -282,13 +282,35 @@ class FeedbackConsumer:
             raise
 
     def send_glific_notification(self, message_data: Dict):
-        """Send feedback notification via Glific with proper error handling"""
+        """Send feedback notification via Glific with proper error handling.
+
+        IMPORTANT (2026-05-19 fix): The `student_id` field in the RabbitMQ
+        payload is the Frappe Student doc name (e.g. "ST00051238"), NOT a
+        Glific contact ID. Glific's `startContactFlow` mutation expects a
+        numeric Glific contact ID (e.g. "13325"). Passing the Frappe doc
+        name causes Glific to fail with the generic "Something unexpected
+        has happened" error because the contact lookup fails server-side.
+
+        Always resolve `Student.glific_id` from the Student doc before
+        invoking start_contact_flow.
+        """
         try:
             submission_id = message_data["submission_id"]
             student_id = message_data.get("student_id")
 
             if not student_id:
                 frappe.logger().warning(f"No student_id for submission {submission_id}, skipping Glific notification")
+                return
+
+            # Resolve the Glific contact ID from the Student record.
+            # We accept the message's student_id as the Frappe doc name and
+            # look up the contact ID — the source of truth for Glific addressing.
+            glific_id = frappe.db.get_value("Student", student_id, "glific_id")
+            if not glific_id:
+                frappe.logger().warning(
+                    f"Student {student_id} has no glific_id; skipping Glific "
+                    f"notification for submission {submission_id}"
+                )
                 return
 
             feedback_data = message_data.get("feedback", {})
@@ -310,17 +332,24 @@ class FeedbackConsumer:
                 "feedback": overall_feedback
             }
 
-            # Start Glific flow
+            # Start Glific flow — pass the resolved Glific contact ID, NOT
+            # the Frappe Student doc name (see docstring above).
             success = start_contact_flow(
-                flow_id=flow_id,
-                contact_id=student_id,
-                default_results=default_results
+                flow_id=str(flow_id),
+                contact_id=str(glific_id),
+                default_results=default_results,
             )
 
             if success:
-                frappe.logger().info(f"Sent Glific notification for submission: {submission_id}")
+                frappe.logger().info(
+                    f"Sent Glific notification for submission {submission_id} "
+                    f"to glific_id={glific_id} (student={student_id})"
+                )
             else:
-                frappe.logger().warning(f"Failed to send Glific notification for submission: {submission_id}")
+                frappe.logger().warning(
+                    f"Failed to send Glific notification for submission "
+                    f"{submission_id} (student={student_id}, glific_id={glific_id})"
+                )
 
         except Exception as e:
             frappe.logger().error(f"Error sending Glific notification for {submission_id}: {str(e)}")
