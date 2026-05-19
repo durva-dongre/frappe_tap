@@ -38,6 +38,8 @@ from tap_lms.summer_program.constants import (
     TIER_BY_WEEK,
     DEFAULT_TIER,
     REMEDIAL_TIER,
+    PROGRAM_ACTIVE,
+    PROGRAM_PAUSED,
 )
 
 
@@ -1801,28 +1803,44 @@ def _resolve_student_id(student_identifier):
 
 def _get_active_bpr_for_student(student):
     """
-    Find the active BatchProgramRun and Batch for a student.
-    Looks through student's enrollments to find a batch with
-    an active BPR.
-    """
-    if not student.enrollment:
-        return None, None
+    Find the active BatchProgramRun and Batch for a student in the Summer Program.
 
-    for enrollment in student.enrollment:
-        if not enrollment.batch:
+    Reads from ProgramEnrollment (the canonical SP enrollment record), NOT
+    from Student.enrollment (the legacy child table populated by
+    backend onboarding). Students enrolled via start_program_enrollment for
+    a new SP batch may have a ProgramEnrollment but no matching
+    Student.enrollment row for that batch, so reading the child table
+    misses them (root cause of 2026-05-19 "no_active_batch" production
+    incident for Shivansh / palv2-test-BT52231).
+
+    A student may have multiple PEs (legacy or completed); iterate them so we
+    return the first one whose Batch is a Summer program AND has an active BPR.
+    """
+    pe_rows = frappe.get_all(
+        "ProgramEnrollment",
+        filters={
+            "student": student.name,
+            "program_status": ["in", [PROGRAM_ACTIVE, PROGRAM_PAUSED]],
+        },
+        fields=["name", "batch"],
+        order_by="creation desc",
+    )
+
+    for pe in pe_rows:
+        if not pe.batch:
             continue
 
-        batch = frappe.get_doc("Batch", enrollment.batch)
+        batch = frappe.get_doc("Batch", pe.batch)
         if batch.program_type != "Summer":
             continue
 
-        bpr = frappe.db.get_value(
+        bpr_name = frappe.db.get_value(
             "BatchProgramRun",
-            {"batch": enrollment.batch, "status": BPR_ACTIVE},
+            {"batch": pe.batch, "status": BPR_ACTIVE},
             "name",
         )
-        if bpr:
-            return batch, frappe.get_doc("BatchProgramRun", bpr)
+        if bpr_name:
+            return batch, frappe.get_doc("BatchProgramRun", bpr_name)
 
     return None, None
 
@@ -1831,18 +1849,20 @@ def _get_course_level_for_student(student, batch):
     """
     Get the course level for a student's enrollment in a batch.
 
-    Enrollment.course is a Link to Course Level, despite the field label being
-    "Course". Return it directly instead of querying non-existent Course Level
-    fields like course/grade.
+    Reads ProgramEnrollment.course_level — the canonical source for SP
+    enrollments. Both callers are SP-only paths that have already resolved
+    the batch via _get_active_bpr_for_student, so if the PE row was used
+    to find the batch, the PE row is also the right source for course_level.
     """
-    if not student.enrollment:
-        return None
-
-    for enrollment in student.enrollment:
-        if enrollment.batch == batch.name and enrollment.course:
-            return enrollment.course
-
-    return None
+    return frappe.db.get_value(
+        "ProgramEnrollment",
+        {
+            "student": student.name,
+            "batch": batch.name,
+            "program_status": ["in", [PROGRAM_ACTIVE, PROGRAM_PAUSED]],
+        },
+        "course_level",
+    ) or None
 
 
 def _is_within_grace_period(batch, current_week):
