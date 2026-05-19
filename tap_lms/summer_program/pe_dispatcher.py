@@ -44,6 +44,7 @@ from tap_lms.summer_program.constants import (
     STATE_SUBMITTED_AWAITING,
     STATE_GRACE_WAITING, STATE_WEEK_COMPLETED,
     STATE_PAUSED_BINGE,
+    PATH_CORE,
 )
 from tap_lms.summer_program.event_log import log_event
 
@@ -156,6 +157,18 @@ def process_program_actions():
             processed += 1
         except Exception as e:
             errors += 1
+            # Postgres aborts the entire transaction on the first failed
+            # query. Without a rollback here, frappe.log_error itself fails
+            # with InFailedSqlTransaction (it does its own SELECT to fetch
+            # the Error Log doctype meta), which means the dispatcher
+            # silently swallows BOTH the original error AND the log call.
+            # Rolling back first ensures the log entry actually lands.
+            # See 2026-05-19 incident: _get_week_rule schema-mismatch
+            # crashed every cron tick for an hour with zero visible errors.
+            try:
+                frappe.db.rollback()
+            except Exception:
+                pass
             frappe.log_error(
                 f"Dispatcher error for PE {pe_row.name} "
                 f"(action={pe_row.next_action_type}): {str(e)}",
@@ -656,21 +669,76 @@ def _get_escalation_steps_for_pe(pe):
 
 
 def _get_week_rule(pe, batch, week):
-    """Get the WeekRule/ArchetypeConfig for a specific week."""
+    """Get the WeekRule for a specific (PE, week).
+
+    WeekRule is a CHILD table on ArchetypeConfig (istable=1). The canonical
+    lookup, mirroring _get_week1_submission_type in program_enrollment_api.py:
+
+      1. Find parent ArchetypeConfig matching the PE's
+         (batch, archetype, experiment_arm, path, is_active=1) tuple.
+      2. Fall back to the "default" experiment_arm if the PE's arm has no
+         active config — same fallback pattern as enrollment-time.
+      3. Read the WeekRule child row for the requested week.
+
+    Returns a dict with `expected_submission_type` (and any other WeekRule
+    fields the callers want) — or None if no config or no matching week.
+
+    Historical bug (fixed 2026-05-19): this helper used to call
+    frappe.db.get_value("ArchetypeConfig", ..., ["expected_submission_type",
+    "core_learning_unit", "remedial_learning_unit"]) directly on the parent
+    table. None of those columns live on ArchetypeConfig itself —
+    expected_submission_type is on the WeekRule child table, and
+    core_learning_unit / remedial_learning_unit are phantom field names that
+    don't exist on any doctype. Every dispatcher tick that reached this
+    function crashed, silently failing week_advancement for the whole cohort
+    (the silence was compounded by the except branch's frappe.log_error
+    running inside the aborted Postgres transaction).
+    """
     try:
-        config = frappe.db.get_value(
+        config_path = pe.current_path or PATH_CORE
+        config_name = frappe.db.get_value(
             "ArchetypeConfig",
             {
                 "batch": batch.name,
                 "archetype": pe.archetype,
                 "experiment_arm": pe.experiment_arm or "default",
+                "path": config_path,
+                "is_active": 1,
+            },
+            "name",
+        )
+        if not config_name:
+            # Fallback: same arm not found → try the "default" arm.
+            config_name = frappe.db.get_value(
+                "ArchetypeConfig",
+                {
+                    "batch": batch.name,
+                    "archetype": pe.archetype,
+                    "experiment_arm": "default",
+                    "path": config_path,
+                    "is_active": 1,
+                },
+                "name",
+            )
+        if not config_name:
+            return None
+
+        rule = frappe.db.get_value(
+            "WeekRule",
+            {
+                "parent": config_name,
+                "parenttype": "ArchetypeConfig",
                 "week": week,
             },
-            ["expected_submission_type", "core_learning_unit", "remedial_learning_unit"],
+            ["expected_submission_type", "submission_validation_enabled"],
             as_dict=True,
         )
-        return config
-    except Exception:
+        return rule
+    except Exception as e:
+        frappe.logger().warning(
+            f"_get_week_rule failed for pe={pe.name} batch={batch.name} "
+            f"week={week}: {e}"
+        )
         return None
 
 
