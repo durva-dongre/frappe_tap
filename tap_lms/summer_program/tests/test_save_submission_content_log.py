@@ -3,7 +3,7 @@ import importlib
 import sys
 import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 
 def _import_save_submission_with_stubs():
@@ -449,6 +449,50 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
         # Response surfaces the failure cleanly.
         self.assertEqual(mock_frappe.local.response.get("status"), "insert_failed")
         self.assertFalse(mock_frappe.local.response.get("success"))
+
+    def test_serialization_failure_during_insert_retries_whole_submission(self):
+        """Postgres concurrent-update/serialization failures must retry the
+        whole save_submission attempt, not return insert_failed from the
+        savepoint handler."""
+        save_submission = _import_save_submission_with_stubs()
+        pe = self._build_pe()
+        submission_doc = MagicMock()
+        submission_doc.name = "SUB-001"
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission.time, "sleep") as mock_sleep, \
+                patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
+                patch.object(save_submission, "get_active_pe", return_value=pe), \
+                patch.object(save_submission, "_try_claim_primary", return_value=True), \
+                patch.object(save_submission, "_calculate_points", return_value=10), \
+                patch.object(
+                    save_submission,
+                    "_create_submission",
+                    side_effect=[
+                        RuntimeError("could not serialize access due to concurrent update"),
+                        submission_doc,
+                    ],
+                ) as mock_create, \
+                patch.object(save_submission, "_log_student_content_submission"), \
+                patch.object(save_submission, "_update_engagement"), \
+                patch.object(save_submission, "_queue_submission_processing"), \
+                patch.object(save_submission, "apply_submission_transition", return_value=("T7", True)), \
+                patch.object(save_submission, "log_event"):
+            mock_frappe.local.response = {}
+            mock_frappe.utils.random_string = lambda n: "abcd1234"
+
+            response = save_submission.save_submission(
+                student_id="STU-001",
+                assignment_id="ASN-001",
+                submission="my answer",
+            )
+
+        self.assertTrue(response.get("success"))
+        self.assertEqual(response.get("status"), "accepted")
+        self.assertEqual(mock_create.call_count, 2)
+        mock_sleep.assert_called_once()
+        self.assertIn(call(save_point="sub_create_abcd1234"), mock_frappe.db.rollback.call_args_list)
+        self.assertIn(call(), mock_frappe.db.rollback.call_args_list)
 
 
 if __name__ == "__main__":

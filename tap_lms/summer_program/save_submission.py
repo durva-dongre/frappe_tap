@@ -27,6 +27,7 @@ states when grace expires. Either way the primary-submission transitions
 import frappe
 import json
 import os
+import time
 from frappe.utils import now_datetime, today, getdate, cint
 from urllib.parse import urlparse
 
@@ -42,6 +43,25 @@ from tap_lms.summer_program.state_machine import (
 )
 from tap_lms.summer_program.event_log import log_event
 URL_SUBMISSION_TYPES = {"audio", "image", "video"}
+SAVE_SUBMISSION_DB_RETRY_ATTEMPTS = 3
+SAVE_SUBMISSION_DB_RETRY_DELAY_SECONDS = 0.15
+
+
+def _is_serialization_failure(error):
+    """Return True for Postgres retryable serialization/concurrent-update errors."""
+    pgcode = getattr(error, "pgcode", None)
+    if pgcode == "40001":
+        return True
+
+    cause = getattr(error, "__cause__", None)
+    if cause is not None and _is_serialization_failure(cause):
+        return True
+
+    error_text = str(error).lower()
+    return (
+        "could not serialize access due to concurrent update" in error_text
+        or "serialization failure" in error_text
+    )
 
 
 @frappe.whitelist(allow_guest=True)
@@ -66,11 +86,51 @@ def save_submission(student_id, assignment_id=None, submission=None, week=None, 
         dict with: status (accepted|duplicate|rejected), is_primary,
                    points_awarded, submission_count, submission_id
     """
+    last_error = None
+    for attempt in range(1, SAVE_SUBMISSION_DB_RETRY_ATTEMPTS + 1):
+        try:
+            return _save_submission_once(
+                student_id=student_id,
+                assignment_id=assignment_id,
+                submission=submission,
+                week=week,
+                content_id=content_id,
+            )
+        except Exception as e:
+            if not _is_serialization_failure(e):
+                raise
+
+            last_error = e
+            frappe.db.rollback()
+            if attempt < SAVE_SUBMISSION_DB_RETRY_ATTEMPTS:
+                time.sleep(SAVE_SUBMISSION_DB_RETRY_DELAY_SECONDS * attempt)
+                continue
+
+    frappe.error(
+        f"save_submission exhausted serialization retries for "
+        f"student_id={student_id}, assignment_id={assignment_id}: {last_error}",
+        "SP Save Submission",
+    )
+    frappe.local.response.update({
+        "success": False,
+        "status": "retryable_conflict",
+        "error_detail": "Submission is being updated concurrently. Please retry.",
+    })
+    return
+
+
+def _save_submission_once(student_id, assignment_id=None, submission=None, week=None, content_id=None):
+    """
+    Single transactional attempt for save_submission.
+
+    Postgres serialization failures must be handled by retrying the whole
+    transaction, so the whitelisted wrapper owns the retry loop.
+    """
     # P-006 deprecation alias (L-009): older Glific flows pass `content_id`.
     # Map it to `assignment_id` and log so we can track call-sites that still
     # use the legacy name before removing the alias.
     if assignment_id is None and content_id is not None:
-        frappe.log_error(
+        frappe.error(
             f"save_submission called with legacy 'content_id' param "
             f"(student_id={student_id}). Update Glific flow to use 'assignment_id'.",
             "SP API Deprecation",
@@ -148,6 +208,8 @@ def save_submission(student_id, assignment_id=None, submission=None, week=None, 
         frappe.db.release_savepoint(sp_name)
     except Exception as e:
         frappe.db.rollback(save_point=sp_name)
+        if _is_serialization_failure(e):
+            raise
         frappe.log_error(
             f"Submission insert failed for student {student_id}, "
             f"week {current_week}: {e}",
