@@ -242,9 +242,15 @@ def _save_submission_once(student_id, assignment_id=None, submission=None, week=
         submission_doc.status = "Pending"
 
     # ── Calculate points ────────────────────────────────────
+    # CR-007 (2026-05-19): submission points are no longer awarded here.
+    # AI validation runs asynchronously after save_submission; the actual
+    # award (Assignment.points_per_item for on-time submissions, or
+    # EscalationStep.points_awarded for late ones) is computed by
+    # `feedback_consumer_hook.on_feedback_ready` once result_status is known.
+    # The transition below still fires with points=0 so streak / gems /
+    # weekly_submission_done bump on every submission (user spec:
+    # "every submission regardless of validity"). See CR-007.
     points = 0
-    if is_primary:
-        points = _calculate_points(pe)
 
     # ── Apply state transition ──────────────────────────────
     if is_primary:
@@ -383,34 +389,17 @@ def _try_claim_primary(pe, week):
 # ════════════════════════════════════════════════════════════
 # POINTS CALCULATION
 # ════════════════════════════════════════════════════════════
-
-def _calculate_points(pe):
-    """
-    Calculate points based on which escalation step the student is at.
-    Earlier submission = more points.
-    """
-    from tap_lms.summer_program.student_progression_sp import _get_escalation_steps
-
-    student = frappe.get_doc("Student", pe.student)
-    batch = frappe.get_doc("Batch", pe.batch)
-    steps = _get_escalation_steps(student, batch)
-
-    if not steps:
-        return 0
-
-    sent_count = pe.current_escalation_step or 0
-
-    if sent_count == 0:
-        # Submitted before any escalation → highest points (step 1)
-        return steps[0].get("points_awarded", 0)
-
-    if sent_count < len(steps):
-        # Submitted after N escalations → points from step N
-        # (later steps award fewer points)
-        return steps[sent_count].get("points_awarded", 0)
-
-    # Submitted after all escalation steps exhausted → minimum or 0
-    return steps[-1].get("points_awarded", 0) if steps else 0
+#
+# CR-007 (2026-05-19): the legacy `_calculate_points(pe)` function was
+# removed. It always read from EscalationStep — even for on-time
+# submissions (sent_count==0 → steps[0].points_awarded) — and never
+# consulted Assignment.points_per_item or the submission_validation_enabled
+# flag. Points are now awarded by feedback_consumer_hook.on_feedback_ready
+# after AI validation lands. See:
+#   - feedback_consumer_hook._compute_submission_points  (the new logic)
+#   - WeekRule.submission_validation_enabled              (the gate)
+#   - Assignment.points_per_item                          (on-time award)
+#   - EscalationStep.points_awarded                       (late award)
 
 
 # ════════════════════════════════════════════════════════════

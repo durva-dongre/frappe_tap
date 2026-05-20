@@ -233,7 +233,6 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
                 patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
                 patch.object(save_submission, "get_active_pe", return_value=pe), \
                 patch.object(save_submission, "_try_claim_primary", return_value=True), \
-                patch.object(save_submission, "_calculate_points", return_value=10), \
                 patch.object(save_submission, "_create_submission", return_value=submission_doc), \
                 patch.object(save_submission, "_log_student_content_submission"), \
                 patch.object(save_submission, "_update_engagement"), \
@@ -272,7 +271,6 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
                 patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
                 patch.object(save_submission, "get_active_pe", return_value=pe), \
                 patch.object(save_submission, "_try_claim_primary", return_value=False), \
-                patch.object(save_submission, "_calculate_points", return_value=0), \
                 patch.object(save_submission, "_create_submission", return_value=submission_doc), \
                 patch.object(save_submission, "_update_engagement"), \
                 patch.object(save_submission, "_queue_submission_processing") as mock_queue, \
@@ -464,7 +462,6 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
                 patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
                 patch.object(save_submission, "get_active_pe", return_value=pe), \
                 patch.object(save_submission, "_try_claim_primary", return_value=True), \
-                patch.object(save_submission, "_calculate_points", return_value=10), \
                 patch.object(
                     save_submission,
                     "_create_submission",
