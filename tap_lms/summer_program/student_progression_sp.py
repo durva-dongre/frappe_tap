@@ -1648,20 +1648,18 @@ def _get_video_unguided_submission_message(student_id, assessments, language=Non
 
     student_id = resolve_student(student_id)
     if not student_id:
-        frappe.log_error(
-            "Unguided submission message defaulted: student could not be resolved. "
+        _log_unguided_submission(
+            "SP Unguided: student unresolved",
             f"input_student_id={input_student_id}, language={language}",
-            "SP Unguided Submission",
         )
         return response
 
     pe = get_active_pe(student_id)
     if not pe:
-        frappe.log_error(
-            "Unguided submission message defaulted: no active ProgramEnrollment. "
+        _log_unguided_submission(
+            "SP Unguided: no active PE",
             f"student_id={student_id}, input_student_id={input_student_id}, "
             f"language={language}",
-            "SP Unguided Submission",
         )
         return response
 
@@ -1671,22 +1669,20 @@ def _get_video_unguided_submission_message(student_id, assessments, language=Non
         expected_submission_type
     )
     if not submission_labels:
-        frappe.log_error(
-            "Unguided submission message defaulted: unsupported expected submission type. "
+        _log_unguided_submission(
+            "SP Unguided: unsupported type",
             f"student_id={student_id}, pe={pe_name}, "
             f"expected_submission_type={expected_submission_type}, "
             f"language={language}",
-            "SP Unguided Submission",
         )
         return response
 
     if not language:
-        frappe.log_error(
-            "Unguided submission message defaulted: missing resolved language. "
+        _log_unguided_submission(
+            "SP Unguided: missing language",
             f"student_id={student_id}, pe={pe_name}, "
             f"expected_submission_type={expected_submission_type}, "
             f"submission_labels={submission_labels}",
-            "SP Unguided Submission",
         )
         return response
 
@@ -1697,21 +1693,19 @@ def _get_video_unguided_submission_message(student_id, assessments, language=Non
             break
 
     if not assignment_id:
-        frappe.log_error(
-            "Unguided submission message defaulted: no Assignment assessment found. "
+        _log_unguided_submission(
+            "SP Unguided: no assignment",
             f"student_id={student_id}, pe={pe_name}, "
             f"expected_submission_type={expected_submission_type}, "
             f"language={language}, assessments={assessments}",
-            "SP Unguided Submission",
         )
         return response
 
-    frappe.log_error(
-        "Looking up unguided submission message. "
+    _log_unguided_submission(
+        "SP Unguided: lookup",
         f"student_id={student_id}, pe={pe_name}, assignment_id={assignment_id}, "
         f"expected_submission_type={expected_submission_type}, "
         f"submission_labels={submission_labels}, language={language}",
-        "SP Unguided Submission",
     )
     rows = frappe.get_all(
         "Assignment Submission Rule",
@@ -1726,25 +1720,28 @@ def _get_video_unguided_submission_message(student_id, assessments, language=Non
         limit_page_length=1,
     )
     if not rows:
-        frappe.log_error(
-            "Unguided submission message defaulted: no Assignment Submission Rule matched. "
+        _log_unguided_submission(
+            "SP Unguided: no rule match",
             f"student_id={student_id}, pe={pe_name}, assignment_id={assignment_id}, "
             f"expected_submission_type={expected_submission_type}, "
             f"submission_labels={submission_labels}, language={language}",
-            "SP Unguided Submission",
         )
         return response
 
-    frappe.log_error(
-        "Unguided submission message found. "
+    _log_unguided_submission(
+        "SP Unguided: found",
         f"student_id={student_id}, pe={pe_name}, assignment_id={assignment_id}, "
         f"language={language}",
-        "SP Unguided Submission",
     )
     return {
         "unguided_text": _strip_html_text(rows[0].unguided_text),
         "unguided_text_url": rows[0].unguided_text_audio,
     }
+
+
+def _log_unguided_submission(title, message):
+    """Log unguided submission diagnostics without exceeding Error Log title cap."""
+    frappe.log_error(title[:140], message)
 
 
 def _strip_html_text(value):
