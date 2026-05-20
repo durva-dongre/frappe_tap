@@ -630,6 +630,61 @@ class TestGetContentDetailsAssessmentsPreserved(unittest.TestCase):
         self.assertNotIn("assessment_1_id", resp)
 
 
+class TestGetContentDetailsLanguageResolution(unittest.TestCase):
+    """Language for content details is resolved once at the endpoint boundary."""
+
+    def test_resolves_language_from_input_then_pe_then_english(self):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        with patch.object(api, "resolve_student") as mock_resolve, \
+                patch.object(api, "get_active_pe") as mock_get_active_pe:
+            self.assertEqual(
+                api._resolve_content_language("Marathi", "GLIFIC-1"),
+                "Marathi",
+            )
+            mock_resolve.assert_not_called()
+            mock_get_active_pe.assert_not_called()
+
+            mock_resolve.return_value = "STU-001"
+            pe = MagicMock()
+            pe.language = "Hindi"
+            mock_get_active_pe.return_value = pe
+            self.assertEqual(
+                api._resolve_content_language(None, "GLIFIC-1"),
+                "Hindi",
+            )
+
+            pe.language = None
+            self.assertEqual(
+                api._resolve_content_language(None, "GLIFIC-1"),
+                "English",
+            )
+
+    def test_unguided_message_requires_resolved_language_argument(self):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        with patch.object(api, "resolve_student") as mock_resolve, \
+                patch.object(api, "get_active_pe") as mock_get_active_pe, \
+                patch.object(api, "frappe") as mock_frappe:
+            mock_resolve.return_value = "STU-001"
+            pe = MagicMock()
+            pe.language = "Hindi"
+            pe.current_expected_submission_type = "video"
+            mock_get_active_pe.return_value = pe
+
+            response = api._get_video_unguided_submission_message(
+                "GLIFIC-1",
+                [{"assessment_type": "Assignment", "assessment_id": "ASN-001"}],
+                language=None,
+            )
+
+            self.assertEqual(
+                response,
+                {"unguided_text": "Not Found", "unguided_text_url": "Not Found"},
+            )
+            mock_frappe.get_all.assert_not_called()
+
+
 class TestGetNextContentFlatShape(unittest.TestCase):
     """Task #68 — `get_next_content` previously returned nested `position` and
     `content` objects (plus `assessments[]` array inside content) for 3 variants

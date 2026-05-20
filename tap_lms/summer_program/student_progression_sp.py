@@ -54,6 +54,7 @@ OPTION_LETTERS = ['A', 'B', 'C', 'D']
 # Grace time: hours into a new week during which a student can still submit
 # for the previous week without being blocked. Default 24 hours.
 SUBMISSION_GRACE_HOURS = 24
+DEFAULT_LANGUAGE = "English"
 
 
 # ============================================================
@@ -574,6 +575,7 @@ def get_content_details(content_type, content_id, language=None, student_id=None
             return {"success": False, "status": "not_found",
                     "error_detail": f"{content_type} not found: {content_id}"}
 
+        language = _resolve_content_language(language, student_id)
         doc = frappe.get_doc(content_type, content_id)
 
         if content_type == "VideoClass":
@@ -611,7 +613,7 @@ def get_content_details(content_type, content_id, language=None, student_id=None
             for i, a in enumerate(assessments, start=1):
                 result[f"assessment_{i}_type"] = a.get("assessment_type")
                 result[f"assessment_{i}_id"] = a.get("assessment_id")
-            if language and hasattr(doc, 'video_translations'):
+            if hasattr(doc, 'video_translations'):
                 for trans in doc.video_translations:
                     if trans.language == language:
                         if trans.translated_name:
@@ -1607,6 +1609,22 @@ def _get_content_display_name(content_type, content_id):
         return content_id
 
 
+def _resolve_content_language(language=None, student_id=None):
+    """Resolve content language from input, active PE, then English fallback."""
+    if language:
+        return language
+
+    if student_id:
+        resolved_student_id = resolve_student(student_id)
+        if resolved_student_id:
+            pe = get_active_pe(resolved_student_id)
+            pe_language = getattr(pe, "language", None)
+            if pe_language:
+                return pe_language
+
+    return DEFAULT_LANGUAGE
+
+
 def _get_video_assessments(content_type, content_id):
     """If content is a VideoClass, return its linked assessments (type + id)."""
     if content_type != "VideoClass":
@@ -1625,24 +1643,51 @@ def _get_video_assessments(content_type, content_id):
 
 def _get_video_unguided_submission_message(student_id, assessments, language=None):
     """Return unguided submission copy for a video's assignment, when resolvable."""
-    response = {"unguided_text": None, "unguided_text_url": None}
+    response = {"unguided_text": "Not Found", "unguided_text_url": "Not Found"}
+    input_student_id = student_id
 
     student_id = resolve_student(student_id)
     if not student_id:
+        frappe.log_error(
+            "Unguided submission message defaulted: student could not be resolved. "
+            f"input_student_id={input_student_id}, language={language}",
+            "SP Unguided Submission",
+        )
         return response
 
     pe = get_active_pe(student_id)
     if not pe:
+        frappe.log_error(
+            "Unguided submission message defaulted: no active ProgramEnrollment. "
+            f"student_id={student_id}, input_student_id={input_student_id}, "
+            f"language={language}",
+            "SP Unguided Submission",
+        )
         return response
 
+    pe_name = getattr(pe, "name", None)
+    expected_submission_type = pe.current_expected_submission_type
     submission_labels = EXPECTED_SUBMISSION_LABELS.get(
-        pe.current_expected_submission_type
+        expected_submission_type
     )
     if not submission_labels:
+        frappe.log_error(
+            "Unguided submission message defaulted: unsupported expected submission type. "
+            f"student_id={student_id}, pe={pe_name}, "
+            f"expected_submission_type={expected_submission_type}, "
+            f"language={language}",
+            "SP Unguided Submission",
+        )
         return response
 
-    message_language = language or pe.language
-    if not message_language:
+    if not language:
+        frappe.log_error(
+            "Unguided submission message defaulted: missing resolved language. "
+            f"student_id={student_id}, pe={pe_name}, "
+            f"expected_submission_type={expected_submission_type}, "
+            f"submission_labels={submission_labels}",
+            "SP Unguided Submission",
+        )
         return response
 
     assignment_id = None
@@ -1652,23 +1697,50 @@ def _get_video_unguided_submission_message(student_id, assessments, language=Non
             break
 
     if not assignment_id:
+        frappe.log_error(
+            "Unguided submission message defaulted: no Assignment assessment found. "
+            f"student_id={student_id}, pe={pe_name}, "
+            f"expected_submission_type={expected_submission_type}, "
+            f"language={language}, assessments={assessments}",
+            "SP Unguided Submission",
+        )
         return response
 
+    frappe.log_error(
+        "Looking up unguided submission message. "
+        f"student_id={student_id}, pe={pe_name}, assignment_id={assignment_id}, "
+        f"expected_submission_type={expected_submission_type}, "
+        f"submission_labels={submission_labels}, language={language}",
+        "SP Unguided Submission",
+    )
     rows = frappe.get_all(
         "Assignment Submission Rule",
         filters={
             "parent": assignment_id,
             "parenttype": "Assignment",
             "submission_label": ["in", submission_labels],
-            "language": message_language,
+            "language": language,
         },
         fields=["unguided_text", "unguided_text_audio"],
         order_by="display_order asc, idx asc",
         limit_page_length=1,
     )
     if not rows:
+        frappe.log_error(
+            "Unguided submission message defaulted: no Assignment Submission Rule matched. "
+            f"student_id={student_id}, pe={pe_name}, assignment_id={assignment_id}, "
+            f"expected_submission_type={expected_submission_type}, "
+            f"submission_labels={submission_labels}, language={language}",
+            "SP Unguided Submission",
+        )
         return response
 
+    frappe.log_error(
+        "Unguided submission message found. "
+        f"student_id={student_id}, pe={pe_name}, assignment_id={assignment_id}, "
+        f"language={language}",
+        "SP Unguided Submission",
+    )
     return {
         "unguided_text": _strip_html_text(rows[0].unguided_text),
         "unguided_text_url": rows[0].unguided_text_audio,
@@ -1995,5 +2067,3 @@ def _get_or_create_sp_progress(student_id, course_level, week, tier, learning_un
     doc.insert(ignore_permissions=True)
     # Removed mid-handler commit per L-017 — Frappe commits at request-end.
     return doc.name
-
-
