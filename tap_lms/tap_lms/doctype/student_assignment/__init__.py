@@ -1,0 +1,41 @@
+{
+  "actions": [],
+  "creation": "2026-05-21 00:00:00.000000",
+  "doctype": "DocType",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "student",
+    "student_name"
+  ],
+  "fields": [
+    {
+      "fieldname": "student",
+      "fieldtype": "Link",
+      "in_list_view": 1,
+      "label": "Student",
+      "options": "Student",
+      "reqd": 1
+    },
+    {
+      "fieldname": "student_name",
+      "fieldtype": "Data",
+      "fetch_from": "student.name1",
+      "in_list_view": 1,
+      "label": "Student Name",
+      "read_only": 1
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "istable": 1,
+  "links": [],
+  "modified": "2026-05-21 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Tap Lms",
+  "name": "Student Auth Profile",
+  "owner": "Administrator",
+  "permissions": [],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": []
+}
