@@ -240,11 +240,14 @@ def _get_auth_token(settings):
     if not client_secret:
         raise RuntimeError("Vocallabs: VoiceAgentSettings.client_secret is unset")
 
+    # Vocallabs auth contract (verified via Postman 2026-05-21):
+    # POST {service_url}/b2b/createAuthToken/   <- note trailing slash
+    # Body uses camelCase clientId/clientSecret (NOT snake_case).
     response = _http_post(
-        url=f"{service_url}/createAuthToken",
+        url=f"{service_url}/b2b/createAuthToken/",
         payload={
-            "client_id": settings.client_id,
-            "client_secret": client_secret,
+            "clientId": settings.client_id,
+            "clientSecret": client_secret,
         },
         headers={"Content-Type": "application/json"},
     )
@@ -263,7 +266,13 @@ def _get_auth_token(settings):
 def _extract_auth_token(response):
     """Vocallabs' createAuthToken response has shape `{authToken: "..."}`;
     defensive-extract so we don't crash on response-shape drift.
+
+    Some Vocallabs endpoints wrap the response in `[{...}]` (observed for
+    createContactGroup); unwrap defensively in case auth eventually adopts
+    the same pattern.
     """
+    if isinstance(response, list):
+        response = response[0] if response else {}
     if not isinstance(response, dict):
         return None
     return (
@@ -347,6 +356,7 @@ _TEMPLATE_VARS = (
     "path",
     "escalation_order",
     "escalation_type",
+    "language",
 )
 
 
@@ -355,13 +365,20 @@ def _render_status_template(template, pe, student, step):
 
     Supported variables (per CR-003 §"Parent-call integration"):
         {student_name}, {week}, {archetype}, {course_level}, {path},
-        {escalation_order}, {escalation_type}
+        {escalation_order}, {escalation_type}, {language}
 
     Uses `str.format(**ctx)` so a missing variable in the template is fine
     (only the variables referenced are required). If the template
     references an UNDOCUMENTED variable, KeyError fires and we log to
     Error Log then return the raw template — the call still places (the
     operator can see the literal `{foo}` and fix the template).
+
+    Note: `language` is the student's preferred language (Student.language).
+    Useful for templates that branch wording, but the SPOKEN language of
+    the call is determined by the Vocallabs Agent itself (the agent's
+    `language` + `voice_id` config). To support multiple spoken languages
+    you need one Vocallabs agent per language and a per-language agent_id
+    lookup at call time — see task #48.
     """
     if not template:
         return ""
@@ -374,6 +391,7 @@ def _render_status_template(template, pe, student, step):
         "path": pe.current_path or "",
         "escalation_order": str(step.get("escalation_order", "") or ""),
         "escalation_type": step.get("escalation_type", "") or "",
+        "language": getattr(student, "language", "") or "",
     }
 
     try:
@@ -408,8 +426,36 @@ def _student_display(student):
 def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
     """Run steps 2 + 3 of the Vocallabs sequence.
 
-    Step 2: POST /addMultipleContactsToGroup with the parent contact.
-    Step 3: POST /initiateVocallabsCall with agent_id + prospect_id.
+    Verified API contract (Postman 2026-05-21):
+
+    Step 2 — POST {service_url}/b2b/vocallabs/addMultipleContactsToGroup
+      Body: {
+        "prospects": [
+          {
+            "name": <parent display name>,
+            "phone": <E.164 phone>,
+            "data": {
+              "contact": <parent display name>,
+              "student_name": <student name>,
+              "status": <rendered status template>
+            },
+            "prospect_group_id": <default_contact_group_id>,
+            "client_id": <VoiceAgentSettings.client_id>
+          }
+        ]
+      }
+      Response (verified): {
+        "data": {
+          "insert_vocallabs_prospects": {
+            "affected_rows": 1,
+            "returning": [{"id": "<uuid>", ...}]
+          }
+        }
+      }
+
+    Step 3 — POST {service_url}/b2b/vocallabs/initiateVocallabsCall
+      Body: {"agentId": <agent_id>, "prospect_id": <uuid from step 2>}
+      Note `prospect_id` is snake_case (not camelCase like `agentId`).
 
     Returns the final call response dict on success, None on failure
     (caller treats this as a runtime error and retries via P-007).
@@ -420,25 +466,35 @@ def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
         "Content-Type": "application/json",
     }
 
+    # Vocallabs requires every prospect to have a `name`. We don't have the
+    # parent's actual name stored (CR-003 just uses Student.phone), so use
+    # the MVP placeholder "Parent of <student>" — it's what the agent's
+    # template variable {{ contact }} will resolve to during the call.
+    # A future CR can add Student.parent_name and replace this.
+    parent_display = f"Parent of {student_name}" if student_name else "Parent"
+
     # ── Step 2: add parent contact to default group ─────────
     add_payload = {
-        "groupId": settings.default_contact_group_id or "",
-        "contacts": [
+        "prospects": [
             {
+                "name": parent_display,
                 "phone": parent_phone,
                 # `data` is the per-contact variables block consumed by the
-                # Vocallabs agent's prompt template (the agent reads `status`
-                # to know what to say). `contact` is "Parent" (static, MVP).
+                # Vocallabs agent's prompt template at call time. Keys must
+                # match what the agent prompt references — `contact`,
+                # `student_name`, `status` per the Postman reference.
                 "data": {
-                    "contact": "Parent",
+                    "contact": parent_display,
                     "student_name": student_name,
                     "status": status_text,
                 },
+                "prospect_group_id": settings.default_contact_group_id or "",
+                "client_id": settings.client_id or "",
             },
         ],
     }
     add_response = _http_post(
-        url=f"{service_url}/addMultipleContactsToGroup",
+        url=f"{service_url}/b2b/vocallabs/addMultipleContactsToGroup",
         payload=add_payload,
         headers=auth_headers,
     )
@@ -450,12 +506,15 @@ def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
         )
 
     # ── Step 3: initiate the call ───────────────────────────
+    # Note: `agentId` is camelCase but `prospect_id` is snake_case per the
+    # verified Postman contract. Inconsistent on Vocallabs' side; don't fix
+    # this to be consistent — match the API.
     call_payload = {
         "agentId": settings.agent_id,
-        "prospectId": prospect_id,
+        "prospect_id": prospect_id,
     }
     call_response = _http_post(
-        url=f"{service_url}/initiateVocallabsCall",
+        url=f"{service_url}/b2b/vocallabs/initiateVocallabsCall",
         payload=call_payload,
         headers=auth_headers,
     )
@@ -463,17 +522,38 @@ def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
 
 
 def _extract_prospect_id(response):
-    """Defensive extract — try the documented field first, then common
-    variants.
+    """Extract the prospect UUID from Vocallabs' addMultipleContactsToGroup
+    response.
+
+    Verified shape (Postman 2026-05-21):
+      {"data": {"insert_vocallabs_prospects": {"affected_rows": 1,
+                                               "returning": [{"id": "<uuid>", ...}]}}}
+
+    Some Vocallabs endpoints (e.g., createContactGroup) wrap the response
+    in a single-element list `[{...}]` instead of returning the object
+    directly — unwrap defensively so we work with either shape.
     """
+    if isinstance(response, list):
+        response = response[0] if response else {}
     if not isinstance(response, dict):
         return None
-    # Common shapes observed in Vocallabs responses.
+
+    # Primary: the documented nested shape.
+    data = response.get("data") or {}
+    ins = data.get("insert_vocallabs_prospects") or {}
+    returning = ins.get("returning") or []
+    if returning and isinstance(returning, list):
+        first = returning[0] or {}
+        if first.get("id"):
+            return first["id"]
+
+    # Defensive fallbacks for shape drift.
     return (
         response.get("prospect_id")
         or response.get("prospectId")
-        or (response.get("data") or {}).get("prospect_id")
-        or (response.get("contacts", [{}])[0] if isinstance(response.get("contacts"), list) else {}).get("prospect_id")
+        or response.get("id")
+        or data.get("prospect_id")
+        or data.get("id")
     )
 
 

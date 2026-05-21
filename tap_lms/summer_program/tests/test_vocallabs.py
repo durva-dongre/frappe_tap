@@ -154,11 +154,20 @@ class TestVocallabsHappyPath(FrappeTestCase):
 
         def fake_post(url, payload, headers):
             captured_calls.append((url, payload, headers))
-            if url.endswith("/createAuthToken"):
+            # Verified Vocallabs API contract (Postman 2026-05-21):
+            if url.endswith("/b2b/createAuthToken/"):
                 return {"authToken": "tok-xyz"}
-            if url.endswith("/addMultipleContactsToGroup"):
-                return {"prospect_id": "prospect-001"}
-            if url.endswith("/initiateVocallabsCall"):
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                # Real Vocallabs shape: nested under data.insert_vocallabs_prospects.returning
+                return {
+                    "data": {
+                        "insert_vocallabs_prospects": {
+                            "affected_rows": 1,
+                            "returning": [{"id": "prospect-001"}],
+                        }
+                    }
+                }
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
                 return {"status": "queued", "call_id": "call-001"}
             self.fail(f"Unexpected URL hit: {url}")
 
@@ -169,29 +178,36 @@ class TestVocallabsHappyPath(FrappeTestCase):
         # Exactly three calls — auth + addContact + initiate.
         urls = [c[0] for c in captured_calls]
         self.assertEqual(len(urls), 3, f"expected 3 calls, got {urls}")
-        self.assertTrue(urls[0].endswith("/createAuthToken"))
-        self.assertTrue(urls[1].endswith("/addMultipleContactsToGroup"))
-        self.assertTrue(urls[2].endswith("/initiateVocallabsCall"))
+        self.assertTrue(urls[0].endswith("/b2b/createAuthToken/"))
+        self.assertTrue(urls[1].endswith("/b2b/vocallabs/addMultipleContactsToGroup"))
+        self.assertTrue(urls[2].endswith("/b2b/vocallabs/initiateVocallabsCall"))
 
-        # Auth payload had client_id/client_secret.
+        # Auth payload uses camelCase clientId/clientSecret (Vocallabs contract).
         auth_payload = captured_calls[0][1]
-        self.assertEqual(auth_payload["client_id"], "test-client")
-        self.assertEqual(auth_payload["client_secret"], "test-secret")
+        self.assertEqual(auth_payload["clientId"], "test-client")
+        self.assertEqual(auth_payload["clientSecret"], "test-secret")
 
-        # AddContact payload carried the rendered status template.
+        # AddContact payload is {prospects: [{name, phone, data, prospect_group_id, client_id}]}.
         add_payload = captured_calls[1][1]
-        self.assertEqual(add_payload["groupId"], "group-VLT")
-        contact = add_payload["contacts"][0]
-        self.assertEqual(contact["phone"], "+999950001")
-        self.assertEqual(contact["data"]["contact"], "Parent")
-        self.assertIn("week 1", contact["data"]["status"])
-        self.assertIn("Step 2", contact["data"]["status"])
-        self.assertIn("parent_call", contact["data"]["status"])
+        self.assertIn("prospects", add_payload)
+        self.assertEqual(len(add_payload["prospects"]), 1)
+        prospect = add_payload["prospects"][0]
+        self.assertEqual(prospect["phone"], "+999950001")
+        self.assertEqual(prospect["prospect_group_id"], "group-VLT")
+        self.assertEqual(prospect["client_id"], "test-client")
+        self.assertIn("name", prospect)
+        self.assertTrue(prospect["name"], "name field must be non-empty (Vocallabs requires it)")
+        # The agent reads `data.contact`, `data.student_name`, `data.status` at call time.
+        self.assertIn("contact", prospect["data"])
+        self.assertIn("student_name", prospect["data"])
+        self.assertIn("week 1", prospect["data"]["status"])
+        self.assertIn("Step 2", prospect["data"]["status"])
+        self.assertIn("parent_call", prospect["data"]["status"])
 
-        # Initiate payload carried agent + prospect.
+        # Initiate payload: agentId (camelCase) + prospect_id (snake_case per Vocallabs).
         init_payload = captured_calls[2][1]
         self.assertEqual(init_payload["agentId"], "agent-VLT")
-        self.assertEqual(init_payload["prospectId"], "prospect-001")
+        self.assertEqual(init_payload["prospect_id"], "prospect-001")
 
     def test_token_cache_returns_cached_within_ttl(self):
         """Second call within TTL window does NOT re-hit /createAuthToken."""
@@ -207,18 +223,19 @@ class TestVocallabsHappyPath(FrappeTestCase):
 
         def fake_post(url, payload, headers):
             captured.append(url)
-            if url.endswith("/createAuthToken"):
+            if url.endswith("/b2b/createAuthToken/"):
                 return {"authToken": "tok-cached"}
-            if url.endswith("/addMultipleContactsToGroup"):
-                return {"prospect_id": "p"}
-            if url.endswith("/initiateVocallabsCall"):
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                return {"data": {"insert_vocallabs_prospects":
+                                 {"returning": [{"id": "p"}]}}}
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
                 return {"status": "queued"}
 
         with patch.object(vocallabs, "_http_post", side_effect=fake_post):
             vocallabs.initiate_parent_call(pe_name, _step())
             vocallabs.initiate_parent_call(pe_name, _step())
 
-        auth_count = sum(1 for u in captured if u.endswith("/createAuthToken"))
+        auth_count = sum(1 for u in captured if u.endswith("/b2b/createAuthToken/"))
         self.assertEqual(auth_count, 1, "auth token should have been cached")
 
     def test_token_cache_refreshes_after_invalidation(self):
@@ -235,11 +252,12 @@ class TestVocallabsHappyPath(FrappeTestCase):
 
         def fake_post(url, payload, headers):
             captured.append(url)
-            if url.endswith("/createAuthToken"):
+            if url.endswith("/b2b/createAuthToken/"):
                 return {"authToken": "tok-fresh"}
-            if url.endswith("/addMultipleContactsToGroup"):
-                return {"prospect_id": "p"}
-            if url.endswith("/initiateVocallabsCall"):
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                return {"data": {"insert_vocallabs_prospects":
+                                 {"returning": [{"id": "p"}]}}}
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
                 return {"status": "queued"}
 
         with patch.object(vocallabs, "_http_post", side_effect=fake_post):
@@ -248,7 +266,7 @@ class TestVocallabsHappyPath(FrappeTestCase):
             frappe.cache().delete_value(VOCALLABS_TOKEN_CACHE_KEY)
             vocallabs.initiate_parent_call(pe_name, _step())
 
-        auth_count = sum(1 for u in captured if u.endswith("/createAuthToken"))
+        auth_count = sum(1 for u in captured if u.endswith("/b2b/createAuthToken/"))
         self.assertEqual(auth_count, 2, "auth token should refresh after cache invalidation")
 
 
