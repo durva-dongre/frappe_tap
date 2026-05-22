@@ -1825,7 +1825,13 @@ def _get_question_details(question_id, language=None):
                 letter = OPTION_LETTERS[i].lower()
                 option_id = opt_row.options
                 if option_id:
-                    option_text = frappe.db.get_value("QuizOption", option_id, "option_text") or ""
+                    option_doc = frappe.get_doc("QuizOption", option_id)
+                    option_text = option_doc.option_text or ""
+                    if language and hasattr(option_doc, 'option_translations') and option_doc.option_translations:
+                        for trans in option_doc.option_translations:
+                            if trans.language == language and trans.translated_option:
+                                option_text = trans.translated_option
+                                break
                     options[f"option_{letter}"] = strip_html_tags(option_text) if option_text else ""
 
         correct_num = cint(q.correct_option)

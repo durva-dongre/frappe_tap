@@ -13,6 +13,7 @@ contract.
 Reference: docs/api-standard-glific.md sections 2, 3, 6.
 """
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 
@@ -200,6 +201,76 @@ class TestStartQuizFlatShape(unittest.TestCase):
         # Spot-check the flattened option fields
         self.assertEqual(resp["option_a"], "A")
         self.assertEqual(resp["question_index"], 1)
+
+
+class TestQuestionDetailsTranslations(unittest.TestCase):
+    """_get_question_details should translate question and option text."""
+
+    def test_question_details_uses_option_translations_for_language(self):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        question = SimpleNamespace(
+            question="Which is an example of a need?",
+            question_type="Multiple Choice",
+            correct_option=3,
+            question_translations=[
+                SimpleNamespace(
+                    language="Hindi",
+                    translated_question="Hindi question text",
+                )
+            ],
+            options=[
+                SimpleNamespace(options="OPT-1"),
+                SimpleNamespace(options="OPT-2"),
+                SimpleNamespace(options="OPT-3"),
+                SimpleNamespace(options="OPT-4"),
+            ],
+        )
+        option_docs = {
+            "OPT-1": SimpleNamespace(
+                option_text="Chocolate",
+                option_translations=[
+                    SimpleNamespace(language="Hindi", translated_option="Hindi Chocolate")
+                ],
+            ),
+            "OPT-2": SimpleNamespace(
+                option_text="Video game",
+                option_translations=[
+                    SimpleNamespace(language="Hindi", translated_option="Hindi Video game")
+                ],
+            ),
+            "OPT-3": SimpleNamespace(
+                option_text="Food",
+                option_translations=[
+                    SimpleNamespace(language="Hindi", translated_option="Hindi Food")
+                ],
+            ),
+            "OPT-4": SimpleNamespace(
+                option_text="Movie ticket",
+                option_translations=[
+                    SimpleNamespace(language="Hindi", translated_option="Hindi Movie ticket")
+                ],
+            ),
+        }
+
+        def get_doc(doctype, name):
+            if doctype == "QuizQuestion":
+                return question
+            if doctype == "QuizOption":
+                return option_docs[name]
+            raise AssertionError(f"Unexpected get_doc({doctype!r}, {name!r})")
+
+        with patch.object(api, "frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = get_doc
+
+            resp = api._get_question_details("QN-1", "Hindi")
+
+        self.assertEqual(resp["question"], "Hindi question text")
+        self.assertEqual(resp["option_a"], "Hindi Chocolate")
+        self.assertEqual(resp["option_b"], "Hindi Video game")
+        self.assertEqual(resp["option_c"], "Hindi Food")
+        self.assertEqual(resp["option_d"], "Hindi Movie ticket")
+        self.assertEqual(resp["correct_option"], "C")
 
 
 class TestSubmitAnswerFlatShape(unittest.TestCase):
