@@ -1982,23 +1982,48 @@ def _get_effective_week(student, batch, calendar_week):
     Rule: effective_week <= calendar_week + 1
 
     Returns the week the student should be working on.
+
+    Source of truth (2026-05-22): ProgramEnrollment.current_week is the
+    canonical SP-side week pointer post-CR-003 — same architecture as the
+    other read helpers (_get_active_bpr_for_student, _get_course_level_for_student,
+    get_student_sp_status). The legacy StudentStageProgress.current_week is
+    only used as a fallback for non-SP code paths.
+
+    Critical: `dev_tools.reset_pe_to_state_0` deletes StudentStageProgress
+    rows (they're in `_HISTORY_DOCTYPES`). Before this fix, the function
+    fell back to calendar_week when SSP was missing — which made every
+    reset student look like they were already at the calendar's pace,
+    triggering the content_blocked check for previous-week submission.
+    Reading PE.current_week first sidesteps that completely.
     """
-    # Get student's progress record (scoped to this batch)
-    progress = frappe.db.get_value(
-        "StudentStageProgress",
+    # Canonical: ProgramEnrollment.current_week (SP-aware, reset-safe).
+    pe_week = frappe.db.get_value(
+        "ProgramEnrollment",
         {
             "student": student.name,
-            "course_context": batch.name,
-            "stage_type": "LearningUnit",
+            "batch": batch.name,
+            "program_status": ["in", ["active", "paused"]],
         },
-        ["current_week"],
-        as_dict=True,
+        "current_week",
     )
+    if pe_week:
+        student_week = cint(pe_week)
+    else:
+        # Legacy fallback: StudentStageProgress (non-SP code paths).
+        progress = frappe.db.get_value(
+            "StudentStageProgress",
+            {
+                "student": student.name,
+                "course_context": batch.name,
+                "stage_type": "LearningUnit",
+            },
+            ["current_week"],
+            as_dict=True,
+        )
+        if not progress or not progress.current_week:
+            return calendar_week
+        student_week = cint(progress.current_week)
 
-    if not progress or not progress.current_week:
-        return calendar_week
-
-    student_week = cint(progress.current_week)
     total_weeks = cint(batch.total_weeks) or calendar_week
 
     # Cap: student can be at most 1 week ahead of calendar
