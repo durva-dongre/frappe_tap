@@ -74,9 +74,17 @@ scheduler_events = {
         "*/1 * * * *": [
             "tap_lms.summer_program.pe_dispatcher.process_program_actions",
         ],
-        "0 */2 * * *": [
-            "tap_lms.summer_program.escalation_runner.run_escalation_check",
-        ],
+        # Retired 2026-05-21 (task #50): the legacy escalation_runner ran in
+        # parallel with pe_dispatcher.handle_escalation (system A, post-CR-003)
+        # without gating on canonical PE state. It double-escalated students
+        # who already submitted and disagreed with the per-PE escalation
+        # counter. The per-PE dispatcher fires escalations correctly when
+        # next_action_at + next_action_type='escalation' are armed by T1
+        # (content_no_response). escalation_runner.py is preserved as dead
+        # code for one release cycle; remove the module after launch.
+        # "0 */2 * * *": [
+        #     "tap_lms.summer_program.escalation_runner.run_escalation_check",
+        # ],
         "0 0 * * 1": [
             "tap_lms.summer_program.batch_admin.auto_advance_batch_week",
         ],

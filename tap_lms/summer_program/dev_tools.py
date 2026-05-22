@@ -485,6 +485,212 @@ def reset_pes_for_batch(
 
 
 # ════════════════════════════════════════════════════════════
+# Glific reconciliation (task #51, 2026-05-21)
+# ════════════════════════════════════════════════════════════
+#
+# When Frappe PE state and Glific contact fields drift apart (failed sync
+# job, manual data edit, parallel writer bypassing the state machine), these
+# helpers rebuild the canonical 28-field bundle from PE state and push it
+# synchronously to Glific. Frappe PE is the source of truth.
+#
+# Use cases:
+#   - Post-incident cleanup after _enqueue_contact_field_sync DLQ'd (task #5).
+#   - After dev_tools.reset_pe_to_state_0 if Glific has stale weekly_* values
+#     the async sync hasn't drained yet.
+#   - Pre-launch audit to confirm every cohort PE matches Glific.
+#
+# These DO NOT mutate Frappe PE state. Strictly one-way Frappe → Glific.
+
+
+def reconcile_pe_to_glific(pe_name, dry_run=False, verbose=True):
+    """Re-push the canonical 28-field bundle for one PE to its Glific contact.
+
+    Synchronous (does NOT go through frappe.enqueue). Returns a dict with the
+    fields that differed pre-push, so the operator can audit.
+
+    Args:
+        pe_name: ProgramEnrollment doc name.
+        dry_run: If True, compute the diff but do NOT push to Glific.
+        verbose: Print field-by-field diff.
+
+    Returns: {
+        "pe": <pe_name>, "glific_id": <id>,
+        "diff": [{"field": ..., "frappe": ..., "glific": ...}, ...],
+        "pushed": <bool>,
+    }
+    """
+    import json
+    import requests
+    from tap_lms.summer_program.utils import get_student_display_name
+    from tap_lms.glific_integration import (
+        update_contact_fields,
+        get_glific_settings,
+        get_glific_auth_headers,
+    )
+    from tap_lms.summer_program.constants import (
+        CF_STUDENT_ID, CF_BATCH_ID, CF_ARCHETYPE, CF_LANGUAGE_ID,
+        CF_EXPERIMENT_ARM, CF_COURSE_LEVEL, CF_STUDENT_NAME,
+        CF_RESOLVED_FLOW_STATE, CF_CURRENT_WEEK, CF_CURRENT_PATH,
+        CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
+        CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
+        CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
+        CF_TOTAL_ACTIVITY_POINTS, CF_WEEKLY_ACTIVITY_POINTS,
+        CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
+        CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
+        CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
+        CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
+    )
+
+    dry_run = _coerce_bool(dry_run)
+    pe = frappe.get_doc("ProgramEnrollment", pe_name)
+    if not pe.glific_id:
+        if verbose:
+            print(f"PE {pe_name}: no glific_id — skip")
+        return {"pe": pe_name, "glific_id": None, "diff": [], "pushed": False}
+
+    student = frappe.get_doc("Student", pe.student)
+    batch = frappe.get_doc("Batch", pe.batch)
+
+    # Mirror _process_pe_chunk's enrollment-time bundle so the reconciler
+    # stays in sync with the canonical writer. If a field is added to that
+    # writer, mirror it here too.
+    glific_language_id = ""
+    if student.language:
+        glific_language_id = str(
+            frappe.db.get_value("TAP Language", student.language, "glific_language_id") or ""
+        )
+
+    expected = {
+        CF_STUDENT_ID: pe.student,
+        CF_BATCH_ID: batch.batch_id or batch.name,
+        CF_ARCHETYPE: pe.archetype or "",
+        CF_LANGUAGE_ID: glific_language_id,
+        CF_EXPERIMENT_ARM: pe.experiment_arm or "",
+        CF_COURSE_LEVEL: pe.course_level or "",
+        CF_STUDENT_NAME: get_student_display_name(student),
+        CF_RESOLVED_FLOW_STATE: pe.resolved_flow_state or "",
+        CF_CURRENT_WEEK: str(pe.current_week or 1),
+        CF_CURRENT_PATH: pe.current_path or "Core",
+        CF_CURRENT_TIER: pe.current_tier or "Basic",
+        CF_PROGRAM_STATUS: pe.program_status or "active",
+        CF_TOTAL_POINTS: str(pe.total_points or 0),
+        CF_CURRENT_STREAK: str(pe.current_streak or 0),
+        CF_GRACE_WINDOW_END: str(pe.grace_window_end_at or ""),
+        CF_EXPECTED_SUBMISSION: pe.current_expected_submission_type or "",
+        CF_LAST_ESCALATION_STEP: str(pe.current_escalation_step or 0),
+        CF_SUBMISSION_COUNT: str(pe.submission_count or 0),
+        CF_TOTAL_ACTIVITY_POINTS: str(pe.total_activity_points or 0),
+        CF_WEEKLY_ACTIVITY_POINTS: str(pe.weekly_activity_points or 0),
+        CF_TOTAL_QUIZ_POINTS: str(pe.total_quiz_points or 0),
+        CF_WEEKLY_QUIZ_POINTS: str(pe.weekly_quiz_points or 0),
+        CF_TOTAL_SUBMISSION_POINTS: str(pe.total_submission_points or 0),
+        CF_WEEKLY_SUBMISSION_POINTS: str(pe.weekly_submission_points or 0),
+        CF_SPECIAL_GEMS: str(pe.special_gems or 0),
+        CF_WEEKLY_SUBMISSION_DONE: str(int(pe.weekly_submission_done or 0)),
+        CF_ESCALATION_ORDER: str(pe.current_escalation_step or 0),
+        CF_ESCALATION_TYPE: getattr(pe, "current_escalation_type", "") or "",
+    }
+
+    # Fetch Glific contact to diff
+    settings = get_glific_settings()
+    payload = {
+        "query": "query contact($id: ID!) { contact(id: $id) { contact { id fields } } }",
+        "variables": {"id": str(pe.glific_id)},
+    }
+    r = requests.post(f"{settings.api_url}/api", json=payload,
+                      headers=get_glific_auth_headers(), timeout=15).json()
+    contact = (r.get("data") or {}).get("contact", {}).get("contact") or {}
+    raw_fields = contact.get("fields")
+    glific_fields = json.loads(raw_fields) if isinstance(raw_fields, str) else (raw_fields or {})
+
+    diff = []
+    for k, v_expected in expected.items():
+        raw = glific_fields.get(k)
+        v_glific = raw.get("value") if isinstance(raw, dict) else raw
+        if str(v_glific or "") != str(v_expected or ""):
+            diff.append({"field": k, "frappe": v_expected, "glific": v_glific})
+
+    if verbose:
+        print(f"PE {pe_name} → Glific {pe.glific_id}")
+        if not diff:
+            print(f"  ✓ no mismatches")
+        else:
+            print(f"  ✗ {len(diff)} mismatches:")
+            for d in diff:
+                print(f"    {d['field']:30s} frappe={d['frappe']!r:25s} glific={d['glific']!r}")
+
+    if not diff:
+        return {"pe": pe_name, "glific_id": pe.glific_id, "diff": [], "pushed": False}
+
+    if dry_run:
+        if verbose:
+            print(f"  DRY RUN — would push {len(diff)} fields")
+        return {"pe": pe_name, "glific_id": pe.glific_id, "diff": diff, "pushed": False}
+
+    # Push only the fields that differ, to minimize payload churn.
+    fields_to_push = {d["field"]: d["frappe"] for d in diff}
+
+    # Also push the CORE Glific language if the language_id field is in the diff
+    # (single round-trip via the language_id kwarg).
+    core_lang = glific_language_id if any(d["field"] == CF_LANGUAGE_ID for d in diff) else None
+    ok = update_contact_fields(
+        contact_id=pe.glific_id,
+        fields_to_update=fields_to_push,
+        language_id=core_lang,
+    )
+    if verbose:
+        print(f"  pushed: {ok}")
+    return {"pe": pe_name, "glific_id": pe.glific_id, "diff": diff, "pushed": bool(ok)}
+
+
+def reconcile_batch_to_glific(batch_name, dry_run=False, verbose=True):
+    """Reconcile every active/paused PE in a batch to Glific.
+
+    Loops PEs and calls reconcile_pe_to_glific per row. Prints a one-line
+    summary per PE plus totals at the end.
+
+    Returns: {pe_name: <per-pe result dict>, ...}
+    """
+    dry_run = _coerce_bool(dry_run)
+
+    rows = frappe.db.sql(
+        """
+            SELECT name, student FROM "tabProgramEnrollment"
+             WHERE batch = %s AND program_status IN ('active', 'paused')
+             ORDER BY name
+        """,
+        (batch_name,),
+        as_dict=True,
+    )
+    if not rows:
+        print(f"No active/paused PEs in batch {batch_name}.")
+        return {}
+
+    print(f"Reconciling {len(rows)} PEs in batch {batch_name} "
+          f"({'DRY RUN' if dry_run else 'LIVE'})…")
+    results = {}
+    total_mismatches = 0
+    total_pushed = 0
+    for row in rows:
+        try:
+            result = reconcile_pe_to_glific(row.name, dry_run=dry_run, verbose=False)
+            results[row.name] = result
+            n = len(result["diff"])
+            total_mismatches += n
+            if result.get("pushed"):
+                total_pushed += 1
+            print(f"  {row.name}  student={row.student}  mismatches={n}  "
+                  f"{'pushed' if result.get('pushed') else 'no-push'}")
+        except Exception as e:
+            results[row.name] = {"error": str(e)}
+            print(f"  {row.name}  student={row.student}  FAILED: {e}")
+
+    print(f"\nDone — total mismatches across {len(rows)} PEs: {total_mismatches}; "
+          f"PEs pushed: {total_pushed}.")
+    return results
+
+
+# ════════════════════════════════════════════════════════════
 # Internal helpers
 # ════════════════════════════════════════════════════════════
 
