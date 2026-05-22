@@ -485,6 +485,311 @@ def reset_pes_for_batch(
 
 
 # ════════════════════════════════════════════════════════════
+# Student state mutation — archetype / experiment_arm / PE state
+# ════════════════════════════════════════════════════════════
+#
+# For testing only. Lets operators update a student's archetype /
+# experiment_arm (Student fields) and optionally key PE-state fields
+# (program_status, current_week, current_path) in one call, then
+# reconciles to Glific so contact fields land.
+#
+# Why this exists:
+#   - Student.archetype + Student.experiment_arm are upstream-supplied
+#     (CLAUDE.md). Operationally we still need to flip them during testing.
+#   - Three places hold the same data: Student, ProgramEnrollment
+#     (denormalized at enrollment), Glific contact fields. All three must
+#     agree or the dispatcher/state-machine + Glific flows disagree on
+#     what archetype the student "is".
+
+
+_VALID_ARCHETYPES = ("fence_sitter", "dormant", "lurker", "submitter")
+_VALID_ARMS = ("default", "arm_a", "arm_b")
+_VALID_PROGRAM_STATUSES = ("active", "paused", "completed", "dropped")
+_VALID_PATHS = ("Core", "Remedial")
+
+
+@frappe.whitelist(allow_guest=False)
+def update_student_state(
+    student_id,
+    archetype=None,
+    experiment_arm=None,
+    program_status=None,
+    current_week=None,
+    current_path=None,
+    push_to_glific=True,
+    dry_run=False,
+    i_know_this_is_destructive=False,
+):
+    """Update a student's archetype / experiment_arm + optional PE state.
+
+    Writes to:
+      - Student.archetype, Student.experiment_arm
+      - ProgramEnrollment.archetype, .experiment_arm (denormalized copies)
+      - Optional: ProgramEnrollment.program_status, .current_week, .current_path
+
+    After Frappe writes complete, calls reconcile_pe_to_glific to push the
+    canonical state to Glific contact fields (synchronous).
+
+    Args (all positional-or-keyword via Frappe whitelist):
+        student_id: Student.name (required)
+        archetype: one of fence_sitter / dormant / lurker / submitter (or None to skip)
+        experiment_arm: one of default / arm_a / arm_b (or None)
+        program_status: one of active / paused / completed / dropped (or None)
+        current_week: int (or None)
+        current_path: one of Core / Remedial (or None)
+        push_to_glific: bool, default True
+        dry_run: bool, default False — compute the change set without writing
+        i_know_this_is_destructive: bypass production-site safety guard
+
+    Returns:
+        {
+            "student_id": ..., "pe_name": ...,
+            "before": {<snapshot>},
+            "after": {<snapshot>},
+            "applied": {<field: new_value>},
+            "reconcile": <reconcile result dict>,
+            "dry_run": <bool>,
+        }
+
+    Raises:
+        frappe.PermissionError on suspected production site without override.
+        frappe.ValidationError on invalid enum value or missing student/PE.
+    """
+    dry_run = _coerce_bool(dry_run)
+    push_to_glific = _coerce_bool(push_to_glific)
+    i_know_this_is_destructive = _coerce_bool(i_know_this_is_destructive)
+
+    _assert_dev_site(i_know_this_is_destructive=i_know_this_is_destructive)
+    frappe.db.rollback()  # PG txn hygiene
+
+    if not frappe.db.exists("Student", student_id):
+        frappe.throw(
+            f"Student not found: {student_id}", frappe.ValidationError
+        )
+
+    # ── Validate enum inputs ────────────────────────────────
+    if archetype is not None and archetype not in _VALID_ARCHETYPES:
+        frappe.throw(
+            f"Invalid archetype {archetype!r}; must be one of {_VALID_ARCHETYPES}",
+            frappe.ValidationError,
+        )
+    if experiment_arm is not None and experiment_arm not in _VALID_ARMS:
+        frappe.throw(
+            f"Invalid experiment_arm {experiment_arm!r}; must be one of {_VALID_ARMS}",
+            frappe.ValidationError,
+        )
+    if program_status is not None and program_status not in _VALID_PROGRAM_STATUSES:
+        frappe.throw(
+            f"Invalid program_status {program_status!r}; must be one of {_VALID_PROGRAM_STATUSES}",
+            frappe.ValidationError,
+        )
+    if current_path is not None and current_path not in _VALID_PATHS:
+        frappe.throw(
+            f"Invalid current_path {current_path!r}; must be one of {_VALID_PATHS}",
+            frappe.ValidationError,
+        )
+    if current_week is not None:
+        try:
+            current_week = int(current_week)
+        except (TypeError, ValueError):
+            frappe.throw(
+                f"current_week must be an integer; got {current_week!r}",
+                frappe.ValidationError,
+            )
+
+    # ── Snapshot before ─────────────────────────────────────
+    student = frappe.get_doc("Student", student_id)
+    pe = _get_active_pe_for_student(student_id)
+    pe_name = pe.name if pe else None
+
+    before = {
+        "student.archetype": student.archetype,
+        "student.experiment_arm": student.experiment_arm,
+        "pe.archetype": pe.archetype if pe else None,
+        "pe.experiment_arm": pe.experiment_arm if pe else None,
+        "pe.program_status": pe.program_status if pe else None,
+        "pe.current_week": pe.current_week if pe else None,
+        "pe.current_path": pe.current_path if pe else None,
+    }
+
+    # ── Compute applied diff (only fields the caller passed) ────
+    applied = {}
+    student_updates = {}
+    pe_updates = {}
+
+    if archetype is not None:
+        if student.archetype != archetype:
+            student_updates["archetype"] = archetype
+            applied["student.archetype"] = archetype
+        if pe and pe.archetype != archetype:
+            pe_updates["archetype"] = archetype
+            applied["pe.archetype"] = archetype
+    if experiment_arm is not None:
+        if student.experiment_arm != experiment_arm:
+            student_updates["experiment_arm"] = experiment_arm
+            applied["student.experiment_arm"] = experiment_arm
+        if pe and pe.experiment_arm != experiment_arm:
+            pe_updates["experiment_arm"] = experiment_arm
+            applied["pe.experiment_arm"] = experiment_arm
+    if pe and program_status is not None and pe.program_status != program_status:
+        pe_updates["program_status"] = program_status
+        applied["pe.program_status"] = program_status
+    if pe and current_week is not None and pe.current_week != current_week:
+        pe_updates["current_week"] = current_week
+        applied["pe.current_week"] = current_week
+    if pe and current_path is not None and pe.current_path != current_path:
+        pe_updates["current_path"] = current_path
+        applied["pe.current_path"] = current_path
+
+    if dry_run:
+        return {
+            "student_id": student_id,
+            "pe_name": pe_name,
+            "before": before,
+            "after": None,
+            "applied": applied,
+            "reconcile": None,
+            "dry_run": True,
+        }
+
+    # ── Write ────────────────────────────────────────────────
+    if student_updates:
+        frappe.db.set_value("Student", student_id, student_updates)
+    if pe and pe_updates:
+        frappe.db.set_value("ProgramEnrollment", pe.name, pe_updates)
+    frappe.db.commit()
+
+    # ── Snapshot after ──────────────────────────────────────
+    student.reload()
+    if pe:
+        pe.reload()
+    after = {
+        "student.archetype": student.archetype,
+        "student.experiment_arm": student.experiment_arm,
+        "pe.archetype": pe.archetype if pe else None,
+        "pe.experiment_arm": pe.experiment_arm if pe else None,
+        "pe.program_status": pe.program_status if pe else None,
+        "pe.current_week": pe.current_week if pe else None,
+        "pe.current_path": pe.current_path if pe else None,
+    }
+
+    # ── Push to Glific via reconciler ───────────────────────
+    reconcile_result = None
+    if push_to_glific and pe and pe.glific_id:
+        reconcile_result = reconcile_pe_to_glific(
+            pe.name, dry_run=False, verbose=False
+        )
+
+    return {
+        "student_id": student_id,
+        "pe_name": pe_name,
+        "before": before,
+        "after": after,
+        "applied": applied,
+        "reconcile": reconcile_result,
+        "dry_run": False,
+    }
+
+
+# ════════════════════════════════════════════════════════════
+# Combined: reset PE + update Student identity in one call
+# ════════════════════════════════════════════════════════════
+
+
+@frappe.whitelist(allow_guest=False)
+def reset_and_update_student(
+    student_id,
+    archetype=None,
+    experiment_arm=None,
+    program_status=None,
+    current_week=None,
+    current_path=None,
+    delete_history=True,
+    dry_run=False,
+    i_know_this_is_destructive=False,
+):
+    """One-shot: reset_pe_to_state_0 + update_student_state, single Glific push.
+
+    Atomic-ish wrapper around the two existing endpoints. Use when a test
+    cycle needs to restart a student from week 1 AND change their archetype
+    or experiment_arm at the same time.
+
+    Sequence:
+      1. reset_pe_to_state_0(push_to_glific=False) — clears PE state-machine
+         fields, counters, history; maintains Glific group memberships;
+         skips contact-field push (we'll do one combined push at the end).
+      2. update_student_state(push_to_glific=True) — writes new Student
+         archetype/arm + optional PE state fields, then reconciles ALL
+         fields to Glific in a single round-trip.
+
+    Args mirror the two underlying functions:
+        student_id: required
+        archetype, experiment_arm: optional new identity (None to skip)
+        program_status, current_week, current_path: optional PE-state overrides
+            applied AFTER the reset (e.g., if you want the resulting PE
+            to be `paused` instead of `active`, or already at week 2)
+        delete_history: passed to reset_pe_to_state_0
+        dry_run: bool
+        i_know_this_is_destructive: production-site safety override
+
+    Returns:
+        {
+            "student_id": ..., "pe_name": ...,
+            "phase1_reset": <result of reset_pe_to_state_0>,
+            "phase2_update": <result of update_student_state>,
+            "dry_run": <bool>,
+        }
+
+    Raises:
+        Same as the two underlying functions.
+    """
+    dry_run = _coerce_bool(dry_run)
+    delete_history = _coerce_bool(delete_history)
+    i_know_this_is_destructive = _coerce_bool(i_know_this_is_destructive)
+
+    _assert_dev_site(i_know_this_is_destructive=i_know_this_is_destructive)
+    frappe.db.rollback()
+
+    # ── Phase 1: reset PE to state 0 ────────────────────────
+    # push_to_glific=False — defer Glific push to phase 2 so the team only
+    # pays one Glific round-trip per call.
+    phase1 = reset_pe_to_state_0(
+        student_id,
+        dry_run=dry_run,
+        delete_history=delete_history,
+        push_to_glific=False,
+        verbose=False,
+        i_know_this_is_destructive=True,  # outer guard already passed
+    )
+
+    # ── Phase 2: update Student identity + optional PE state ────
+    # push_to_glific=True — reconciles the FULL 28-field bundle to Glific
+    # in one shot, picking up both the reset-cleared values AND the new
+    # archetype/arm.
+    phase2 = update_student_state(
+        student_id,
+        archetype=archetype,
+        experiment_arm=experiment_arm,
+        program_status=program_status,
+        current_week=current_week,
+        current_path=current_path,
+        push_to_glific=True,
+        dry_run=dry_run,
+        i_know_this_is_destructive=True,  # outer guard already passed
+    )
+
+    pe_name = phase2.get("pe_name") or (phase1 or {}).get("pe_name")
+
+    return {
+        "student_id": student_id,
+        "pe_name": pe_name,
+        "phase1_reset": phase1,
+        "phase2_update": phase2,
+        "dry_run": dry_run,
+    }
+
+
+# ════════════════════════════════════════════════════════════
 # Glific reconciliation (task #51, 2026-05-21)
 # ════════════════════════════════════════════════════════════
 #
