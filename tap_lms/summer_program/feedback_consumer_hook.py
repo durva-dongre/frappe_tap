@@ -160,11 +160,37 @@ def on_feedback_ready(submission_name, student_id=None):
                 "points_awarded": points}
 
     except Exception as e:
-        frappe.log_error(
+        # L-030 / task #24 mirror: if a prior query in this txn aborted
+        # (Postgres InFailedSqlTransaction), calling frappe.log_error
+        # without first rolling back will itself fail with the same error
+        # and the message gets silently dropped. Defensive rollback before
+        # logging — this is a leaf hook, no in-flight writes worth keeping.
+        try:
+            frappe.db.rollback()
+        except Exception:
+            # If rollback itself fails we can't do much, but try to surface
+            # the original error anyway via a logger.error (which doesn't
+            # require a healthy txn).
+            frappe.logger().error(
+                f"SP feedback hook: rollback failed before log_error; "
+                f"original error: {str(e)[:200]}"
+            )
+        # Truncate the message defensively to keep frappe's Error Log
+        # doctype (message field has a length limit on some installs) from
+        # CharacterLengthExceededError-ing — same hardening as task #29.
+        msg = (
             f"SP feedback hook failed: submission={submission_name}, "
-            f"student={student_id}, error={str(e)}",
-            "SP Feedback Consumer Hook",
+            f"student={student_id}, error={str(e)}"
         )
+        try:
+            frappe.log_error(
+                msg[:1000],
+                "SP Feedback Consumer Hook",
+            )
+        except Exception:
+            # log_error itself failed — fall back to file logger, which
+            # is independent of the Frappe DB layer.
+            frappe.logger().error(msg[:1000])
         return {"status": "error", "message": str(e)}
 
 
@@ -255,18 +281,61 @@ def _get_week_rule_for_pe(pe, week):
 def _escalation_points(pe, sent_count):
     """Read EscalationStep.points_awarded for the requested step.
 
-    Uses _get_escalation_steps from student_progression_sp to resolve the
-    archetype × experiment_arm × path's escalation step config. Falls back
-    to the last step's value if sent_count is beyond the configured chain
-    (preserves the pre-CR-007 behavior from save_submission._calculate_points).
+    Indexing contract (FIXED 2026-05-22 — was off-by-one):
+
+      `sent_count` == `pe.current_escalation_step`, which the dispatcher
+      writes as `next_step = current_step + 1`. The first delivered
+      escalation message → current_escalation_step == 1. The dispatcher
+      itself reads `steps[next_step - 1]` (pe_dispatcher.py:351), so
+      step N's config lives at `steps[N - 1]` (0-indexed list, sorted by
+      escalation_order ascending). A student who responds late after
+      escalation step 1 fired has sent_count == 1 and should receive
+      `steps[0].points_awarded` (the reward associated with step 1).
+
+      The previous indexing `min(sent_count, len(steps)-1)` returned
+      `steps[1].points_awarded` (step 2's reward) for sent_count==1, which
+      consistently over-rewarded students who submitted after the first
+      escalation. This was masked by single-step configs where
+      `len(steps)-1` clamped the index back to 0.
+
+    Path-aware lookup (task #68 / 2026-05-22):
+
+      Uses _get_escalation_steps(student, batch, path=pe.current_path) to
+      pick the right escalation chain — Core students get Core's steps,
+      Remedial students get Remedial's steps. If Remedial config has no
+      steps configured, falls back to Core so the student still gets a
+      point award (warning logged for operators). Pre-fix, this helper
+      hardcoded Core for both paths, silently giving Remedial submitters
+      Core's point rewards.
+
+    Falls back to the last step's value if sent_count is beyond the
+    configured chain (preserves the pre-CR-007 saturation behavior).
     """
     from tap_lms.summer_program.student_progression_sp import _get_escalation_steps
+    from tap_lms.summer_program.constants import PATH_CORE, PATH_REMEDIAL
+
     student = frappe.get_doc("Student", pe.student)
     batch = frappe.get_doc("Batch", pe.batch)
-    steps = _get_escalation_steps(student, batch)
+    path = pe.current_path or PATH_CORE
+
+    steps = _get_escalation_steps(student, batch, path=path)
+
+    # Path-aware fallback: Remedial config empty → use Core's chain so the
+    # student still receives a point award. Operator-visible warning logged.
+    if not steps and path == PATH_REMEDIAL:
+        frappe.logger().warning(
+            f"_escalation_points: PE {pe.name} is on Remedial but "
+            f"archetype={student.archetype}, arm={student.experiment_arm} "
+            f"has no Remedial escalation_steps configured — falling back "
+            f"to Core's chain for point award."
+        )
+        steps = _get_escalation_steps(student, batch, path=PATH_CORE)
+
     if not steps:
         return 0
-    idx = min(sent_count, len(steps) - 1)
+    # sent_count is 1-indexed (matches dispatcher's next_step writes);
+    # `steps` is 0-indexed → subtract 1 before clamping.
+    idx = min(max(sent_count - 1, 0), len(steps) - 1)
     return int(steps[idx].get("points_awarded") or 0)
 
 

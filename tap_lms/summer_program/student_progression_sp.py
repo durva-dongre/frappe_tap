@@ -575,10 +575,17 @@ def get_content_details(content_type, content_id, language=None, student_id=None
             return {"success": False, "status": "not_found",
                     "error_detail": f"{content_type} not found: {content_id}"}
 
-        language = _resolve_content_language(language, student_id)
+        # Task #45 (2026-05-22): _resolve_content_language was called
+        # unconditionally here, but only the VideoClass branch consumes
+        # `language` (for translations + unguided-text lookup). The Quiz /
+        # NoteContent / Assignment / CourseProject / generic branches
+        # don't use it. Resolution does a DB lookup (resolve_student →
+        # get_active_pe), so moving it into the VideoClass branch skips
+        # 1 DB hit per get_content_details call for non-Video content.
         doc = frappe.get_doc(content_type, content_id)
 
         if content_type == "VideoClass":
+            language = _resolve_content_language(language, student_id)
             # Flatten `assessments` array using numeric-suffix expansion per
             # docs/api-standard-glific.md Rule 3. `assessment_<i>_id` is CRITICAL —
             # it's the assignment_id that Glific passes to save_submission when
@@ -1479,7 +1486,7 @@ def _get_week_rule(student, batch, week):
     return None
 
 
-def _get_escalation_steps(student, batch):
+def _get_escalation_steps(student, batch, path=PATH_CORE):
     """
     Get escalation steps from ArchetypeConfig for this student.
 
@@ -1489,11 +1496,31 @@ def _get_escalation_steps(student, batch):
     contact field pushed by the dispatcher to pick its per-channel branch
     in SP_Escalation. `parent_call` steps are routed by the dispatcher
     through `summer_program/vocallabs.py` and skip Glific entirely.
+
+    Fix 2026-05-22 (task #68): added explicit `path` parameter. Previously
+    this function hardcoded PATH_CORE, so dispatcher T8/T10 Remedial
+    transitions and feedback_consumer_hook._escalation_points on Remedial
+    submissions silently used Core's escalation cadence + point rewards.
+    Diagnostic against palv2-test-BT52231 showed every Remedial-path
+    ArchetypeConfig has divergent step counts vs Core (e.g.
+    arm_b/fence_sitter/Remedial has 5 steps vs Core's 4), confirming the
+    operator team intended path-aware lookup. Default remains PATH_CORE
+    for back-compat with callers that pre-date Remedial-aware routing.
+
+    Args:
+        student: Student doc (or _dict with archetype + experiment_arm).
+        batch:   Batch doc.
+        path:    PATH_CORE | PATH_REMEDIAL. Defaults to PATH_CORE.
+
+    Callers that handle Remedial states (pe_dispatcher's
+    _get_escalation_steps_for_pe, feedback_consumer_hook._escalation_points)
+    pass `pe.current_path` and apply a Core fallback themselves if the
+    Remedial config has no steps configured.
     """
     archetype = student.archetype or "submitter"
     arm = student.experiment_arm or "default"
 
-    config = _get_archetype_config(batch.name, arm, archetype, PATH_CORE)
+    config = _get_archetype_config(batch.name, arm, archetype, path)
     if not config or not config.escalation_steps:
         return []
 
@@ -1753,8 +1780,23 @@ def _get_video_unguided_submission_message(student_id, assessments, language=Non
 
 
 def _log_unguided_submission(title, message):
-    """Log unguided submission diagnostics without exceeding Error Log title cap."""
-    frappe.log_error(title[:140], message)
+    """Log unguided submission diagnostics.
+
+    Task #42 (2026-05-22): switched from `frappe.log_error` to
+    `frappe.logger().info`. Most call sites here are HAPPY-PATH diagnostics
+    (e.g. "looked up unguided text", "found rule match") that should never
+    have been polluting the Error Log doctype — they were drowning real
+    errors in operator triage. The only call site that's actually an error
+    condition ("no rule match" / "no assignment") is left as info too,
+    since the API still returns a valid `"Not Found"` payload and Glific
+    routes around it; if operators want a stronger signal those callers
+    can be promoted to warning() individually.
+
+    Title is preserved as a structured prefix for grep-ability in the log
+    stream. We don't truncate here because logger().info has no doctype
+    length constraint.
+    """
+    frappe.logger("unguided_submission").info(f"{title}: {message}")
 
 
 def _strip_html_text(value):

@@ -142,7 +142,20 @@ class TestSubmissionTransitionsExtended(FrappeTestCase):
         cls.batch_name = _ensure_batch()
 
     def _assert_submission_extras(self, pe, *, prior_streak, prior_gems, points):
-        """Common assertions for any of T3/T7/T9/T17."""
+        """Common assertions for any of T3/T7/T9/T17.
+
+        Post-CR-007 + task #67 (2026-05-22): submission transitions NO
+        LONGER bump the point-stream columns (total_points,
+        total_submission_points, weekly_submission_points). Those are
+        owned exclusively by feedback_consumer_hook._award_submission_points_atomic
+        which runs after AI validation. The transition's job is the
+        streak/gems/sticky-flag triplet and the state transition itself.
+
+        The `points` parameter is preserved on the test signatures for
+        backward compatibility with the existing call sites but is ignored
+        in the assertion set — the columns are expected to stay at their
+        pre-transition values (0 for fresh _make_pe-built fixtures).
+        """
         pe.reload()
         self.assertEqual(pe.weekly_submission_done, 1,
                          "Sticky flag must be set on submission")
@@ -150,12 +163,19 @@ class TestSubmissionTransitionsExtended(FrappeTestCase):
                          "current_streak += 1 on submission")
         self.assertEqual(pe.special_gems, prior_gems + 1,
                          "special_gems += 1 on submission")
-        self.assertEqual(pe.total_submission_points, points,
-                         f"total_submission_points += {points}")
-        self.assertEqual(pe.weekly_submission_points, points,
-                         f"weekly_submission_points += {points}")
-        self.assertEqual(pe.total_points, points,
-                         f"total_points += {points} (combined cumulative)")
+        # Point-stream columns are NOT bumped by the transition anymore
+        # (task #67). They start at 0 from the fixture and stay at 0 here
+        # because the feedback hook (which owns the atomic bump) is not
+        # part of this test path. `points` is accepted for signature
+        # compatibility but unused.
+        del points
+        self.assertEqual(pe.total_submission_points, 0,
+                         "total_submission_points NOT bumped by transition "
+                         "(feedback hook owns this)")
+        self.assertEqual(pe.weekly_submission_points, 0,
+                         "weekly_submission_points NOT bumped by transition")
+        self.assertEqual(pe.total_points, 0,
+                         "total_points NOT bumped by transition")
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t7_extends_streak_gems_submission_done_flag(self, mock_sync):
@@ -495,3 +515,204 @@ class TestCR006T6Deprecation(FrappeTestCase):
         t6b_failed_feedback_to_remedial(pe, trigger_source="microservice")
         pe.reload()
         self.assertEqual(pe.resolved_flow_state, STATE_REMEDIAL_CONTENT)
+
+
+# ════════════════════════════════════════════════════════════
+# Task #27 — transition() L-011 race-safety
+# ════════════════════════════════════════════════════════════
+
+class TestTransitionRaceSafety(FrappeTestCase):
+    """Pin the L-011 race-safety guarantee from task #27 (2026-05-22).
+
+    Pre-fix, `transition()` called `pe.save(ignore_permissions=True)` which
+    writes EVERY column on the row from the in-memory pe doc. If a
+    concurrent handler (activity_points, quiz_points, feedback hook's
+    atomic SQL bump) updated a column between the pe load and the save,
+    the in-memory stale value silently overwrote that bump.
+
+    Post-fix, `transition()` uses `frappe.db.set_value` with a targeted
+    updates dict — touches ONLY the dirty fields. Concurrent bumps to
+    other columns survive because they're not in the UPDATE SET clause.
+
+    These tests simulate the race by:
+      1. Loading a pe doc (in-memory stale snapshot).
+      2. Atomically bumping a column via raw SQL (simulates the concurrent
+         activity_points / quiz_points / feedback hook write).
+      3. Calling `transition()` on the in-memory stale pe.
+      4. Asserting the DB value matches the BUMPED value, not the stale one.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_transition_preserves_concurrent_total_points_bump(self, mock_sync):
+        """Race: activity_points bumps total_points while a transition is
+        loading pe. Post-fix the bump must survive."""
+        student = _ensure_student("RACE_TP")
+        pe = _make_pe(
+            self.batch_name, student, "RACE_TP",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            total_points=10,
+        )
+        # Simulate the race: another handler atomically bumps total_points
+        # to 13 AFTER pe was loaded (pe.total_points still reads 10 in memory).
+        frappe.db.sql(
+            'UPDATE "tabProgramEnrollment" SET total_points = 13 WHERE name = %s',
+            (pe.name,),
+        )
+        self.assertEqual(pe.total_points, 10, "in-memory pe is stale by design")
+
+        # Fire a transition that does NOT mention total_points in extra_updates.
+        # Pre-fix this would clobber total_points back to 10. Post-fix it
+        # leaves the column alone.
+        from tap_lms.summer_program.state_machine import transition
+        transition(
+            pe, STATE_GRACE_WAITING,
+            trigger_source="test",
+            extra_updates={"journey_label": LABEL_GRACE_WINDOW},
+            skip_glific=True,
+        )
+
+        # The concurrent bump must have survived.
+        fresh_total = frappe.db.get_value("ProgramEnrollment", pe.name, "total_points")
+        self.assertEqual(int(fresh_total), 13,
+                         "Concurrent total_points bump must survive transition "
+                         "(L-011 race-safety)")
+        # And the transition's own updates were applied.
+        fresh_state, fresh_label = frappe.db.get_value(
+            "ProgramEnrollment", pe.name,
+            ["resolved_flow_state", "journey_label"],
+        )
+        self.assertEqual(fresh_state, STATE_GRACE_WAITING)
+        self.assertEqual(fresh_label, LABEL_GRACE_WINDOW)
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_transition_preserves_concurrent_total_activity_points_bump(self, mock_sync):
+        """Same race, total_activity_points column (owned by activity_points
+        handler). Pre-fix would clobber; post-fix preserves."""
+        student = _ensure_student("RACE_TAP")
+        pe = _make_pe(
+            self.batch_name, student, "RACE_TAP",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            total_activity_points=20,
+        )
+        frappe.db.sql(
+            'UPDATE "tabProgramEnrollment" SET total_activity_points = 35 '
+            'WHERE name = %s',
+            (pe.name,),
+        )
+        from tap_lms.summer_program.state_machine import transition
+        transition(
+            pe, STATE_SUBMITTED_AWAITING,
+            trigger_source="test",
+            extra_updates={"journey_label": LABEL_SUBMITTED},
+            skip_glific=True,
+        )
+        fresh = frappe.db.get_value(
+            "ProgramEnrollment", pe.name, "total_activity_points",
+        )
+        self.assertEqual(int(fresh), 35,
+                         "total_activity_points bump must survive transition")
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_transition_preserves_concurrent_weekly_video_done_flip(self, mock_sync):
+        """weekly_video_done is flipped 0→1 by activity_points handler.
+        If a transition races, the flip must survive (it's the gating
+        signal for T19's streak/gem penalty branch — clobbering it would
+        silently lose the gating signal)."""
+        student = _ensure_student("RACE_WVD")
+        pe = _make_pe(
+            self.batch_name, student, "RACE_WVD",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            weekly_video_done=0,
+        )
+        frappe.db.sql(
+            'UPDATE "tabProgramEnrollment" SET weekly_video_done = 1 '
+            'WHERE name = %s',
+            (pe.name,),
+        )
+        from tap_lms.summer_program.state_machine import transition
+        transition(
+            pe, STATE_NORMAL_ESCALATION,
+            trigger_source="test",
+            extra_updates={
+                "current_escalation_step": 1,
+                "current_escalation_type": "help_note_a",
+            },
+            skip_glific=True,
+        )
+        fresh = frappe.db.get_value(
+            "ProgramEnrollment", pe.name, "weekly_video_done",
+        )
+        self.assertEqual(int(fresh), 1,
+                         "weekly_video_done flip must survive concurrent "
+                         "transition — it gates the T19 penalty branch")
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_transition_preserves_concurrent_submission_count_bump(self, mock_sync):
+        """submission_count is owned by save_submission._try_claim_primary
+        (atomic claim). A transition that doesn't mention it must not
+        clobber the count."""
+        student = _ensure_student("RACE_SC")
+        pe = _make_pe(
+            self.batch_name, student, "RACE_SC",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+        )
+        pe.submission_count = 2
+        pe.save(ignore_permissions=True)
+        # Concurrent bump
+        frappe.db.sql(
+            'UPDATE "tabProgramEnrollment" SET submission_count = 3 '
+            'WHERE name = %s',
+            (pe.name,),
+        )
+        from tap_lms.summer_program.state_machine import transition
+        transition(
+            pe, STATE_GRACE_WAITING,
+            trigger_source="test",
+            extra_updates={"journey_label": LABEL_GRACE_WINDOW},
+            skip_glific=True,
+        )
+        fresh = frappe.db.get_value(
+            "ProgramEnrollment", pe.name, "submission_count",
+        )
+        self.assertEqual(int(fresh), 3,
+                         "submission_count bump from _try_claim_primary "
+                         "must survive transition")
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_transition_applies_all_extra_updates(self, mock_sync):
+        """Regression guard: the targeted UPDATE must actually apply EVERY
+        field in extra_updates (otherwise we lose the state transition).
+        This is the boring happy-path test."""
+        student = _ensure_student("APPLY_ALL")
+        pe = _make_pe(
+            self.batch_name, student, "APPLY_ALL",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+        )
+        from tap_lms.summer_program.state_machine import transition
+        transition(
+            pe, STATE_SUBMITTED_AWAITING,
+            trigger_source="test",
+            extra_updates={
+                "journey_label": LABEL_SUBMITTED,
+                "current_streak": 7,
+                "special_gems": 5,
+                "weekly_submission_done": 1,
+            },
+            skip_glific=True,
+        )
+        fresh = frappe.db.get_value(
+            "ProgramEnrollment", pe.name,
+            ["resolved_flow_state", "journey_label", "current_streak",
+             "special_gems", "weekly_submission_done"],
+            as_dict=True,
+        )
+        self.assertEqual(fresh["resolved_flow_state"], STATE_SUBMITTED_AWAITING)
+        self.assertEqual(fresh["journey_label"], LABEL_SUBMITTED)
+        self.assertEqual(int(fresh["current_streak"]), 7)
+        self.assertEqual(int(fresh["special_gems"]), 5)
+        self.assertEqual(int(fresh["weekly_submission_done"]), 1)
