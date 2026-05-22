@@ -1238,6 +1238,13 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
     attempt.save(ignore_permissions=True)
     # Removed mid-handler commit per L-017 — Frappe commits at request-end.
 
+    # The on_update hook (quiz_points.handle_attempt_update) just fired inside
+    # attempt.save() and wrote points_earned via frappe.db.set_value. That
+    # bypasses the in-memory doc, so reload to pick up the new value for the
+    # response below (where quiz_score now carries GAMIFICATION POINTS earned,
+    # not the percentage — see CR 2026-05-22).
+    attempt.reload()
+
     # Get progress
     progress_data = frappe.db.get_value(
         "StudentStageProgress", attempt.student_progress,
@@ -1303,8 +1310,14 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
         "was_correct": bool(last_ans.is_correct) if last_ans else False,
         "time_spent_seconds": last_ans.time_spent_seconds if last_ans else 0,
         # quiz_result.* flattened with quiz_ prefix to avoid colliding with
-        # next-content fields injected below
-        "quiz_score": round(score, 1),
+        # next-content fields injected below.
+        #
+        # CR (2026-05-22): `quiz_score` now carries the GAMIFICATION POINTS
+        # earned (StudentQuizAttempt.points_earned), NOT the percentage.
+        # Glific flows display this as the user-facing quiz reward. The
+        # percentage is still available as `quiz_score_percentage`.
+        "quiz_score": int(attempt.points_earned or 0),
+        "quiz_score_percentage": round(score, 1),
         "quiz_correct": correct_count,
         "quiz_total": total,
         "quiz_passing_score": attempt.passing_score,
