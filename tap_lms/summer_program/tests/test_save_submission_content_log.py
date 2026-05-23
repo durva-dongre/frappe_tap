@@ -43,21 +43,91 @@ def _frappe_whitelist(fn=None, **kwargs):
 
 
 class TestSaveSubmissionContentLogBridge(unittest.TestCase):
-    def test_normalizes_extensionless_audio_url_from_content_type(self):
+    def test_normalizes_submission_without_inferring_kind(self):
         save_submission = _import_save_submission_with_stubs()
 
-        with patch.object(save_submission, "detect_url_media_type", return_value="audio") as mock_detect:
+        with patch("tap_lms.imgana.media_detection.detect_url_media_type") as mock_detect:
             payload = save_submission._normalize_submission_payload(
                 "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462?download=false"
             )
 
-        self.assertEqual(payload["submission_type"], "audio")
+        self.assertIsNone(payload["submission_type"])
         self.assertIsNone(payload["submission_text"])
+        self.assertIsNone(payload["submission_url"])
         self.assertEqual(
-            payload["submission_url"],
+            payload["raw_submission"],
             "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462?download=false",
         )
-        mock_detect.assert_called_once_with(payload["submission_url"], default="image")
+        mock_detect.assert_not_called()
+
+        text_payload = save_submission._normalize_submission_payload("hello world")
+        self.assertEqual(text_payload["raw_submission"], "hello world")
+        self.assertIsNone(text_payload["submission_type"])
+        self.assertIsNone(text_payload["submission_text"])
+        self.assertIsNone(text_payload["submission_url"])
+
+    def test_async_processing_detects_media_type_and_uploads_after_response(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-001"
+        submission.submission_type = None
+        submission.submission_url = "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462"
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch("tap_lms.imgana.media_detection.detect_url_media_type", return_value="audio") as mock_detect, \
+                patch("tap_lms.imgana.gcs_client.upload_to_gcs", return_value="https://storage.example/SUB-001.ogg") as mock_upload, \
+                patch.object(save_submission, "enqueue_submission") as mock_enqueue:
+            mock_frappe.get_doc.return_value = submission
+
+            save_submission.process_submission_async(
+                "SUB-001",
+                raw_submission="https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462",
+                pe_context={"program_enrollment": "PE-001"},
+            )
+
+        mock_detect.assert_called_once_with(
+            "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462",
+            default="image",
+        )
+        mock_upload.assert_called_once_with(
+            "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462",
+            "SUB-001",
+            media_type="audio",
+        )
+        self.assertEqual(submission.submission_type, "audio")
+        self.assertEqual(submission.submission_url, "https://storage.example/SUB-001.ogg")
+        self.assertEqual(submission.status, "Processing")
+        submission.save.assert_called_once_with(ignore_permissions=True)
+        mock_enqueue.assert_called_once_with("SUB-001", pe_context={"program_enrollment": "PE-001"})
+
+    def test_async_processing_classifies_text_after_response(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-001"
+        submission.submission_type = None
+        submission.submission_text = None
+        submission.submission_url = None
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch("tap_lms.imgana.media_detection.detect_url_media_type") as mock_detect, \
+                patch.object(save_submission, "enqueue_submission") as mock_enqueue:
+            mock_frappe.get_doc.return_value = submission
+
+            save_submission.process_submission_async(
+                "SUB-001",
+                raw_submission="hello world",
+                pe_context={"program_enrollment": "PE-001"},
+            )
+
+        mock_detect.assert_not_called()
+        self.assertEqual(submission.submission_type, "text")
+        self.assertEqual(submission.submission_text, "hello world")
+        self.assertIsNone(submission.submission_url)
+        self.assertEqual(submission.status, "Processing")
+        submission.save.assert_called_once_with(ignore_permissions=True)
+        mock_enqueue.assert_called_once_with("SUB-001", pe_context={"program_enrollment": "PE-001"})
 
     def test_primary_submission_writes_student_content_log(self):
         save_submission = _import_save_submission_with_stubs()

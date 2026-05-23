@@ -283,12 +283,12 @@ def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
         raise frappe.ValidationError(f"Failed to upload video to GCS: {str(e)}")
 
 
-def upload_to_gcs(submission_url, submission_name):
+def upload_to_gcs(submission_url, submission_name, media_type=None):
     """
     Detect media type from the URL and upload to GCS.
     Returns the URL.
     """
-    media_type = detect_url_media_type(submission_url, default="image")
+    media_type = media_type or detect_url_media_type(submission_url, default="image")
     if media_type == "audio":
         return upload_audio_to_gcs(submission_url, submission_name)
     if media_type == "video":

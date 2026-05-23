@@ -42,7 +42,6 @@ from tap_lms.summer_program.state_machine import (
     apply_submission_transition,
 )
 from tap_lms.summer_program.event_log import log_event
-from tap_lms.imgana.media_detection import detect_url_media_type
 URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 SAVE_SUBMISSION_DB_RETRY_ATTEMPTS = 3
 SAVE_SUBMISSION_DB_RETRY_DELAY_SECONDS = 0.15
@@ -175,10 +174,9 @@ def _save_submission_once(student_id, assignment_id=None, submission=None, week=
         return
 
     # ── Normalize submission payload ────────────────────────
-    # Produces the assessment Submission schema:
-    #   submission_type: text | emoji | audio | image | video
-    #   submission_text: text/emoji/caption
-    #   submission_url: media URL
+    # Store only the raw value for async classification. Submission type,
+    # text/url placement, media probing, and GCS upload all happen after the
+    # API response has been returned.
     payload = _normalize_submission_payload(
         submission,
         pe=pe,
@@ -412,9 +410,9 @@ def _create_submission(pe, student_id, week, payload, assignment_id, is_primary)
     doc = frappe.new_doc("Submission")
     doc.assign_id = assignment_id
     doc.student_id = student_id
-    doc.submission_type = payload["submission_type"]
-    doc.submission_text = payload["submission_text"]
-    doc.submission_url = payload["submission_url"]
+    doc.submission_type = payload.get("submission_type")
+    doc.submission_text = payload.get("submission_text")
+    doc.submission_url = payload.get("submission_url")
     doc.status = "Pending" if is_primary else "Completed"
     doc.program_enrollment = pe.name
     doc.week = week
@@ -422,6 +420,7 @@ def _create_submission(pe, student_id, week, payload, assignment_id, is_primary)
     doc.is_primary = 1 if is_primary else 0
     doc.created_at = now_datetime()
     doc.insert(ignore_permissions=True)
+    doc._raw_submission = payload.get("raw_submission")
     return doc
 
 
@@ -636,26 +635,18 @@ def _update_engagement(student_id):
 
 def _normalize_submission_payload(submission, pe=None):
     """
-    Normalize a raw submission into the assessment Submission schema.
+    Normalize only enough to persist a placeholder Submission.
 
-    The PE is accepted so callers can normalize after resolving program context;
-    the submission type still comes only from the submitted value.
+    No text-vs-URL or media inference happens here; the raw value is passed to
+    the async processing job after the API response is returned.
     """
     if not isinstance(submission, str) or not submission.strip():
         frappe.throw("Submission is required")
 
-    submission = submission.strip()
-
-    if _looks_like_url(submission):
-        return {
-            "submission_type": detect_url_media_type(submission, default="image"),
-            "submission_text": None,
-            "submission_url": submission,
-        }
-
     return {
-        "submission_type": "emoji" if _contains_only_emoji(submission) else "text",
-        "submission_text": submission,
+        "raw_submission": submission.strip(),
+        "submission_type": None,
+        "submission_text": None,
         "submission_url": None,
     }
 
@@ -728,23 +719,23 @@ def _build_pe_context(pe):
 
 
 def _queue_submission_processing(submission_doc, pe_context):
-    queue_name = (
-        "long"
-        if submission_doc.submission_type in URL_SUBMISSION_TYPES
-        else "default"
-    )
     frappe.enqueue(
         "tap_lms.summer_program.save_submission.process_submission_async",
-        queue=queue_name,
+        queue="long",
         timeout=600,
         enqueue_after_commit=True,
         submission_id=submission_doc.name,
-        submission_url=submission_doc.submission_url,
+        raw_submission=getattr(submission_doc, "_raw_submission", None),
         pe_context=pe_context,
     )
 
 
-def process_submission_async(submission_id, submission_url=None, pe_context=None):
+def process_submission_async(
+    submission_id,
+    raw_submission=None,
+    submission_url=None,
+    pe_context=None,
+):
     """
     Upload URL submissions to GCS, mark the record Processing, and enqueue
     feedback processing. Text and emoji submissions skip GCS upload.
@@ -753,11 +744,27 @@ def process_submission_async(submission_id, submission_url=None, pe_context=None
     try:
         submission = frappe.get_doc("Submission", submission_id)
 
-        if submission.submission_type in URL_SUBMISSION_TYPES:
+        raw_submission = (raw_submission or submission_url or "").strip()
+
+        if raw_submission and _looks_like_url(raw_submission):
+            from tap_lms.imgana.media_detection import detect_url_media_type
             from tap_lms.imgana.gcs_client import upload_to_gcs
 
-            uploaded_url = upload_to_gcs(submission_url, submission.name)
+            media_type = detect_url_media_type(raw_submission, default="image")
+            uploaded_url = upload_to_gcs(
+                raw_submission,
+                submission.name,
+                media_type=media_type,
+            )
+            submission.submission_type = media_type
             submission.submission_url = uploaded_url
+            submission.submission_text = None
+        elif raw_submission:
+            submission.submission_type = (
+                "emoji" if _contains_only_emoji(raw_submission) else "text"
+            )
+            submission.submission_text = raw_submission
+            submission.submission_url = None
 
         submission.status = "Processing"
         submission.upload_error_log = None

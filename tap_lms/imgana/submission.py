@@ -5,7 +5,6 @@ import base64
 import mimetypes
 from urllib.parse import urlparse
 from tap_lms.imgana.gcs_client import upload_to_gcs
-from tap_lms.imgana.media_detection import detect_url_media_type
 
 URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 
@@ -25,16 +24,32 @@ def get_rabbitmq_settings():
         'queue': settings.submission_queue
     }
 
-def process_submission_async(submission_id, submission_url):
+def process_submission_async(submission_id, raw_submission=None, submission_url=None):
     """
-    Background job that uploads URL-based submissions to GCS and enqueues them for processing.
+    Background job that classifies the raw submission, uploads URL media to GCS,
+    and enqueues it for processing.
     """
     try:
         submission = frappe.get_doc("Submission", submission_id)
 
-        url = upload_to_gcs(submission_url, submission.name)
+        raw_submission = (raw_submission or submission_url or "").strip()
+        url = None
 
-        submission.submission_url = url
+        if raw_submission and _looks_like_url(raw_submission):
+            from tap_lms.imgana.media_detection import detect_url_media_type
+
+            media_type = detect_url_media_type(raw_submission, default="image")
+            url = upload_to_gcs(raw_submission, submission.name, media_type=media_type)
+
+            submission.submission_type = media_type
+            submission.submission_text = None
+            submission.submission_url = url
+        elif raw_submission:
+            submission.submission_type = (
+                "emoji" if _contains_only_emoji(raw_submission) else "text"
+            )
+            submission.submission_text = raw_submission
+            submission.submission_url = None
         submission.status = "Processing"
         submission.upload_error_log = None
         submission.save(ignore_permissions=True)
@@ -44,7 +59,7 @@ def process_submission_async(submission_id, submission_url):
             f"Submission prepared for processing: assign_id={submission.assign_id}, "
             f"student_id={submission.student_id}, "
             f"submission_type={submission.submission_type}, "
-            f"original_url={submission_url}, "
+            f"raw_submission={raw_submission}, "
             f"gcs_url={url}"
         )
 
@@ -98,19 +113,10 @@ def _normalize_submission_payload(submission):
     if not isinstance(submission, str) or not submission.strip():
         frappe.throw("Submission is required")
 
-    submission = submission.strip()
-
-    if _looks_like_url(submission):
-        return {
-            "submission_type": detect_url_media_type(submission, default="image"),
-            "submission_text": None,
-            "submission_url": submission,
-        }
-
-    submission_type = "emoji" if _contains_only_emoji(submission) else "text"
     return {
-        "submission_type": submission_type,
-        "submission_text": submission,
+        "raw_submission": submission.strip(),
+        "submission_type": None,
+        "submission_text": None,
         "submission_url": None,
     }
 
@@ -125,24 +131,18 @@ def _create_submission(assign_id, student_id, payload):
     submission.status = "Pending"
     submission.insert()
     frappe.db.commit()
+    submission._raw_submission = payload.get("raw_submission")
     return submission
 
 
 def _queue_submission_processing(submission, payload):
-    if submission.submission_type in URL_SUBMISSION_TYPES:
-        frappe.enqueue(
-            process_submission_async,
-            queue="long",
-            timeout=600,
-            submission_id=submission.name,
-            submission_url=payload["submission_url"],
-        )
-    else:
-        submission.status = "Processing"
-        submission.upload_error_log = None
-        submission.save(ignore_permissions=True)
-        frappe.db.commit()
-        enqueue_submission(submission.name)
+    frappe.enqueue(
+        process_submission_async,
+        queue="long",
+        timeout=600,
+        submission_id=submission.name,
+        raw_submission=payload["raw_submission"],
+    )
 
 
 def _build_submission_response(submission):
