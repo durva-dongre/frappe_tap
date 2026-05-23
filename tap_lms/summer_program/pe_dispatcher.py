@@ -367,11 +367,16 @@ def handle_escalation(pe_row):
     # the resolved step config. The flow trigger (or Vocallabs enqueue)
     # happens below, after the state transition.
     if state == STATE_NORMAL_CONTENT:
-        t2_start_escalation(pe, next_step, escalation_type, "dispatcher")
+        # CR-009 follow-up (2026-05-23): pass next_hours so T2 re-arms
+        # next_action_at for step 2 — otherwise the chain stuck at step 1.
+        t2_start_escalation(pe, next_step, escalation_type,
+                            next_hours=next_hours, trigger_source="dispatcher")
     elif state == STATE_NORMAL_ESCALATION:
         t4_next_escalation_step(pe, next_step, next_hours, escalation_type, "dispatcher")
     elif state == STATE_REMEDIAL_CONTENT:
-        t8_start_remedial_escalation(pe, next_step, escalation_type, "dispatcher")
+        # Same CR-009 follow-up — T8 mirror of T2.
+        t8_start_remedial_escalation(pe, next_step, escalation_type,
+                                       next_hours=next_hours, trigger_source="dispatcher")
     elif state == STATE_REMEDIAL_ESCALATION:
         t10_next_remedial_escalation(pe, next_step, next_hours, escalation_type, "dispatcher")
     else:

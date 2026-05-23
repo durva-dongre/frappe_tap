@@ -315,12 +315,26 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
                          "trigger signal: must flip to 0 for next-video lazy reset")
         self.assertEqual(pe.weekly_submission_done, 0,
                          "preserved (was 0 entering T14)")
-        # Weekly buckets STILL roll into cumulative totals at T14 (Manu's
-        # rollup is unchanged); the lazy reset is orthogonal to the rollup.
-        self.assertEqual(pe.total_activity_points, 40)
-        self.assertEqual(pe.total_quiz_points, 20)
-        self.assertEqual(pe.total_submission_points, 50)
+        # Weekly buckets STILL roll into cumulative totals at T14; the lazy
+        # reset is orthogonal to the rollup. Task #77 fix: each total_*
+        # gets ONLY its corresponding weekly_* (no submission double-count).
+        # Pre-rollup setup: total_activity=30, total_quiz=15, total_submission=50.
+        # weekly_activity=10, weekly_quiz=5, weekly_submission=0, bonus=2.
+        self.assertEqual(pe.total_activity_points, 40)   # 30 + 10 (was 30+10+0)
+        self.assertEqual(pe.total_quiz_points, 20)       # 15 + 5
+        self.assertEqual(pe.total_submission_points, 50)  # 50 + 0
+        # total_points += weekly_act + weekly_quiz + weekly_sub + weekly_bonus
+        # = 95 + 10 + 5 + 0 + 2 = 112
         self.assertEqual(pe.total_points, 112)
+        # Invariant: streams sum to total_points minus bonus (bonus is in
+        # total_points but not in any stream total).
+        self.assertEqual(
+            pe.total_activity_points + pe.total_quiz_points
+            + pe.total_submission_points + 2,   # + bonus contributed
+            pe.total_points,
+            "task #77: streams + bonus must sum to total_points "
+            "(no submission double-count)",
+        )
         # Week advanced + journey label updated
         self.assertEqual(pe.current_week, 2)
         self.assertEqual(pe.journey_label, LABEL_WEEK_ADVANCED)
@@ -350,10 +364,12 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=2)
 
         pe.reload()
-        # Rollup math unchanged
-        self.assertEqual(pe.total_activity_points, 35)
+        # Rollup math (task #77 fix: each total_* gets only its own weekly_*)
+        self.assertEqual(pe.total_activity_points, 10,
+                         "task #77: total_activity = 0 + 10 (NOT 10+25)")
         self.assertEqual(pe.total_submission_points, 25)
         self.assertEqual(pe.total_quiz_points, 7)
+        # total_points = 0 + 10 + 25 + 7 + 3 = 45
         self.assertEqual(pe.total_points, 45)
         # CR-008: weekly_* PRESERVED (next VideoClass wipes them)
         self.assertEqual(pe.weekly_activity_points, 10)
@@ -364,6 +380,12 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         self.assertEqual(pe.special_gems, 1)
         # weekly_video_done must flip to 0 (lazy-reset trigger signal)
         self.assertEqual(pe.weekly_video_done, 0)
+        # Invariant: streams + bonus = total_points
+        self.assertEqual(
+            pe.total_activity_points + pe.total_quiz_points
+            + pe.total_submission_points + 3,
+            pe.total_points,
+        )
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_activity_only_week_adds_activity_to_existing_total(self, mock_sync):
@@ -390,10 +412,11 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=3)
 
         pe.reload()
-        # Rollup math unchanged
-        self.assertEqual(pe.total_activity_points, 45)
-        self.assertEqual(pe.total_submission_points, 25)
-        self.assertEqual(pe.total_points, 45)
+        # Rollup math (task #77 fix). Pre-rollup: total_activity=35,
+        # total_sub=25, total_points=35. This week: weekly_act=10, weekly_sub=0.
+        self.assertEqual(pe.total_activity_points, 45)   # 35 + 10
+        self.assertEqual(pe.total_submission_points, 25)  # unchanged (no sub this week)
+        self.assertEqual(pe.total_points, 45)             # 35 + 10
         # CR-008: weekly_* PRESERVED (next VideoClass wipes them)
         self.assertEqual(pe.weekly_activity_points, 10)
         self.assertEqual(pe.weekly_submission_points, 0)
@@ -426,16 +449,24 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=3)
 
         pe.reload()
-        # Rollup math unchanged
-        self.assertEqual(pe.total_activity_points, 70)
-        self.assertEqual(pe.total_submission_points, 50)
-        self.assertEqual(pe.total_points, 70)
+        # Rollup math (task #77 fix). Pre-rollup: total_act=35, total_sub=25,
+        # total_points=35. This week: weekly_act=10, weekly_sub=25.
+        self.assertEqual(pe.total_activity_points, 45,   # 35 + 10 (NOT 35+10+25)
+                         "task #77: total_activity = previous + weekly_activity only")
+        self.assertEqual(pe.total_submission_points, 50)  # 25 + 25
+        self.assertEqual(pe.total_points, 70)             # 35 + 10 + 25 + 0
         # CR-008: weekly_* PRESERVED (next VideoClass wipes them)
         self.assertEqual(pe.weekly_activity_points, 10)
         self.assertEqual(pe.weekly_submission_points, 25)
         self.assertEqual(pe.current_streak, 2)
         self.assertEqual(pe.special_gems, 2)
         self.assertEqual(pe.weekly_video_done, 0)
+        # Invariant
+        self.assertEqual(
+            pe.total_activity_points + pe.total_quiz_points + pe.total_submission_points,
+            pe.total_points,
+            "task #77: streams must sum to total_points",
+        )
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_streak_unchanged_when_not_assigned(self, mock_sync):
@@ -1235,3 +1266,216 @@ class TestEscalationArmingOnFirstVideo(FrappeTestCase):
         # No escalation steps → no arming
         self.assertIsNone(pe.next_action_at)
         self.assertIn(pe.next_action_type, ("", None))
+
+
+# ════════════════════════════════════════════════════════════
+# CR-009 follow-up (task #76) — T2/T8 must re-arm next_action_at
+# Code review gap F1/F2 (task #78) — regression test for chain stuck at step 1
+# ════════════════════════════════════════════════════════════
+
+class TestEscalationChainProgression(FrappeTestCase):
+    """Pin the bug discovered via production diagnostic on 2026-05-23:
+    4 PEs in palv2-test-BT52231 (h2i84o5mki, kgn2nc9gt5, kgn4pn2ddn,
+    kuut1ssmi7) all reached current_escalation_step=1 but next_action_at
+    was NULL → dispatcher never picked them up for step 2.
+
+    Root cause: dispatcher's atomic claim SQL sets next_action_at=NULL on
+    row pickup. T4/T10 (subsequent escalation steps) re-arm next_action_at;
+    T2/T8 (first escalation step) did NOT — the chain stuck at step 1
+    forever.
+
+    Fix: T2 and T8 now take a next_hours parameter and set next_action_at
+    in their updates dict, mirroring T4/T10's pattern.
+
+    These tests pin (a) T2 re-arms after firing step 1, (b) T8 same for
+    Remedial, (c) end-to-end the chain progresses to step 2 when the
+    dispatcher runs again.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_t2_re_arms_next_action_at(self, _sync):
+        """T2 must set next_action_at = NOW + next_hours so the dispatcher
+        picks up step 2. Pre-fix (task #76), the chain stuck at step 1
+        forever — production proof: 4 PEs in palv2-test-BT52231 stuck."""
+        from tap_lms.summer_program.state_machine import t2_start_escalation
+        from frappe.utils import now_datetime, get_datetime
+
+        student = _ensure_student("T2ARM")
+        pe = _make_pe(
+            self.batch_name, student, "T2ARM",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+        )
+
+        t2_start_escalation(
+            pe, step_number=1, escalation_type="help_note_a",
+            next_hours=24, trigger_source="test",
+        )
+
+        pe.reload()
+        self.assertEqual(pe.resolved_flow_state, STATE_NORMAL_ESCALATION)
+        self.assertEqual(pe.current_escalation_step, 1)
+        self.assertEqual(pe.current_escalation_type, "help_note_a")
+        self.assertEqual(pe.next_action_type, "escalation",
+                         "task #76: T2 MUST re-arm next_action_type")
+        self.assertIsNotNone(pe.next_action_at,
+                             "task #76: T2 MUST re-arm next_action_at — "
+                             "without this the dispatcher never picks up step 2")
+        delta_h = (get_datetime(pe.next_action_at) - now_datetime()).total_seconds() / 3600
+        self.assertAlmostEqual(
+            delta_h, 24, delta=0.5,
+            msg=f"T2 should schedule step 2 ~24h ahead, got {delta_h:.2f}h",
+        )
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_t8_re_arms_next_action_at(self, _sync):
+        """T8 (Remedial counterpart of T2) — same regression guard."""
+        from tap_lms.summer_program.state_machine import t8_start_remedial_escalation
+        from frappe.utils import now_datetime, get_datetime
+        from tap_lms.summer_program.constants import STATE_REMEDIAL_CONTENT, PATH_REMEDIAL
+
+        student = _ensure_student("T8ARM")
+        pe = _make_pe(
+            self.batch_name, student, "T8ARM",
+            resolved_flow_state=STATE_REMEDIAL_CONTENT,
+            current_week=2,
+        )
+        # _make_pe sets current_path=Core; override for Remedial test
+        frappe.db.set_value("ProgramEnrollment", pe.name,
+                            "current_path", PATH_REMEDIAL)
+        pe.reload()
+
+        t8_start_remedial_escalation(
+            pe, step_number=1, escalation_type="help_note_a",
+            next_hours=12, trigger_source="test",
+        )
+
+        pe.reload()
+        self.assertEqual(pe.current_escalation_step, 1)
+        self.assertEqual(pe.next_action_type, "escalation",
+                         "task #76: T8 MUST re-arm next_action_type")
+        self.assertIsNotNone(pe.next_action_at)
+        delta_h = (get_datetime(pe.next_action_at) - now_datetime()).total_seconds() / 3600
+        self.assertAlmostEqual(delta_h, 12, delta=0.5)
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.pe_dispatcher._trigger_flow")
+    @patch("tap_lms.summer_program.pe_dispatcher._get_flow_id",
+           return_value="fake-flow-id")
+    def test_full_escalation_chain_progresses_through_all_steps(
+        self, _flow_id, _trigger, _sync
+    ):
+        """End-to-end regression: drive a PE through every escalation step
+        and verify it progresses. This test would have caught task #76's
+        'chain stuck at step 1' bug — pre-fix, the dispatcher's second
+        run would have done nothing because T2 didn't re-arm next_action_at.
+
+        Simulates the dispatcher tick-by-tick by calling handle_escalation
+        directly with a synthetic pe_row dict (matching the SQL SELECT
+        shape) for each step.
+        """
+        from tap_lms.summer_program.pe_dispatcher import handle_escalation
+        from tap_lms.summer_program.constants import STATE_GRACE_WAITING
+
+        student = _ensure_student("CHAIN")
+        pe = _make_pe(
+            self.batch_name, student, "CHAIN",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+            current_streak=0,
+            special_gems=0,
+        )
+        # Stub the escalation step config — 3 steps with predictable hours.
+        # The dispatcher resolves these via _get_escalation_steps_for_pe.
+        fake_steps = [
+            {"escalation_order": 1, "escalation_type": "help_note_a",
+             "hours_after_previous": 24, "points_awarded": 10, "is_active": 1},
+            {"escalation_order": 2, "escalation_type": "help_note_b",
+             "hours_after_previous": 12, "points_awarded": 7, "is_active": 1},
+            {"escalation_order": 3, "escalation_type": "voice_note",
+             "hours_after_previous": 6, "points_awarded": 4, "is_active": 1},
+        ]
+
+        with patch("tap_lms.summer_program.pe_dispatcher._get_escalation_steps_for_pe",
+                   return_value=fake_steps):
+            # Round 1: state=normal_content_delivery → T2 fires step 1
+            pe_row = frappe._dict({
+                "name": pe.name,
+                "batch": pe.batch,
+                "next_action_type": "escalation",
+                "journey_label": pe.journey_label,
+            })
+            handle_escalation(pe_row)
+            pe.reload()
+            self.assertEqual(pe.current_escalation_step, 1)
+            self.assertEqual(pe.resolved_flow_state, STATE_NORMAL_ESCALATION)
+            self.assertEqual(pe.next_action_type, "escalation",
+                             "step 1 → step 2 chain: T2 must re-arm")
+            self.assertIsNotNone(pe.next_action_at)
+
+            # Round 2: state=normal_escalation → T4 fires step 2
+            pe_row.journey_label = pe.journey_label
+            handle_escalation(pe_row)
+            pe.reload()
+            self.assertEqual(pe.current_escalation_step, 2,
+                             "T4 must advance step 1 → step 2")
+            self.assertEqual(pe.current_escalation_type, "help_note_b")
+            self.assertEqual(pe.next_action_type, "escalation",
+                             "step 2 → step 3 chain: T4 must re-arm")
+
+            # Round 3: state=normal_escalation → T4 fires step 3
+            handle_escalation(pe_row)
+            pe.reload()
+            self.assertEqual(pe.current_escalation_step, 3)
+            self.assertEqual(pe.current_escalation_type, "voice_note")
+
+            # Round 4: chain exhausted (next_step=4 > len(steps)=3) → T5 grace
+            handle_escalation(pe_row)
+            pe.reload()
+            self.assertEqual(pe.resolved_flow_state, STATE_GRACE_WAITING,
+                             "exhausted chain must route to grace_waiting")
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_watched_but_no_submission_now_gets_escalation(self, _le, _es):
+        """The production scenario that motivated CR-009 + task #76: a
+        student watches the first video of a week but doesn't submit.
+        Pre-fix they were stuck — no escalation, no nudges, just grace
+        clock ticking down. Post-fix they get escalation step 1 armed.
+
+        This test reproduces the EXACT state of the 4 stuck PEs and
+        verifies the new code arms next_action_at correctly.
+        """
+        student = _ensure_student("GAP")
+        pe = _make_pe(
+            self.batch_name, student, "GAP",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+            weekly_video_done=0,    # haven't watched yet
+            weekly_submission_done=0,
+        )
+
+        fake_steps = [
+            {"escalation_order": 1, "escalation_type": "help_note_a",
+             "hours_after_previous": 24, "points_awarded": 10},
+        ]
+
+        with patch("tap_lms.summer_program.student_progression_sp._get_escalation_steps",
+                   return_value=fake_steps):
+            video_id = _make_video_class("GAPV", 10)
+            _make_scl(student, video_id, stage_no=1)
+
+        pe.reload()
+        # Production stuck state was: weekly_video_done=1, weekly_submission_done=0,
+        # next_action_at=None. Post-fix it must be:
+        self.assertEqual(pe.weekly_video_done, 1,
+                         "video flip happens via activity_points atomic SQL")
+        self.assertEqual(pe.weekly_submission_done, 0)
+        self.assertIsNotNone(pe.next_action_at,
+                             "CR-009 / task #76: video watch arms next_action_at")
+        self.assertEqual(pe.next_action_type, "escalation")

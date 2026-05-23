@@ -459,18 +459,32 @@ def t1_content_no_response(pe, escalation_step, trigger_source="flow_callback"):
 
 
 # ── T2: Start escalation (Core) ───────────────────────────
-def t2_start_escalation(pe, step_number=1, escalation_type="", trigger_source="scheduler"):
+def t2_start_escalation(pe, step_number=1, escalation_type="",
+                         next_hours=None, trigger_source="scheduler"):
     """T2: normal_content_delivery → normal_escalation.
 
     CR-003 follow-up: also writes `current_escalation_type` so the standard
     contact-field sync pushes it to Glific without the dispatcher needing a
     separate eager push. Defaults to "" for backward compatibility with any
     caller that still passes only `step_number`.
+
+    CR-009 follow-up (2026-05-23): re-arm next_action_at + next_action_type
+    so the dispatcher fires the NEXT escalation step. Pre-fix, the
+    dispatcher's atomic claim cleared next_action_at on row pickup, and T2
+    failed to re-arm — leaving the chain stuck at step 1 forever. Mirrors
+    T4's existing re-arm pattern. `next_hours` is the wait before the next
+    step fires (the current step's hours_after_previous, matching T4's
+    semantic). If None, defaults to 24h so legacy callers (tests / one-off
+    admin invocations) still produce a sensible schedule.
     """
+    if next_hours is None:
+        next_hours = 24
     return transition(pe, STATE_NORMAL_ESCALATION, trigger_source, {
         "current_escalation_step": step_number,
         "current_escalation_type": escalation_type or "",
         "journey_label": LABEL_CONTENT_DELIVERED,
+        "next_action_at": add_to_date(now_datetime(), hours=float(next_hours)),
+        "next_action_type": ACTION_ESCALATION,
     })
 
 
@@ -663,16 +677,25 @@ def t7_core_submission(pe, points=0, trigger_source="flow_callback"):
 
 
 # ── T8: Start Remedial escalation ────────────────────────
-def t8_start_remedial_escalation(pe, step_number=1, escalation_type="", trigger_source="scheduler"):
+def t8_start_remedial_escalation(pe, step_number=1, escalation_type="",
+                                  next_hours=None, trigger_source="scheduler"):
     """T8: remedial_content_delivery → remedial_escalation.
 
     CR-003 follow-up: writes `current_escalation_type` so the standard
     contact-field sync pushes it to Glific. Defaults to "" for backward
     compatibility.
+
+    CR-009 follow-up (2026-05-23): re-arm next_action_at + next_action_type
+    so the dispatcher fires the NEXT remedial escalation step. Mirror of
+    the T2 fix — pre-CR-009 the Remedial chain was also stuck at step 1.
     """
+    if next_hours is None:
+        next_hours = 24
     return transition(pe, STATE_REMEDIAL_ESCALATION, trigger_source, {
         "current_escalation_step": step_number,
         "current_escalation_type": escalation_type or "",
+        "next_action_at": add_to_date(now_datetime(), hours=float(next_hours)),
+        "next_action_type": ACTION_ESCALATION,
     })
 
 
