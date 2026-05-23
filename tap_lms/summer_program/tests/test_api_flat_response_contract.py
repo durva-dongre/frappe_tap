@@ -144,16 +144,19 @@ class TestFlatResponsePredicate(unittest.TestCase):
 class TestStartQuizFlatShape(unittest.TestCase):
     """start_quiz must produce flat responses for new + resume variants."""
 
+    @patch("tap_lms.summer_program.student_progression_sp._get_language_for_student")
     @patch("tap_lms.summer_program.student_progression_sp._get_question_details")
     @patch("tap_lms.summer_program.student_progression_sp._get_quiz_questions")
     @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
     @patch("tap_lms.summer_program.student_progression_sp.frappe")
     def test_new_quiz_response_is_flat(
-        self, mock_frappe, mock_resolve, mock_get_questions, mock_get_q_details
+        self, mock_frappe, mock_resolve, mock_get_questions, mock_get_q_details,
+        mock_get_language
     ):
         from tap_lms.summer_program import student_progression_sp as api
 
         mock_resolve.return_value = "STU-001"
+        mock_get_language.return_value = "Hindi"
         mock_frappe.db.exists.return_value = True
         mock_frappe.db.get_value.return_value = {
             "name": "PROG-1",
@@ -194,13 +197,15 @@ class TestStartQuizFlatShape(unittest.TestCase):
         # The function does pe.insert(); make sure insert is a no-op on attempt
         attempt.insert = MagicMock()
 
-        resp = api.start_quiz.__wrapped__("STU-001", "CL-1", "Q1")
+        resp = api.start_quiz.__wrapped__("STU-001", "CL-1", "Q1", language="English")
         assert_flat_response(resp)
         self.assertTrue(resp["success"])
         self.assertEqual(resp["status"], "quiz_started")
         # Spot-check the flattened option fields
         self.assertEqual(resp["option_a"], "A")
         self.assertEqual(resp["question_index"], 1)
+        mock_get_language.assert_called_once_with("STU-001", "CL-1")
+        mock_get_q_details.assert_called_once_with("QN001", "Hindi")
 
 
 class TestQuestionDetailsTranslations(unittest.TestCase):
@@ -277,20 +282,24 @@ class TestSubmitAnswerFlatShape(unittest.TestCase):
     """submit_answer must produce flat responses for both 'next_question'
     and 'quiz complete' variants."""
 
+    @patch("tap_lms.summer_program.student_progression_sp._get_language_for_student")
     @patch("tap_lms.summer_program.student_progression_sp._get_question_details")
     @patch("tap_lms.summer_program.student_progression_sp._get_quiz_questions")
     @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
     @patch("tap_lms.summer_program.student_progression_sp.frappe")
     def test_next_question_response_is_flat(
-        self, mock_frappe, mock_resolve, mock_get_questions, mock_get_q_details
+        self, mock_frappe, mock_resolve, mock_get_questions, mock_get_q_details,
+        mock_get_language
     ):
         from tap_lms.summer_program import student_progression_sp as api
 
         mock_resolve.return_value = "STU-001"
+        mock_get_language.return_value = "Hindi"
         mock_frappe.db.exists.return_value = True
 
         attempt = MagicMock()
         attempt.student = "STU-001"
+        attempt.course_level = "CL-1"
         attempt.status = "in_progress"
         attempt.total_questions = 3
         attempt.quiz = "Q1"
@@ -328,11 +337,13 @@ class TestSubmitAnswerFlatShape(unittest.TestCase):
             },
         ]
 
-        resp = api.submit_answer.__wrapped__("STU-001", "QA-1", 1, "A")
+        resp = api.submit_answer.__wrapped__("STU-001", "QA-1", 1, "A", language="English")
         assert_flat_response(resp)
         self.assertEqual(resp["status"], "next_question")
         self.assertEqual(resp["question_index"], 2)
         self.assertEqual(resp["option_b"], "X")
+        mock_get_language.assert_called_once_with("STU-001", "CL-1")
+        mock_get_q_details.assert_any_call("QN002", "Hindi")
 
 
 class TestGetContentDetailsFlatShape(unittest.TestCase):

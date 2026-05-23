@@ -895,7 +895,8 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
         student_id: Student ID, Glific ID, or phone
         course_level: Course Level document name
         quiz_id: Quiz document name
-        language: Optional language code for question translations
+        language: Ignored. Quiz language is resolved from ProgramEnrollment
+                  first, then Student.language.
 
     Returns:
         dict with quiz_started / quiz_resumed status, quiz_attempt_id,
@@ -911,6 +912,7 @@ def start_quiz(student_id, course_level, quiz_id, language=None):
         if not student_id:
             return {"success": False, "status": "not_found",
                     "error_detail": "Student not found"}
+        language = _get_language_for_student(student_id, course_level)
 
         if not frappe.db.exists("Quiz", quiz_id):
             return {"success": False, "status": "quiz_not_found",
@@ -1082,7 +1084,8 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=
         quiz_attempt_id: StudentQuizAttempt document name
         question_index: 1-based question number
         answer: Selected option letter (A, B, C, or D)
-        language: Optional language code for next question translation
+        language: Ignored. Quiz language is resolved from ProgramEnrollment
+                  first, then Student.language.
 
     Returns:
         dict with answer_result + next_question or quiz_passed/quiz_failed
@@ -1111,6 +1114,7 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=
         if attempt.student != student_id:
             return {"success": False, "status": "wrong_student",
                     "error_detail": "Attempt does not belong to this student"}
+        language = _get_language_for_student(student_id, attempt.course_level)
         if attempt.status != "in_progress":
             return {"success": False, "status": "attempt_not_in_progress",
                     "error_detail": "Quiz attempt is not in progress"}
@@ -1951,6 +1955,35 @@ def _get_course_level_for_student(student, batch):
         },
         "course_level",
     ) or None
+
+
+def _get_language_for_student(student_id, course_level=None):
+    """
+    Resolve quiz translation language from canonical enrollment data.
+
+    ProgramEnrollment.language is preferred because it is the Summer Program
+    snapshot used by Glific flows. Student.language is the fallback for legacy
+    or incomplete enrollment rows. API-provided language is intentionally not
+    considered.
+    """
+    filters = {
+        "student": student_id,
+        "program_status": ["in", [PROGRAM_ACTIVE, PROGRAM_PAUSED]],
+    }
+    if course_level:
+        filters["course_level"] = course_level
+
+    pe_rows = frappe.get_all(
+        "ProgramEnrollment",
+        filters=filters,
+        fields=["language"],
+        order_by="creation desc",
+        limit_page_length=1,
+    )
+    if pe_rows and pe_rows[0].language:
+        return pe_rows[0].language
+
+    return frappe.db.get_value("Student", student_id, "language") or None
 
 
 def _is_within_grace_period(batch, current_week):
