@@ -13,15 +13,12 @@ Per-question award rule (CR-002 v2 §"Per-question quiz scoring"):
 
 The per-question award is **independent of attempt-level pass/fail**.
 
-Cumulative vs weekly split (CR-002 v2 §E4):
+Cumulative vs weekly split:
 
-  - `total_quiz_points`, `total_points`: apply DELTA vs the previous-latest
-    attempt for the same (student, quiz) pair. Two attempts in the same
-    week with earned 5 then 8 result in cumulative +3 (latest-score
-    semantics).
-  - `weekly_quiz_points`: ALWAYS adds the new attempt's full earned
-    (effort, not latest). Two attempts in the same week with earned 5
+  - `weekly_quiz_points`: adds the new attempt's full earned score using the
+    existing effort semantics. Two attempts in the same week with earned 5
     then 8 add weekly +5 +8 = +13.
+  - `total_quiz_points`, `total_points`: roll up once during week advance.
 
 Idempotency: `attempt.points_earned > 0` is the write-once anchor (P-005).
 The audit field is written FIRST, before the PE bump, so a crash between
@@ -86,23 +83,16 @@ def award_quiz_points(attempt):
     if not pe:
         return
 
-    # ── Cumulative-vs-weekly split (E4) ──────────────────────
-    prior_points = _previous_latest_points(attempt.student, attempt.quiz, attempt.name)
-    delta = earned - prior_points
-
     # ── Atomic UPDATE on PE (P-002 / L-011) ─────────────────
-    # Cumulative columns apply the delta (latest-score semantics).
     # Weekly column always adds the full new earned (effort semantics).
     # COALESCE is race-safe vs T19's reset of weekly_quiz_points (E5).
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET total_quiz_points  = COALESCE(total_quiz_points, 0)  + %s,
-               total_points       = COALESCE(total_points, 0)       + %s,
-               weekly_quiz_points = COALESCE(weekly_quiz_points, 0) + %s
+           SET weekly_quiz_points = COALESCE(weekly_quiz_points, 0) + %s
          WHERE name = %s
         """,
-        (delta, delta, earned, pe.name),
+        (earned, pe.name),
     )
 
     # ── Push contact fields ─────────────────────────────────
@@ -119,8 +109,6 @@ def award_quiz_points(attempt):
             "attempt": attempt.name,
             "quiz": attempt.quiz,
             "earned": earned,
-            "prior_points": prior_points,
-            "delta_applied": delta,
         },
     )
 
@@ -131,7 +119,7 @@ def award_bonus_quiz_points(student_id, points):
     """Award independent bonus quiz points to the student's active PE.
 
     Bonus quiz points are intentionally independent: they update only
-    ProgramEnrollment.bonus_quiz_points and the matching Glific contact field.
+    ProgramEnrollment.bonus_quiz_points.
     They do not change total_points, total_quiz_points, or weekly_quiz_points.
     """
     student_id = resolve_student(student_id)

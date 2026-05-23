@@ -197,8 +197,8 @@ VALIDATION_FAILED = "failed"
 #     → 28
 # `weekly_video_done` is intentionally NOT pushed — internal-only state-machine
 # flag (see CR-002 v2 §"Five gamification dimensions on PE").
-# `bonus_quiz_points` constant exists below for future use but is intentionally
-# excluded from the sync payload in this version (no bonus quiz scoring yet).
+# `bonus_quiz_points` is recorded on ProgramEnrollment but is intentionally
+# excluded from the standard contact-field sync payload in this version.
 # See state_machine._enqueue_contact_field_sync for the canonical field
 # provenance docstring listing all 28 fields and their sources.
 CF_STUDENT_ID = "student_id"

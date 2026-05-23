@@ -50,6 +50,7 @@ from tap_lms.summer_program.constants import (
     TIER_BY_WEEK, DEFAULT_TIER,
 )
 from tap_lms.summer_program.event_log import log_event, log_state_transition
+from tap_lms.summer_program.weekly_rollup import calculate_week_advance_rollup
 # CR-005 (2026-05-15): module-level import so tests can patch
 # `tap_lms.summer_program.state_machine.maintain_collections` cleanly.
 # (A function-local import would force tests to patch the source module,
@@ -187,8 +188,8 @@ def _enqueue_contact_field_sync(pe):
         experiment_arm, course_level
 
     INTENTIONALLY EXCLUDED:
-        bonus_quiz_points — constant defined for future use; not awarded
-                            in this version; skip in sync payload.
+        bonus_quiz_points — recorded on ProgramEnrollment, but excluded from
+                            the standard sync payload in this version.
         weekly_video_done — internal state-machine flag for T19 streak/gem
                             penalty branch; never pushed to Glific.
 
@@ -805,9 +806,9 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         else:
             both unchanged.
 
-    Phase 2 — reset all weekly_* counters and both sticky flags to 0,
-    advance the week, and write the streak/gem values computed in Phase 1.
-    `total_*` counters are NEVER reset (cumulative across program).
+    Phase 2 — roll up weekly points into cumulative totals, reset all
+    weekly_* counters and both sticky flags to 0, advance the week, and write
+    the streak/gem values computed in Phase 1.
 
     Gem floor is enforced in Python (`max(0, ...)`) because the value is
     computed before the UPDATE. SQL `GREATEST(0, ...)` is not needed — the
@@ -815,21 +816,9 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
     """
     tier = TIER_BY_WEEK.get(new_week, DEFAULT_TIER)
 
-    # ── Phase 1: streak/gem compute (CR-002 v2) ─────────────
-    was_assigned = bool(pe.weekly_video_done)
-    did_submit = bool(pe.weekly_submission_done)
-    streak_update = pe.current_streak or 0
-    gems_update = pe.special_gems or 0
-    if was_assigned and not did_submit:
-        # Penalty branch: streak resets, gem decremented (floored at 0).
-        streak_update = 0
-        gems_update = max(0, gems_update - 1)
-    # else: streak/gems unchanged. Either:
-    #   - Nothing was assigned (no video) → no penalty for not submitting.
-    #   - Student submitted → streak/gems already incremented at submission
-    #     time inside the T7/T9/T17 transitions.
+    # ── Phase 2: roll up weekly points + build the reset update dict ─────
+    rollup_updates = calculate_week_advance_rollup(pe)
 
-    # ── Phase 2: build the reset update dict ────────────────
     updates = {
         "journey_label": LABEL_WEEK_ADVANCED,
         "current_week": new_week,
@@ -850,15 +839,14 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         "next_action_at": None,
         "next_action_type": "",
         # CR-002 v2: apply streak/gem update + reset all weeklies + flags
-        "current_streak": streak_update,
-        "special_gems": gems_update,
+        **rollup_updates,
         "weekly_activity_points": 0,
         "weekly_quiz_points": 0,
+        "bonus_quiz_points": 0,
         "weekly_submission_points": 0,
         "weekly_submission_done": 0,
         "weekly_video_done": 0,
-        # NOTE: total_activity_points, total_quiz_points,
-        # total_submission_points, total_points are NEVER reset (E10).
+        # Cumulative totals are never reset here; they are rolled forward above.
     }
 
     # ── CR-003 follow-up (2026-05-13): grace re-arm removed ──

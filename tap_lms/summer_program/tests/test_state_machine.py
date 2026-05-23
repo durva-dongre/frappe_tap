@@ -99,6 +99,7 @@ def _make_pe(
     weekly_submission_points=0,
     weekly_activity_points=0,
     weekly_quiz_points=0,
+    bonus_quiz_points=0,
     total_activity_points=0,
     total_quiz_points=0,
 ):
@@ -122,6 +123,7 @@ def _make_pe(
     pe.weekly_submission_points = weekly_submission_points
     pe.weekly_activity_points = weekly_activity_points
     pe.weekly_quiz_points = weekly_quiz_points
+    pe.bonus_quiz_points = bonus_quiz_points
     pe.total_activity_points = total_activity_points
     pe.total_quiz_points = total_quiz_points
     pe.insert(ignore_permissions=True)
@@ -274,6 +276,7 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
             weekly_submission_done=0,
             # Pre-existing weekly + cumulative values to verify reset behavior
             weekly_activity_points=10, weekly_quiz_points=5, weekly_submission_points=0,
+            bonus_quiz_points=2,
             total_activity_points=30, total_quiz_points=15,
             total_submission_points=50, total_points=95,
         )
@@ -287,17 +290,120 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         # All weeklies reset
         self.assertEqual(pe.weekly_activity_points, 0)
         self.assertEqual(pe.weekly_quiz_points, 0)
+        self.assertEqual(pe.bonus_quiz_points, 0)
         self.assertEqual(pe.weekly_submission_points, 0)
         self.assertEqual(pe.weekly_video_done, 0)
         self.assertEqual(pe.weekly_submission_done, 0)
-        # Cumulative NEVER reset
-        self.assertEqual(pe.total_activity_points, 30)
-        self.assertEqual(pe.total_quiz_points, 15)
+        # Weekly buckets roll into cumulative totals before reset.
+        self.assertEqual(pe.total_activity_points, 40)
+        self.assertEqual(pe.total_quiz_points, 20)
         self.assertEqual(pe.total_submission_points, 50)
-        self.assertEqual(pe.total_points, 95)
+        self.assertEqual(pe.total_points, 112)
         # Week advanced + journey label updated
         self.assertEqual(pe.current_week, 2)
         self.assertEqual(pe.journey_label, LABEL_WEEK_ADVANCED)
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_t19_rolls_weekly_points_into_totals(self, mock_sync):
+        """Week advance rolls current-week buckets into cumulative totals."""
+        student = _ensure_student("T19roll")
+        pe = _make_pe(
+            self.batch_name, student, "T19roll",
+            resolved_flow_state=STATE_WEEK_COMPLETED,
+            current_week=1,
+            current_streak=1,
+            special_gems=1,
+            weekly_video_done=1,
+            weekly_submission_done=1,
+            weekly_activity_points=10,
+            weekly_submission_points=25,
+            weekly_quiz_points=7,
+            bonus_quiz_points=3,
+            total_activity_points=0,
+            total_submission_points=0,
+            total_quiz_points=0,
+            total_points=0,
+        )
+
+        t14_week_advance(pe, new_week=2)
+
+        pe.reload()
+        self.assertEqual(pe.total_activity_points, 35)
+        self.assertEqual(pe.total_submission_points, 25)
+        self.assertEqual(pe.total_quiz_points, 7)
+        self.assertEqual(pe.total_points, 45)
+        self.assertEqual(pe.weekly_activity_points, 0)
+        self.assertEqual(pe.weekly_submission_points, 0)
+        self.assertEqual(pe.weekly_quiz_points, 0)
+        self.assertEqual(pe.bonus_quiz_points, 0)
+        self.assertEqual(pe.current_streak, 1)
+        self.assertEqual(pe.special_gems, 1)
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_t19_activity_only_week_adds_activity_to_existing_total(self, mock_sync):
+        """Existing total 35 + weekly video activity 10 → total activity 45."""
+        student = _ensure_student("T19actonly")
+        pe = _make_pe(
+            self.batch_name, student, "T19actonly",
+            resolved_flow_state=STATE_WEEK_COMPLETED,
+            current_week=2,
+            current_streak=2,
+            special_gems=2,
+            weekly_video_done=1,
+            weekly_submission_done=0,
+            total_activity_points=35,
+            total_submission_points=25,
+            total_quiz_points=0,
+            total_points=35,
+            weekly_activity_points=10,
+            weekly_submission_points=0,
+            weekly_quiz_points=0,
+            bonus_quiz_points=0,
+        )
+
+        t14_week_advance(pe, new_week=3)
+
+        pe.reload()
+        self.assertEqual(pe.total_activity_points, 45)
+        self.assertEqual(pe.total_submission_points, 25)
+        self.assertEqual(pe.total_points, 45)
+        self.assertEqual(pe.weekly_activity_points, 0)
+        self.assertEqual(pe.weekly_submission_points, 0)
+        self.assertEqual(pe.current_streak, 0)
+        self.assertEqual(pe.special_gems, 1)
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_t19_activity_and_submission_week_adds_both_to_existing_total(self, mock_sync):
+        """Existing total 35 + weekly activity 10 + submission 25 → 70."""
+        student = _ensure_student("T19actsub")
+        pe = _make_pe(
+            self.batch_name, student, "T19actsub",
+            resolved_flow_state=STATE_WEEK_COMPLETED,
+            current_week=2,
+            current_streak=2,
+            special_gems=2,
+            weekly_video_done=1,
+            weekly_submission_done=1,
+            total_activity_points=35,
+            total_submission_points=25,
+            total_quiz_points=0,
+            total_points=35,
+            weekly_activity_points=10,
+            weekly_submission_points=25,
+            weekly_quiz_points=0,
+            bonus_quiz_points=0,
+        )
+
+        t14_week_advance(pe, new_week=3)
+
+        pe.reload()
+        self.assertEqual(pe.total_activity_points, 70)
+        self.assertEqual(pe.total_submission_points, 50)
+        self.assertEqual(pe.total_points, 70)
+        self.assertEqual(pe.weekly_activity_points, 0)
+        self.assertEqual(pe.weekly_submission_points, 0)
+        self.assertEqual(pe.current_streak, 2)
+        self.assertEqual(pe.special_gems, 2)
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_streak_unchanged_when_not_assigned(self, mock_sync):

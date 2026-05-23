@@ -10,9 +10,9 @@ Design notes:
 
   - Per-row idempotency: `scl.points_awarded > 0` is the write-once anchor
     (P-005). Re-saves of the same SCL row are no-ops.
-  - Race-tolerant counter bump: COALESCE-update SQL (P-002 / L-011) so the
-    handler is immune to T19's weekly reset of `weekly_activity_points` and
-    parallel writes from quiz/submission handlers.
+  - Race-tolerant weekly counter bump: COALESCE-update SQL (P-002 / L-011) so
+    the handler is immune to T19's weekly reset of `weekly_activity_points`.
+    Cumulative activity/total points roll up at week advance.
   - First-video-of-week flag: `weekly_video_done = 1` is set idempotently
     (writing 1 to 1 is harmless). This flag is the gating signal for T19's
     streak/gem penalty branch.
@@ -86,8 +86,8 @@ def award_activity_points(scl):
           ProgramEventLog row BEFORE the UPDATE so the audit trail captures
           the arm intent even if the UPDATE races. Resolve
           `Batch.grace_window_days` once so the CASE WHEN can use it.
-      5b. Atomic UPDATE bumping total_activity_points,
-          weekly_activity_points, total_points, setting weekly_video_done = 1,
+      5b. Atomic UPDATE bumping weekly_activity_points,
+          setting weekly_video_done = 1,
           AND arming the grace clock via CASE WHEN clauses that fire iff
           weekly_video_done = 0 at UPDATE time. Postgres evaluates CASE
           against OLD row values within the same UPDATE, so the arm only
@@ -147,7 +147,8 @@ def award_activity_points(scl):
 
     # ── 5b. Atomic UPDATE on PE (P-002 / L-011 + CR-003 grace arm) ──
     # COALESCE-update is race-tolerant against T19's reset of
-    # weekly_activity_points (E5) and against parallel quiz/submission writes.
+    # weekly_activity_points (E5). Cumulative totals are rolled up once during
+    # week advance from weekly_activity_points + weekly_submission_points.
     #
     # The CASE WHEN clauses fire IFF weekly_video_done = 0 at UPDATE time.
     # Postgres reads OLD row values in CASE WHEN within the same UPDATE
@@ -157,9 +158,7 @@ def award_activity_points(scl):
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET total_activity_points  = COALESCE(total_activity_points, 0)  + %s,
-               weekly_activity_points = COALESCE(weekly_activity_points, 0) + %s,
-               total_points           = COALESCE(total_points, 0)           + %s,
+           SET weekly_activity_points = COALESCE(weekly_activity_points, 0) + %s,
                weekly_video_done      = 1,
                grace_window_start     = CASE WHEN weekly_video_done = 0
                                              THEN NOW()
@@ -172,7 +171,7 @@ def award_activity_points(scl):
                                              ELSE in_grace_window END
          WHERE name = %s
         """,
-        (pts, pts, pts, grace_window_days, pe.name),
+        (pts, grace_window_days, pe.name),
     )
 
     # ── 6. Audit-field anchor (written AFTER PE update so retries skip) ──

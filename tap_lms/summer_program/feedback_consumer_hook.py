@@ -246,22 +246,18 @@ def _award_submission_points_atomic(pe_name, points):
     """Atomic COALESCE bump on submission-point columns (L-011 / P-002 pattern).
 
     Mirrors the atomic SQL used by activity_points.award_activity_points. This
-    is race-safe against a concurrent T14 (week_advance) reset on
-    weekly_submission_points — last writer wins is acceptable because T14
-    fires only after feedback delivery + Glific callback, not in the window
-    where this function runs.
+    writes the weekly bucket only; total_activity_points, total_submission_points,
+    and total_points roll up once during week advance.
     """
     if not points:
         return
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET total_points             = COALESCE(total_points, 0)             + %s,
-               total_submission_points  = COALESCE(total_submission_points, 0)  + %s,
-               weekly_submission_points = COALESCE(weekly_submission_points, 0) + %s
+           SET weekly_submission_points = COALESCE(weekly_submission_points, 0) + %s
          WHERE name = %s
         """,
-        (points, points, points, pe_name),
+        (points, pe_name),
     )
 
 

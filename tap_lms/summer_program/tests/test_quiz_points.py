@@ -5,9 +5,8 @@ Per-question independent award model:
   correct → QuizQuestion.points
   wrong   → QuizQuestion.failed_points
 
-Cumulative-vs-weekly split (E4): cumulative uses delta vs previous-latest
-attempt for same (student, quiz); weekly always adds new attempt's full
-earned (effort, not latest).
+Weekly quiz points always add each completed attempt's full earned score
+(effort, not latest). Cumulative quiz totals roll up on week advance.
 
 Idempotency: attempt.points_earned > 0 is the write-once anchor (P-005).
 
@@ -161,9 +160,9 @@ class TestQuizPoints(FrappeTestCase):
         self.assertEqual(attempt.points_earned, 18)
 
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        self.assertEqual(pe.total_quiz_points, 18)
+        self.assertEqual(pe.total_quiz_points, 0)
         self.assertEqual(pe.weekly_quiz_points, 18)
-        self.assertEqual(pe.total_points, 18)
+        self.assertEqual(pe.total_points, 0)
 
     @patch("tap_lms.summer_program.quiz_points._enqueue_contact_field_sync")
     def test_quiz_attempt_awards_per_question_wrong_failed_points(self, mock_sync):
@@ -189,9 +188,9 @@ class TestQuizPoints(FrappeTestCase):
                          "Wrong answers award failed_points (2+3=5)")
 
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        self.assertEqual(pe.total_quiz_points, 5)
+        self.assertEqual(pe.total_quiz_points, 0)
         self.assertEqual(pe.weekly_quiz_points, 5)
-        self.assertEqual(pe.total_points, 5)
+        self.assertEqual(pe.total_points, 0)
 
     @patch("tap_lms.summer_program.quiz_points._enqueue_contact_field_sync")
     def test_quiz_idempotent_via_points_earned(self, mock_sync):
@@ -212,16 +211,16 @@ class TestQuizPoints(FrappeTestCase):
         # Second call should be a no-op.
         handle_attempt_update(attempt)
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        self.assertEqual(pe.total_quiz_points, 10,
+        self.assertEqual(pe.total_quiz_points, 0,
                          "Re-running handler must not double-bump")
         self.assertEqual(pe.weekly_quiz_points, 10)
-        self.assertEqual(pe.total_points, 10)
+        self.assertEqual(pe.total_points, 0)
 
     @patch("tap_lms.summer_program.quiz_points._enqueue_contact_field_sync")
     def test_quiz_retake_higher_score_delta_to_total(self, mock_sync):
         """Attempt 1 earns 5, attempt 2 earns 8 in same week:
-        cumulative += delta = +3, weekly += full new earned = +8 (so total
-        weekly is 5 + 8 = 13). Latest-score for cumulative."""
+        weekly += full new earned = +8 (so total weekly is 5 + 8 = 13).
+        Cumulative totals roll up at week advance."""
         student = _ensure_student("04")
         pe_name = _make_pe(self.batch_name, student, "04")
         quiz = _make_quiz()
@@ -259,10 +258,9 @@ class TestQuizPoints(FrappeTestCase):
         handle_attempt_update(attempt2)
 
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        # Cumulative: 5 + delta(8-5) = 5 + 3 = 8
-        self.assertEqual(pe.total_quiz_points, 8,
-                         "Cumulative gets delta (5 → 8 = +3)")
-        self.assertEqual(pe.total_points, 8)
+        self.assertEqual(pe.total_quiz_points, 0,
+                         "Cumulative total rolls up at week advance")
+        self.assertEqual(pe.total_points, 0)
         # Weekly: 5 + 8 = 13 (effort, not latest)
         self.assertEqual(pe.weekly_quiz_points, 13,
                          "Weekly always adds full new earned (5 + 8 = 13)")
@@ -270,7 +268,7 @@ class TestQuizPoints(FrappeTestCase):
     @patch("tap_lms.summer_program.quiz_points._enqueue_contact_field_sync")
     def test_quiz_retake_lower_score_negative_delta_to_total(self, mock_sync):
         """Attempt 1 earns 8, attempt 2 earns 5 in same week:
-        cumulative += delta = -3 (5 + -3 = 2 net), weekly += 5 (effort)."""
+        weekly += 5 (effort). Cumulative totals roll up at week advance."""
         student = _ensure_student("05")
         pe_name = _make_pe(self.batch_name, student, "05")
         quiz = _make_quiz()
@@ -302,10 +300,9 @@ class TestQuizPoints(FrappeTestCase):
         handle_attempt_update(attempt2)
 
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        # Cumulative: 8 + delta(5-8) = 8 + -3 = 5
-        self.assertEqual(pe.total_quiz_points, 5,
-                         "Cumulative gets negative delta (8 → 5 = -3)")
-        self.assertEqual(pe.total_points, 5)
+        self.assertEqual(pe.total_quiz_points, 0,
+                         "Cumulative total rolls up at week advance")
+        self.assertEqual(pe.total_points, 0)
         # Weekly: 8 + 5 = 13
         self.assertEqual(pe.weekly_quiz_points, 13,
                          "Weekly always adds full new earned (8 + 5 = 13)")
