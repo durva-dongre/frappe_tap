@@ -1078,3 +1078,160 @@ class TestLazyResetOnVideo(FrappeTestCase):
 
         pe.reload()
         self.assertEqual(pe.bonus_quiz_points, 0)
+
+
+# ════════════════════════════════════════════════════════════
+# CR-009 (2026-05-23) — backend-driven escalation arming on first video
+# ════════════════════════════════════════════════════════════
+
+class TestEscalationArmingOnFirstVideo(FrappeTestCase):
+    """CR-009: when a student watches the week's first VideoClass,
+    activity_points.award_activity_points must arm
+    next_action_at = NOW + first_step.hours_after_previous,
+    next_action_type = 'escalation' — independent of any Glific callback.
+
+    Closes the 'watched-but-no-submission' gap where 4 PEs in
+    palv2-test-BT52231 had weekly_video_done=1, weekly_submission_done=0,
+    next_action_at=None, current_escalation_step=0.
+
+    Idempotency gates:
+      (a) is_first_video_of_week — subsequent videos same week don't re-arm
+      (b) current_escalation_step == 0 — don't reset in-flight chain
+      (c) next_action_type != 'escalation' — defensive
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    @patch("tap_lms.summer_program.activity_points._get_escalation_steps", create=True,
+           new=None)
+    def test_first_video_arms_escalation(self, _le, _es):
+        """First VideoClass of the week → next_action_at set to
+        NOW + first_step.hours_after_previous, next_action_type='escalation'."""
+        student = _ensure_student("ESC1")
+        pe = _make_pe(
+            self.batch_name, student, "ESC1",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+            weekly_video_done=0,
+        )
+
+        # Stub _get_escalation_steps via patch.object — it lives in
+        # student_progression_sp; activity_points imports it lazily.
+        fake_steps = [
+            {"escalation_order": 1, "escalation_type": "help_note_a",
+             "hours_after_previous": 24, "points_awarded": 10},
+            {"escalation_order": 2, "escalation_type": "help_note_b",
+             "hours_after_previous": 24, "points_awarded": 7},
+        ]
+        with patch("tap_lms.summer_program.student_progression_sp._get_escalation_steps",
+                   return_value=fake_steps):
+            video_id = _make_video_class("ESC1V", 10)
+            _make_scl(student, video_id, stage_no=1)
+
+        pe.reload()
+        self.assertEqual(pe.next_action_type, "escalation",
+                         "first video must arm escalation")
+        self.assertIsNotNone(pe.next_action_at,
+                             "first video must set next_action_at")
+        # next_action_at should be ~24 hours in the future
+        from frappe.utils import now_datetime, get_datetime
+        delta_hours = (get_datetime(pe.next_action_at) - now_datetime()).total_seconds() / 3600
+        self.assertAlmostEqual(delta_hours, 24, delta=0.5,
+                               msg=f"next_action_at should be ~24h ahead, got {delta_hours:.2f}h")
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_second_video_same_week_does_not_re_arm(self, _le, _es):
+        """A second VideoClass in the same week (weekly_video_done=1
+        already) must NOT touch next_action_at. The first video already
+        armed it."""
+        from frappe.utils import now_datetime, add_to_date, get_datetime
+        student = _ensure_student("ESC2")
+        pe = _make_pe(
+            self.batch_name, student, "ESC2",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+            weekly_video_done=1,    # already watched first video
+        )
+        # Pre-armed: next_action_at set 12 hours from now (the post-first-video state)
+        original_fire = add_to_date(now_datetime(), hours=12)
+        frappe.db.set_value("ProgramEnrollment", pe.name, {
+            "next_action_at": original_fire,
+            "next_action_type": "escalation",
+        })
+
+        # Now watch the second video — should NOT re-arm
+        video_id = _make_video_class("ESC2V", 10)
+        _make_scl(student, video_id, stage_no=1)
+
+        pe.reload()
+        self.assertEqual(pe.next_action_type, "escalation")
+        # next_action_at should still be the original ~12h ahead, not reset to ~24h
+        delta_hours = (get_datetime(pe.next_action_at) - now_datetime()).total_seconds() / 3600
+        self.assertLess(delta_hours, 13,
+                        f"second video must NOT push next_action_at out — "
+                        f"original was 12h, got {delta_hours:.2f}h")
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_first_video_does_not_re_arm_when_escalation_in_flight(self, _le, _es):
+        """If current_escalation_step > 0 (escalation chain already running),
+        a video watch must NOT reset the schedule."""
+        from frappe.utils import now_datetime, add_to_date, get_datetime
+        student = _ensure_student("ESC3")
+        pe = _make_pe(
+            self.batch_name, student, "ESC3",
+            resolved_flow_state=STATE_NORMAL_ESCALATION,
+            current_week=1,
+            weekly_video_done=0,    # somehow back to 0 (e.g., new week not yet engaged)
+        )
+        # Escalation in flight — step 1 already fired
+        original_fire = add_to_date(now_datetime(), hours=6)
+        frappe.db.set_value("ProgramEnrollment", pe.name, {
+            "current_escalation_step": 1,
+            "current_escalation_type": "help_note_a",
+            "next_action_at": original_fire,
+            "next_action_type": "escalation",
+        })
+
+        video_id = _make_video_class("ESC3V", 10)
+        _make_scl(student, video_id, stage_no=1)
+
+        pe.reload()
+        # next_action_at should still be the original ~6h ahead, not 24h
+        delta_hours = (get_datetime(pe.next_action_at) - now_datetime()).total_seconds() / 3600
+        self.assertLess(delta_hours, 7,
+                        f"escalation-in-flight: video must NOT reset next_action_at — "
+                        f"original was 6h, got {delta_hours:.2f}h")
+        # current_escalation_step preserved
+        self.assertEqual(pe.current_escalation_step, 1)
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_no_escalation_steps_configured_no_arm(self, _le, _es):
+        """If the student's archetype/arm/path has no escalation_steps
+        (returns empty list), don't arm next_action_at. Logger.info note
+        but no error."""
+        student = _ensure_student("ESC4")
+        pe = _make_pe(
+            self.batch_name, student, "ESC4",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+            weekly_video_done=0,
+        )
+
+        # Force _get_escalation_steps to return empty
+        with patch("tap_lms.summer_program.student_progression_sp._get_escalation_steps",
+                   return_value=[]):
+            video_id = _make_video_class("ESC4V", 10)
+            _make_scl(student, video_id, stage_no=1)
+
+        pe.reload()
+        # No escalation steps → no arming
+        self.assertIsNone(pe.next_action_at)
+        self.assertIn(pe.next_action_type, ("", None))

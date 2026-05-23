@@ -16,10 +16,13 @@ Design notes:
   - First-video-of-week flag: `weekly_video_done = 1` is set idempotently
     (writing 1 to 1 is harmless). This flag is the gating signal for T19's
     streak/gem penalty branch.
-  - Edge E11 (CR-002 v2): if `VideoClass.points` is 0 or null, the handler
-    returns at the award-resolve step — NO PE update and NO `weekly_video_done`
-    flag flip. Trade-off documented in the CR: zero-point pedagogical videos
-    do not count toward "assigned this week" gating.
+  - Edge E11 (CR-002 v2) — RETIRED 2026-05-23: zero-point VideoClasses
+    used to early-return WITHOUT flipping `weekly_video_done` or arming
+    grace/escalation. That broke CR-009: students who watched a 0-point
+    intro video that requires a submission would never get escalation
+    nudges because the engagement signal never fired. Treating all videos
+    the same is the simpler and correct model — engagement is about content
+    watched, point value is a separate reward dimension.
   - Glific sync: re-uses `_enqueue_contact_field_sync` (the same retry+DLQ
     machinery that protects every other PE→Glific write — pattern P-007).
 
@@ -40,8 +43,13 @@ Test plan: see app/tap_lms/summer_program/tests/test_activity_points.py
 and app/tap_lms/summer_program/tests/test_grace_logic.py.
 """
 import frappe
+from frappe.utils import add_to_date, now_datetime
 
-from tap_lms.summer_program.constants import DEFAULT_GRACE_WINDOW_DAYS
+from tap_lms.summer_program.constants import (
+    ACTION_ESCALATION,
+    DEFAULT_GRACE_WINDOW_DAYS,
+    PATH_CORE,
+)
 from tap_lms.summer_program.state_machine import (
     _enqueue_contact_field_sync,
     get_active_pe,
@@ -104,10 +112,14 @@ def award_activity_points(scl):
     if not scl.content_id:
         return
 
-    pts = _resolve_video_points(scl.content_id)
-    if not pts:
-        # E11: zero-point video → no award, no `weekly_video_done` flip.
-        return
+    # CR-009 (2026-05-23): the E11 early-return on zero-point videos was
+    # removed. Per the user spec, some VideoClasses can carry points=0 but
+    # still require a submission downstream — those videos MUST trigger the
+    # full engagement pipeline (weekly_video_done flip + grace clock arm +
+    # escalation arm). Defaulting `pts` to 0 keeps the COALESCE bump on
+    # weekly_activity_points as a no-op while letting the rest of the flow
+    # proceed.
+    pts = _resolve_video_points(scl.content_id) or 0
 
     # ── 4. Resolve active PE ────────────────────────────────
     pe = get_active_pe(scl.student)
@@ -219,17 +231,45 @@ def award_activity_points(scl):
     if pe.glific_id:
         _enqueue_contact_field_sync(pe)
 
+    # ── 7c. CR-009 (2026-05-23): backend-driven escalation arming ──
+    # Pre-fix, the escalation chain was ARMED only when Glific's
+    # update_flow_status callback fired with status='no_response' / 'timeout'
+    # for SP_Content_Delivery. Observed in palv2-test-BT52231: 4 PEs in the
+    # 'watched-but-no-submission' gap (weekly_video_done=1, weekly_submission_done=0,
+    # next_action_at=None) — the Glific callback either fires with 'completed'
+    # (which doesn't arm escalation) or doesn't fire at all (webhook miss).
+    # Backend-driven arming closes that gap: when a student watches the
+    # week's first VideoClass, schedule the first escalation step here.
+    #
+    # Idempotency gates:
+    #   (a) is_first_video_of_week (the pre-UPDATE Python read from step 5a)
+    #       — subsequent video watches in the same week must NOT re-arm.
+    #   (b) pe.current_escalation_step == 0 — don't reset an in-flight chain.
+    #   (c) pe.next_action_type != 'escalation' — defensive; same intent.
+    #
+    # Submission transitions (T7/T9/T17/T3) clear next_action_at when a
+    # submission lands, so the dispatcher won't fire the escalation step
+    # once the student responds.
+    _maybe_arm_escalation(pe, scl, is_first_video_of_week)
+
     # ── 7b. ProgramEventLog ────────────────────────────────
-    log_event(
-        pe, "activity_points_awarded",
-        new_value=str(pts),
-        trigger_source="content_log",
-        details={
-            "scl": scl.name,
-            "video": scl.content_id,
-            "points": pts,
-        },
-    )
+    # Gate on pts > 0 (CR-009 follow-on 2026-05-23): with the E11 early-
+    # return removed, zero-point videos now flow through the whole pipeline.
+    # The "activity_points_awarded" event with new_value="0" is misleading
+    # in audit trails — skip it. The grace_window_entered (step 5a, first
+    # video only) and escalation_scheduled (from _maybe_arm_escalation)
+    # events already capture the engagement signal for zero-point videos.
+    if pts > 0:
+        log_event(
+            pe, "activity_points_awarded",
+            new_value=str(pts),
+            trigger_source="content_log",
+            details={
+                "scl": scl.name,
+                "video": scl.content_id,
+                "points": pts,
+            },
+        )
 
 
 # ════════════════════════════════════════════════════════════
@@ -278,3 +318,99 @@ def _resolve_grace_window_days(pe):
         )
         return DEFAULT_GRACE_WINDOW_DAYS
     return int(days)
+
+
+# ════════════════════════════════════════════════════════════
+# CR-009 (2026-05-23) — backend-driven escalation arming
+# ════════════════════════════════════════════════════════════
+
+def _maybe_arm_escalation(pe, scl, is_first_video_of_week):
+    """Arm `next_action_at + next_action_type = 'escalation'` when the
+    student watches the week's first VideoClass — independent of whether
+    Glific's update_flow_status callback for SP_Content_Delivery ever
+    arrives.
+
+    Pre-CR-009 path: escalation was armed by
+    flow_callback._handle_content_delivery only when Glific reported
+    status in ('no_response', 'timeout'). For students who DID tap the
+    content message (status='completed'), or for cases where the Glific
+    callback was missing entirely, the escalation chain never started even
+    though the grace clock did. Net result: students stuck watching the
+    grace countdown with zero nudges in between.
+
+    Args:
+        pe: ProgramEnrollment doc (post-UPDATE, already reloaded by caller).
+        scl: StudentContentLog row (used for the event-log audit field).
+        is_first_video_of_week: pre-UPDATE Python read captured before the
+            atomic SQL flipped weekly_video_done 0→1. We need the
+            pre-UPDATE value, not the post-reload value (which is always 1).
+
+    Guarded by three idempotency gates:
+        (a) is_first_video_of_week == True
+        (b) pe.current_escalation_step == 0 (no chain in flight)
+        (c) pe.next_action_type != 'escalation' (defensive — same intent)
+
+    Failure mode: any exception is logged and swallowed. Escalation arming
+    is a follow-on to the points bump; we never want to bubble a failure
+    here back into the StudentContentLog insert path.
+    """
+    if not is_first_video_of_week:
+        return
+    if (pe.current_escalation_step or 0) != 0:
+        return
+    if pe.next_action_type == ACTION_ESCALATION:
+        return
+
+    try:
+        # Lazy import — avoid pulling student_progression_sp at module load
+        # (it's a heavier module with broader dependencies).
+        from tap_lms.summer_program.student_progression_sp import _get_escalation_steps
+
+        student = frappe.get_doc("Student", scl.student)
+        batch_doc = frappe.get_doc("Batch", pe.batch)
+        steps = _get_escalation_steps(
+            student, batch_doc, path=pe.current_path or PATH_CORE,
+        )
+        if not steps:
+            # No escalation config for this archetype/arm/path. Not an
+            # error — could be by design (e.g., a path with no escalation).
+            # Log at info level for operator visibility without polluting
+            # the Error Log doctype.
+            frappe.logger("activity_points").info(
+                f"_maybe_arm_escalation: PE {pe.name} (archetype={student.archetype}, "
+                f"arm={student.experiment_arm}, path={pe.current_path}) has no "
+                f"escalation_steps configured — skipping arm."
+            )
+            return
+
+        first_step_hours = float(steps[0].get("hours_after_previous") or 24)
+        fire_at = add_to_date(now_datetime(), hours=first_step_hours)
+        frappe.db.set_value("ProgramEnrollment", pe.name, {
+            "next_action_at": fire_at,
+            "next_action_type": ACTION_ESCALATION,
+        })
+
+        log_event(
+            pe, "escalation_scheduled",
+            trigger_source="activity_points",
+            details={
+                "scheduled_at": str(fire_at),
+                "hours_from_now": first_step_hours,
+                "first_step_type": steps[0].get("escalation_type"),
+                "trigger": "first_video_of_week",
+                "scl": scl.name,
+            },
+        )
+    except Exception as e:
+        try:
+            frappe.db.rollback()
+        except Exception:
+            pass
+        frappe.logger("activity_points").error(
+            f"_maybe_arm_escalation: failed to arm escalation for PE "
+            f"{pe.name}: {e}"
+        )
+        # Do NOT re-raise — escalation arming is a non-critical follow-on
+        # to the points bump. The SCL is already on disk; the next time
+        # this PE's first-video-of-week handler fires (e.g., next week's
+        # T19+video cycle), arming will retry.
