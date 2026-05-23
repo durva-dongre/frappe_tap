@@ -145,7 +145,7 @@ def award_activity_points(scl):
             },
         )
 
-    # ── 5b. Atomic UPDATE on PE (P-002 / L-011 + CR-003 grace arm) ──
+    # ── 5b. Atomic UPDATE on PE (P-002 / L-011 + CR-003 grace arm + CR-008 lazy reset) ──
     # COALESCE-update is race-tolerant against T19's reset of
     # weekly_activity_points (E5). Cumulative totals are rolled up once during
     # week advance from weekly_activity_points + weekly_submission_points.
@@ -155,23 +155,54 @@ def award_activity_points(scl):
     # (standard SQL behaviour), so the arm only happens when this is
     # genuinely the week's first VideoClass. Second-video-same-week is a
     # no-op for the grace fields (existing values preserved).
+    #
+    # CR-008 lazy reset (2026-05-23): the same `weekly_video_done = 0` gate
+    # also drives the per-week reset of weekly_*_points / weekly_submission_done /
+    # quiz_completed / bonus_quiz_points. T14 no longer zeros these (so the
+    # student's W1 stats stay visible on Glific through the inter-week gap).
+    # Instead, the first VideoClass of the new week wipes them and bumps the
+    # video's points — atomically, in this single UPDATE.
+    #
+    # Assumption (confirmed with the team 2026-05-23, managed in UI + Glific):
+    # every week has at least one VideoClass; VideoClass is always the first
+    # content item; students cannot skip the video. Known limitations if
+    # those assumptions break: weeks without VideoClass freeze weekly_* at
+    # previous-week values until a future video; quiz/submission taken
+    # before video lose their points when the lazy reset fires.
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET weekly_activity_points = COALESCE(weekly_activity_points, 0) + %s,
-               weekly_video_done      = 1,
-               grace_window_start     = CASE WHEN weekly_video_done = 0
-                                             THEN NOW()
-                                             ELSE grace_window_start END,
-               grace_window_end_at    = CASE WHEN weekly_video_done = 0
-                                             THEN NOW() + (%s || ' days')::interval
-                                             ELSE grace_window_end_at END,
-               in_grace_window        = CASE WHEN weekly_video_done = 0
-                                             THEN 1
-                                             ELSE in_grace_window END
+           SET weekly_activity_points   = CASE WHEN weekly_video_done = 0
+                                               THEN %s
+                                               ELSE COALESCE(weekly_activity_points, 0) + %s END,
+               weekly_quiz_points       = CASE WHEN weekly_video_done = 0
+                                               THEN 0
+                                               ELSE weekly_quiz_points END,
+               weekly_submission_points = CASE WHEN weekly_video_done = 0
+                                               THEN 0
+                                               ELSE weekly_submission_points END,
+               bonus_quiz_points        = CASE WHEN weekly_video_done = 0
+                                               THEN 0
+                                               ELSE bonus_quiz_points END,
+               weekly_submission_done   = CASE WHEN weekly_video_done = 0
+                                               THEN 0
+                                               ELSE weekly_submission_done END,
+               quiz_completed           = CASE WHEN weekly_video_done = 0
+                                               THEN 0
+                                               ELSE quiz_completed END,
+               weekly_video_done        = 1,
+               grace_window_start       = CASE WHEN weekly_video_done = 0
+                                               THEN NOW()
+                                               ELSE grace_window_start END,
+               grace_window_end_at      = CASE WHEN weekly_video_done = 0
+                                               THEN NOW() + (%s || ' days')::interval
+                                               ELSE grace_window_end_at END,
+               in_grace_window          = CASE WHEN weekly_video_done = 0
+                                               THEN 1
+                                               ELSE in_grace_window END
          WHERE name = %s
         """,
-        (pts, grace_window_days, pe.name),
+        (pts, pts, grace_window_days, pe.name),
     )
 
     # ── 6. Audit-field anchor (written AFTER PE update so retries skip) ──

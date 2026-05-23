@@ -251,9 +251,24 @@ class TestSubmissionTransitionsExtended(FrappeTestCase):
 # ════════════════════════════════════════════════════════════
 
 class TestT19WeekAdvanceExtended(FrappeTestCase):
-    """CR-002 v2 §"T19 week-advance — revised". Penalty branch fires IFF
-    weekly_video_done=1 AND weekly_submission_done=0. Cumulative counters
-    are never reset; all 3 weekly_* counters and both sticky flags ARE reset."""
+    """CR-002 v2 §"T19 week-advance — revised" + CR-008 lazy-reset (2026-05-23).
+
+    Penalty branch fires IFF weekly_video_done=1 AND weekly_submission_done=0.
+    Cumulative counters are rolled up via calculate_week_advance_rollup at T14.
+
+    Post-CR-008: T14 NO LONGER zeros weekly_* gamification fields, submission_done
+    flag, quiz_completed, bonus_quiz_points, or submission_count. Those reset
+    LAZILY on the first VideoClass of the new week (see test_lazy_reset_on_video
+    below). T14 still resets weekly_video_done = 0 (the lazy-reset trigger
+    signal) and current_escalation_step.
+
+    These tests verify:
+      - The rollup math is correct (totals = previous + weekly_*).
+      - weekly_*_points are PRESERVED (not zeroed) after T14.
+      - submission_count is PRESERVED (lifetime accumulator).
+      - weekly_video_done = 0 after T14 (the signal that gates next-video
+        lazy reset in activity_points.award_activity_points).
+    """
 
     @classmethod
     def setUpClass(cls):
@@ -287,14 +302,21 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         # Penalty applied
         self.assertEqual(pe.current_streak, 0, "Streak resets to 0 on penalty")
         self.assertEqual(pe.special_gems, 2, "Gems decrement by 1 (3 → 2)")
-        # All weeklies reset
-        self.assertEqual(pe.weekly_activity_points, 0)
-        self.assertEqual(pe.weekly_quiz_points, 0)
-        self.assertEqual(pe.bonus_quiz_points, 0)
+        # CR-008 lazy reset: weekly_* PRESERVED at pre-T14 values (next
+        # VideoClass wipes them via activity_points handler). Sticky flags
+        # likewise preserved except for weekly_video_done which is the
+        # lazy-reset trigger and must be 0 here.
+        self.assertEqual(pe.weekly_activity_points, 10,
+                         "lazy reset: weekly_* preserved through inter-week gap")
+        self.assertEqual(pe.weekly_quiz_points, 5)
+        self.assertEqual(pe.bonus_quiz_points, 2)
         self.assertEqual(pe.weekly_submission_points, 0)
-        self.assertEqual(pe.weekly_video_done, 0)
-        self.assertEqual(pe.weekly_submission_done, 0)
-        # Weekly buckets roll into cumulative totals before reset.
+        self.assertEqual(pe.weekly_video_done, 0,
+                         "trigger signal: must flip to 0 for next-video lazy reset")
+        self.assertEqual(pe.weekly_submission_done, 0,
+                         "preserved (was 0 entering T14)")
+        # Weekly buckets STILL roll into cumulative totals at T14 (Manu's
+        # rollup is unchanged); the lazy reset is orthogonal to the rollup.
         self.assertEqual(pe.total_activity_points, 40)
         self.assertEqual(pe.total_quiz_points, 20)
         self.assertEqual(pe.total_submission_points, 50)
@@ -328,16 +350,20 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=2)
 
         pe.reload()
+        # Rollup math unchanged
         self.assertEqual(pe.total_activity_points, 35)
         self.assertEqual(pe.total_submission_points, 25)
         self.assertEqual(pe.total_quiz_points, 7)
         self.assertEqual(pe.total_points, 45)
-        self.assertEqual(pe.weekly_activity_points, 0)
-        self.assertEqual(pe.weekly_submission_points, 0)
-        self.assertEqual(pe.weekly_quiz_points, 0)
-        self.assertEqual(pe.bonus_quiz_points, 0)
+        # CR-008: weekly_* PRESERVED (next VideoClass wipes them)
+        self.assertEqual(pe.weekly_activity_points, 10)
+        self.assertEqual(pe.weekly_submission_points, 25)
+        self.assertEqual(pe.weekly_quiz_points, 7)
+        self.assertEqual(pe.bonus_quiz_points, 3)
         self.assertEqual(pe.current_streak, 1)
         self.assertEqual(pe.special_gems, 1)
+        # weekly_video_done must flip to 0 (lazy-reset trigger signal)
+        self.assertEqual(pe.weekly_video_done, 0)
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_activity_only_week_adds_activity_to_existing_total(self, mock_sync):
@@ -364,13 +390,16 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=3)
 
         pe.reload()
+        # Rollup math unchanged
         self.assertEqual(pe.total_activity_points, 45)
         self.assertEqual(pe.total_submission_points, 25)
         self.assertEqual(pe.total_points, 45)
-        self.assertEqual(pe.weekly_activity_points, 0)
+        # CR-008: weekly_* PRESERVED (next VideoClass wipes them)
+        self.assertEqual(pe.weekly_activity_points, 10)
         self.assertEqual(pe.weekly_submission_points, 0)
         self.assertEqual(pe.current_streak, 0)
         self.assertEqual(pe.special_gems, 1)
+        self.assertEqual(pe.weekly_video_done, 0)
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_activity_and_submission_week_adds_both_to_existing_total(self, mock_sync):
@@ -397,13 +426,16 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=3)
 
         pe.reload()
+        # Rollup math unchanged
         self.assertEqual(pe.total_activity_points, 70)
         self.assertEqual(pe.total_submission_points, 50)
         self.assertEqual(pe.total_points, 70)
-        self.assertEqual(pe.weekly_activity_points, 0)
-        self.assertEqual(pe.weekly_submission_points, 0)
+        # CR-008: weekly_* PRESERVED (next VideoClass wipes them)
+        self.assertEqual(pe.weekly_activity_points, 10)
+        self.assertEqual(pe.weekly_submission_points, 25)
         self.assertEqual(pe.current_streak, 2)
         self.assertEqual(pe.special_gems, 2)
+        self.assertEqual(pe.weekly_video_done, 0)
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_streak_unchanged_when_not_assigned(self, mock_sync):
@@ -822,3 +854,227 @@ class TestTransitionRaceSafety(FrappeTestCase):
         self.assertEqual(int(fresh["current_streak"]), 7)
         self.assertEqual(int(fresh["special_gems"]), 5)
         self.assertEqual(int(fresh["weekly_submission_done"]), 1)
+
+
+# ════════════════════════════════════════════════════════════
+# CR-008 (2026-05-23) — Lazy reset on first VideoClass of new week
+# ════════════════════════════════════════════════════════════
+
+def _make_video_class(suffix, points):
+    """Create a VideoClass with given points value (for activity_points tests)."""
+    video = frappe.new_doc("VideoClass")
+    video.video_name = f"LazyResetTestVideo-{suffix}-{frappe.utils.random_string(4)}"
+    video.duration = "5:00"
+    video.points = points
+    video.insert(ignore_permissions=True)
+    return video.name
+
+
+def _make_scl(student, video_id, stage_no=1, action="completed"):
+    """Create a StudentContentLog pointing at the given VideoClass.
+    Inserting an SCL with action='completed' fires the activity_points
+    after_insert hook (per hooks.py) which calls handle_content_log →
+    award_activity_points → atomic UPDATE on PE.
+    """
+    log = frappe.new_doc("StudentContentLog")
+    log.student = student
+    log.stage_no = stage_no
+    log.content_type = "VideoClass"
+    log.content_id = video_id
+    log.action = action
+    log.insert(ignore_permissions=True)
+    return log.name
+
+
+class TestLazyResetOnVideo(FrappeTestCase):
+    """CR-008 (2026-05-23) — first-VideoClass-of-new-week lazy reset.
+
+    T14 no longer zeros the gamification fields; the first VideoClass of
+    the new week atomically resets weekly_*_points + sticky flags + quiz
+    counters and bumps weekly_activity_points by the video's points — all
+    in a single CASE-WHEN'd UPDATE gated on `weekly_video_done = 0`.
+
+    Test matrix:
+      - test_first_video_after_t14_resets_all_lazy_fields
+      - test_second_video_same_week_does_not_reset
+      - test_first_video_fresh_pe_is_a_noop_reset_plus_bump
+      - test_submission_count_preserved_across_t14
+      - test_quiz_completed_resets_on_first_video_of_new_week
+      - test_bonus_quiz_points_reset_on_first_video_of_new_week
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_first_video_after_t14_resets_all_lazy_fields(self, _le, _es):
+        """The core CR-008 scenario. PE in W2 with weekly_video_done=0
+        (T14 just fired) carries W1 values in weekly_*_points. Watching
+        W2's first VideoClass must atomically wipe all six lazy fields
+        and bump weekly_activity_points by the video's points value."""
+        student = _ensure_student("LZR1")
+        pe = _make_pe(
+            self.batch_name, student, "LZR1",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=2,
+            weekly_video_done=0,           # post-T14 signal
+            weekly_submission_done=1,       # W1's value, lazy
+            # W1's preserved gamification values (CR-008 keeps them visible
+            # through the inter-week gap)
+            weekly_activity_points=15,
+            weekly_quiz_points=8,
+            weekly_submission_points=20,
+        )
+        # bonus_quiz_points and quiz_completed need direct set (not in _make_pe sig)
+        frappe.db.set_value("ProgramEnrollment", pe.name, {
+            "bonus_quiz_points": 5,
+            "quiz_completed": 1,
+        })
+
+        # W2 video worth 12 points
+        video_id = _make_video_class("W2V1", 12)
+        _make_scl(student, video_id, stage_no=2)
+
+        # Reload — the lazy-reset CASE WHEN should have wiped W1 values
+        # and bumped weekly_activity_points = 12.
+        pe.reload()
+        self.assertEqual(pe.weekly_activity_points, 12,
+                         "wiped from 15 then bumped to V2=12")
+        self.assertEqual(pe.weekly_quiz_points, 0, "lazy reset")
+        self.assertEqual(pe.weekly_submission_points, 0, "lazy reset")
+        self.assertEqual(pe.bonus_quiz_points, 0, "lazy reset")
+        self.assertEqual(pe.weekly_submission_done, 0, "lazy reset")
+        self.assertEqual(pe.quiz_completed, 0, "lazy reset")
+        self.assertEqual(pe.weekly_video_done, 1,
+                         "trigger signal flipped to 1; same-week subsequent "
+                         "videos bypass the reset gate")
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_second_video_same_week_does_not_reset(self, _le, _es):
+        """Within the same week (weekly_video_done already = 1), a second
+        VideoClass just bumps weekly_activity_points. Other weekly fields
+        and sticky flags MUST NOT be reset (regression guard against the
+        CASE WHEN firing twice in the same week)."""
+        student = _ensure_student("LZR2")
+        pe = _make_pe(
+            self.batch_name, student, "LZR2",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+            weekly_video_done=1,           # already watched W1's first video
+            weekly_submission_done=1,
+            weekly_activity_points=15,     # first video already bumped this
+            weekly_quiz_points=8,
+            weekly_submission_points=20,
+        )
+        frappe.db.set_value("ProgramEnrollment", pe.name, {
+            "bonus_quiz_points": 5,
+            "quiz_completed": 1,
+        })
+
+        video_id = _make_video_class("W1V2", 7)
+        _make_scl(student, video_id, stage_no=1)
+
+        pe.reload()
+        # weekly_activity_points bumped by 7 (15 + 7 = 22)
+        self.assertEqual(pe.weekly_activity_points, 22,
+                         "same-week bump: 15 + 7")
+        # Other lazy fields preserved
+        self.assertEqual(pe.weekly_quiz_points, 8, "preserved (same week)")
+        self.assertEqual(pe.weekly_submission_points, 20, "preserved")
+        self.assertEqual(pe.bonus_quiz_points, 5, "preserved")
+        self.assertEqual(pe.weekly_submission_done, 1, "preserved")
+        self.assertEqual(pe.quiz_completed, 1, "preserved")
+        self.assertEqual(pe.weekly_video_done, 1, "stays 1")
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_first_video_fresh_pe_is_a_noop_reset_plus_bump(self, _le, _es):
+        """Fresh PE just enrolled: weekly_video_done=0, all weekly_*=0.
+        First video fires the lazy reset gate, but the resets are no-ops
+        (already 0) and weekly_activity_points gets bumped from 0 to V1."""
+        student = _ensure_student("LZR3")
+        pe = _make_pe(
+            self.batch_name, student, "LZR3",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=1,
+            weekly_video_done=0,
+            # All other weekly fields default to 0 in _make_pe
+        )
+
+        video_id = _make_video_class("W1V1", 10)
+        _make_scl(student, video_id, stage_no=1)
+
+        pe.reload()
+        self.assertEqual(pe.weekly_activity_points, 10)
+        self.assertEqual(pe.weekly_quiz_points, 0)
+        self.assertEqual(pe.weekly_submission_points, 0)
+        self.assertEqual(pe.weekly_video_done, 1)
+
+    @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
+    def test_submission_count_preserved_across_t14(self, _sync):
+        """CR-008: submission_count is a lifetime counter — T14 does NOT
+        reset it. A student who submits across multiple weeks ends each
+        week with a higher submission_count."""
+        student = _ensure_student("LZR4")
+        pe = _make_pe(
+            self.batch_name, student, "LZR4",
+            resolved_flow_state=STATE_WEEK_COMPLETED,
+            current_week=1,
+            weekly_video_done=1,
+            weekly_submission_done=1,
+        )
+        # Set submission_count to 2 (simulating 2 prior submissions)
+        frappe.db.set_value("ProgramEnrollment", pe.name, "submission_count", 2)
+        pe.reload()
+        self.assertEqual(pe.submission_count, 2)
+
+        t14_week_advance(pe, new_week=2)
+
+        pe.reload()
+        self.assertEqual(pe.submission_count, 2,
+                         "lifetime counter: NOT reset at T14 (CR-008)")
+        self.assertEqual(pe.current_week, 2)
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_quiz_completed_flips_to_zero_on_first_video_of_new_week(self, _le, _es):
+        """quiz_completed lazy-resets to 0 on the first video of a new week
+        (was 1 from the prior week's quiz finish)."""
+        student = _ensure_student("LZR5")
+        pe = _make_pe(
+            self.batch_name, student, "LZR5",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=2,
+            weekly_video_done=0,
+        )
+        frappe.db.set_value("ProgramEnrollment", pe.name, "quiz_completed", 1)
+
+        video_id = _make_video_class("LZR5V", 10)
+        _make_scl(student, video_id, stage_no=2)
+
+        pe.reload()
+        self.assertEqual(pe.quiz_completed, 0)
+
+    @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
+    @patch("tap_lms.summer_program.activity_points.log_event")
+    def test_bonus_quiz_points_reset_on_first_video_of_new_week(self, _le, _es):
+        """bonus_quiz_points lazy-resets to 0 on first video of new week
+        (was N from prior week's bonus awards)."""
+        student = _ensure_student("LZR6")
+        pe = _make_pe(
+            self.batch_name, student, "LZR6",
+            resolved_flow_state=STATE_NORMAL_CONTENT,
+            current_week=2,
+            weekly_video_done=0,
+        )
+        frappe.db.set_value("ProgramEnrollment", pe.name, "bonus_quiz_points", 7)
+
+        video_id = _make_video_class("LZR6V", 10)
+        _make_scl(student, video_id, stage_no=2)
+
+        pe.reload()
+        self.assertEqual(pe.bonus_quiz_points, 0)

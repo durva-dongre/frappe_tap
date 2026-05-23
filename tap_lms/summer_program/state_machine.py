@@ -806,9 +806,20 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         else:
             both unchanged.
 
-    Phase 2 — roll up weekly points into cumulative totals, reset all
-    weekly_* counters and both sticky flags to 0, advance the week, and write
-    the streak/gem values computed in Phase 1.
+    Phase 2 — roll up weekly points into cumulative totals via
+    `calculate_week_advance_rollup`. Advance the week. Reset `weekly_video_done`
+    to 0 (the lazy-reset trigger for next week's first video). Apply streak /
+    gem updates.
+
+    CR-008 lazy reset (2026-05-23): T14 NO LONGER zeros these fields —
+        weekly_activity_points, weekly_quiz_points, weekly_submission_points,
+        bonus_quiz_points, weekly_submission_done, quiz_completed,
+        submission_count
+    The first VideoClass of the new week (gated on weekly_video_done = 0)
+    atomically resets the gamification + sticky fields. submission_count is
+    intentionally NOT reset — it's a lifetime program counter. This keeps
+    Glific showing the student's W1 reward through the inter-week gap until
+    they actively start W2 content. See activity_points.award_activity_points.
 
     Gem floor is enforced in Python (`max(0, ...)`) because the value is
     computed before the UPDATE. SQL `GREATEST(0, ...)` is not needed — the
@@ -817,6 +828,11 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
     tier = TIER_BY_WEEK.get(new_week, DEFAULT_TIER)
 
     # ── Phase 2: roll up weekly points + build the reset update dict ─────
+    # The rollup reads CURRENT weekly_* values (still showing this just-completed
+    # week's earnings) and adds them to the corresponding total_* columns.
+    # After this T14, the weekly_* values remain visible on Glific (lazy reset);
+    # the next VideoClass of the new week wipes them via
+    # activity_points.award_activity_points' CASE WHEN gates.
     rollup_updates = calculate_week_advance_rollup(pe)
 
     updates = {
@@ -824,8 +840,10 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         "current_week": new_week,
         "current_path": PATH_CORE,
         "current_tier": tier,
-        "submission_count": 0,
-        "quiz_completed": 0,
+        # CR-008 (2026-05-23): submission_count / quiz_completed are NOT
+        # reset here — submission_count accumulates as a lifetime counter,
+        # quiz_completed flips back via the lazy-reset in activity_points
+        # on the next week's first VideoClass.
         "current_escalation_step": 0,
         "current_escalation_type": "",
         # CR-005 (2026-05-15): content_delivery is now batch-triggered via the
@@ -838,15 +856,15 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
         # the normal weekly cadence.
         "next_action_at": None,
         "next_action_type": "",
-        # CR-002 v2: apply streak/gem update + reset all weeklies + flags
+        # CR-002 v2: streak/gem update from rollup + cumulative totals.
         **rollup_updates,
-        "weekly_activity_points": 0,
-        "weekly_quiz_points": 0,
-        "bonus_quiz_points": 0,
-        "weekly_submission_points": 0,
-        "weekly_submission_done": 0,
+        # CR-008 lazy reset (2026-05-23): the following fields are NOT zeroed
+        # here — the first VideoClass of the new week wipes them atomically:
+        #   weekly_activity_points, weekly_quiz_points, weekly_submission_points,
+        #   bonus_quiz_points, weekly_submission_done, quiz_completed
+        # weekly_video_done MUST stay at 0 here — it's the signal that gates
+        # the lazy-reset SQL in activity_points.award_activity_points.
         "weekly_video_done": 0,
-        # Cumulative totals are never reset here; they are rolled forward above.
     }
 
     # ── CR-003 follow-up (2026-05-13): grace re-arm removed ──
