@@ -178,13 +178,21 @@ class TestGetWeeklyContentPECanonical(FrappeTestCase):
 
     def test_returns_no_active_pe_when_pe_missing(self):
         """Defensive: if no active PE exists, return a clear error envelope
-        instead of falling through to a stale-state computation."""
+        instead of falling through to a stale-state computation.
+
+        Note: get_weekly_content is decorated with @glific_response which
+        writes the dict to frappe.local.response and returns None. Read the
+        result from frappe.local.response (see utils.py:71-106).
+        """
         from tap_lms.summer_program import student_progression_sp as sp
 
         ctx = _patch_chain(
             student_id="STU-CANON-003",
             pe=None,  # no active PE
         )
+
+        # Reset frappe.local.response so we read only what this call writes.
+        frappe.local.response = frappe._dict({})
 
         with patch.object(sp, "_resolve_student_id", return_value="STU-CANON-003"), \
              patch.object(sp, "frappe") as mock_frappe, \
@@ -197,10 +205,12 @@ class TestGetWeeklyContentPECanonical(FrappeTestCase):
             mock_frappe.get_doc.return_value = ctx["student_doc"]
             mock_frappe.log_error = MagicMock()
 
-            response = sp.get_weekly_content("STU-CANON-003", course_level="CL-001")
+            sp.get_weekly_content("STU-CANON-003", course_level="CL-001")
 
-        self.assertFalse(response["success"])
-        self.assertEqual(response["status"], "no_active_pe")
+        # @glific_response wrote the dict here (the decorator's frappe is the
+        # REAL frappe — utils.py's import is unpatched by this test).
+        self.assertFalse(frappe.local.response.get("success", True))
+        self.assertEqual(frappe.local.response.get("status"), "no_active_pe")
 
 
 class TestGetNextContentPECanonical(FrappeTestCase):
@@ -334,13 +344,21 @@ class TestGetNextContentPECanonical(FrappeTestCase):
 
     def test_no_active_pe_returns_error_envelope(self):
         """When no PE is found, get_next_content returns a clear status
-        instead of crashing or returning stale state."""
+        instead of crashing or returning stale state.
+
+        Note: get_next_content is decorated with @glific_response which
+        writes the dict to frappe.local.response and returns None. Read the
+        result from frappe.local.response (see utils.py:71-106).
+        """
         from tap_lms.summer_program import student_progression_sp as sp
 
         ctx = _patch_chain(
             student_id="STU-CANON-N03",
             pe=None,
         )
+
+        # Reset frappe.local.response so we read only what this call writes.
+        frappe.local.response = frappe._dict({})
 
         with patch.object(sp, "_resolve_student_id",
                           return_value="STU-CANON-N03"), \
@@ -355,10 +373,12 @@ class TestGetNextContentPECanonical(FrappeTestCase):
             mock_frappe.get_doc.return_value = ctx["student_doc"]
             mock_frappe.log_error = MagicMock()
 
-            response = sp.get_next_content("STU-CANON-N03")
+            sp.get_next_content("STU-CANON-N03")
 
-        self.assertFalse(response["success"])
-        self.assertEqual(response["status"], "no_active_pe")
+        # @glific_response wrote the dict here (the decorator's frappe is the
+        # REAL frappe — utils.py's import is unpatched by this test).
+        self.assertFalse(frappe.local.response.get("success", True))
+        self.assertEqual(frappe.local.response.get("status"), "no_active_pe")
 
 
 class TestSspCanonicalAutoCorrect(FrappeTestCase):
