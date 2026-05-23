@@ -5,6 +5,7 @@ import base64
 import mimetypes
 from urllib.parse import urlparse
 from tap_lms.imgana.gcs_client import upload_to_gcs
+from tap_lms.imgana.media_detection import detect_url_media_type
 
 URL_SUBMISSION_TYPES = {"audio", "image", "video"}
 
@@ -85,23 +86,6 @@ def _looks_like_url(submission):
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
-def _infer_url_submission_type(submission):
-    path = urlparse(submission.strip()).path.lower()
-
-    audio_extensions = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".flac")
-    image_extensions = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic")
-    video_extensions = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp", ".mpeg")
-
-    if path.endswith(audio_extensions):
-        return "audio"
-    if path.endswith(video_extensions):
-        return "video"
-    if path.endswith(image_extensions):
-        return "image"
-
-    return "image"
-
-
 def _contains_only_emoji(submission):
     text = submission.strip()
     if not text:
@@ -118,7 +102,7 @@ def _normalize_submission_payload(submission):
 
     if _looks_like_url(submission):
         return {
-            "submission_type": _infer_url_submission_type(submission),
+            "submission_type": detect_url_media_type(submission, default="image"),
             "submission_text": None,
             "submission_url": submission,
         }

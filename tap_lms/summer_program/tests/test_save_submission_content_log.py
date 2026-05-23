@@ -43,6 +43,22 @@ def _frappe_whitelist(fn=None, **kwargs):
 
 
 class TestSaveSubmissionContentLogBridge(unittest.TestCase):
+    def test_normalizes_extensionless_audio_url_from_content_type(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "detect_url_media_type", return_value="audio") as mock_detect:
+            payload = save_submission._normalize_submission_payload(
+                "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462?download=false"
+            )
+
+        self.assertEqual(payload["submission_type"], "audio")
+        self.assertIsNone(payload["submission_text"])
+        self.assertEqual(
+            payload["submission_url"],
+            "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462?download=false",
+        )
+        mock_detect.assert_called_once_with(payload["submission_url"], default="image")
+
     def test_primary_submission_writes_student_content_log(self):
         save_submission = _import_save_submission_with_stubs()
 

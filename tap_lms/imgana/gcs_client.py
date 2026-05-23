@@ -6,6 +6,7 @@ import frappe
 import requests
 from google.cloud import storage
 
+from tap_lms.imgana.media_detection import detect_url_media_type
 
 AUTHENTICATED_BUCKET_TYPE = "Authenticated"
 PUBLIC_BUCKET_TYPE = "Public"
@@ -284,21 +285,12 @@ def upload_video_to_gcs(video_url: str, submission_id: str) -> str:
 
 def upload_to_gcs(submission_url, submission_name):
     """
-    Detect media type from the URL extension and upload to GCS.
+    Detect media type from the URL and upload to GCS.
     Returns the URL.
     """
-    image_exts = {"jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"}
-    video_exts = {"mp4", "mov", "avi", "mkv", "webm", "flv", "wmv"}
-    audio_exts = {"mp3", "wav", "ogg", "opus", "m4a", "aac", "flac"}
-
-    url_without_query = submission_url.split("?", 1)[0].lower()
-    if "." in url_without_query:
-        ext = url_without_query.rsplit(".", 1)[-1]
-        if ext in image_exts:
-            return upload_image_to_gcs(submission_url, submission_name)
-        if ext in video_exts:
-            return upload_video_to_gcs(submission_url, submission_name)
-        if ext in audio_exts:
-            return upload_audio_to_gcs(submission_url, submission_name)
-
+    media_type = detect_url_media_type(submission_url, default="image")
+    if media_type == "audio":
+        return upload_audio_to_gcs(submission_url, submission_name)
+    if media_type == "video":
+        return upload_video_to_gcs(submission_url, submission_name)
     return upload_image_to_gcs(submission_url, submission_name)
