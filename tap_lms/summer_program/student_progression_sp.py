@@ -97,22 +97,36 @@ def get_weekly_content(student_id, course_level=None):
         return {"success": False, "status": "no_course_level",
                 "error_detail": "No course level found for student"}
 
-    current_week = _get_current_week(batch)
-    if current_week <= 0:
+    calendar_week = _get_current_week(batch)
+    if calendar_week <= 0:
         return {"success": False, "status": "batch_not_started",
                 "error_detail": "Batch has not started yet"}
 
+    # PE-canonical SP read (task #71, 2026-05-23): the state machine owns
+    # current_week, current_path, and current_tier — these are written by
+    # T6b (failed-feedback → Remedial), T14 (week_advance → Core+tier), T8
+    # (start_remedial), etc. The legacy `_resolve_path(...)` helper recomputed
+    # path from prior-week submission validity, which could disagree with
+    # the state machine's recorded value (e.g., a T6b-routed student would
+    # have pe.current_path=Remedial while _resolve_path could return Core if
+    # the prior-week submission was technically "valid" but the AI flagged it).
+    # Same divergence risk for current_tier.
+    # Diagnostic against palv2-test-BT52231 (45 PEs) confirmed 0 divergent —
+    # this is a preemptive fix with no current-cohort behavior change.
+    pe = get_active_pe(student.name, batch.name)
+    if not pe:
+        return {"success": False, "status": "no_active_pe",
+                "error_detail": "No active ProgramEnrollment for this student"}
+
+    current_week = pe.current_week or _get_effective_week(student, batch, calendar_week)
+    path = pe.current_path or PATH_CORE
+    tier = pe.current_tier or (
+        REMEDIAL_TIER if path == PATH_REMEDIAL
+        else TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
+    )
+
     if current_week > (batch.total_weeks or 0):
         return {"success": True, "status": "program_completed", "week": current_week}
-
-    # Determine path: Core or Remedial
-    path = _resolve_path(student, batch, bpr, current_week)
-
-    # Get the right LearningUnit
-    if path == PATH_REMEDIAL:
-        tier = REMEDIAL_TIER
-    else:
-        tier = TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
 
     learning_unit = _get_learning_unit(course_level, current_week, tier)
     if not learning_unit:
@@ -305,8 +319,29 @@ def get_next_content(student_id, course_level=None):
             return {"success": False, "status": "batch_not_started",
                     "error_detail": "Batch has not started yet"}
 
-        # Determine effective week: student may be ahead of or behind calendar
-        current_week = _get_effective_week(student, batch, calendar_week)
+        # PE-canonical SP read (task #71, 2026-05-23): the state machine
+        # owns current_week, current_path, and current_tier — these are
+        # written by T6b (failed-feedback → Remedial), T14 (week_advance →
+        # Core+tier), T8 (start_remedial), etc. The legacy `_resolve_path(...)`
+        # helper recomputed path from prior-week submission validity, which
+        # could disagree with the state machine's recorded value (e.g., a
+        # T6b-routed student would have pe.current_path=Remedial while
+        # _resolve_path could return Core if the prior-week submission was
+        # technically "valid" but the AI flagged it). Same divergence risk
+        # for current_tier (Manu's set-by-T14 vs locally-recomputed by week).
+        # Diagnostic against palv2-test-BT52231 (45 PEs) confirmed 0 divergent —
+        # this is a preemptive fix with no current-cohort behavior change.
+        pe = get_active_pe(student.name, batch.name)
+        if not pe:
+            return {"success": False, "status": "no_active_pe",
+                    "error_detail": "No active ProgramEnrollment for this student"}
+
+        current_week = pe.current_week or _get_effective_week(student, batch, calendar_week)
+        path = pe.current_path or PATH_CORE
+        tier = pe.current_tier or (
+            REMEDIAL_TIER if path == PATH_REMEDIAL
+            else TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
+        )
 
         # Check content blocking: if student didn't submit previous week,
         # they can't access current week content (escalation handles follow-up).
@@ -324,15 +359,9 @@ def get_next_content(student_id, course_level=None):
                         "calendar_week": calendar_week,
                     }
 
-        # Resolve path: Core or Remedial
-        path = _resolve_path(student, batch, bpr, current_week)
-        if path == PATH_REMEDIAL:
-            tier = REMEDIAL_TIER
-        else:
-            tier = TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
-
         learning_unit = _get_learning_unit(course_level, current_week, tier)
         if not learning_unit and path == PATH_REMEDIAL:
+            # Defensive fallback: missing Remedial LU → serve Core for this week.
             tier = TIER_BY_WEEK.get(current_week, DEFAULT_TIER)
             learning_unit = _get_learning_unit(course_level, current_week, tier)
             path = PATH_CORE
@@ -377,10 +406,41 @@ def get_next_content(student_id, course_level=None):
                 "content_id": progress_data.get("active_content_id"),
             }
 
-        # Ensure progress points to correct LU for current week/path
-        if progress_data["stage"] != learning_unit:
+        # ── SSP-canonical auto-correct (task #71 + CR-008 extension 2026-05-23) ──
+        # The legacy trigger only caught LU drift ("stage mismatch"). It missed
+        # two real divergence scenarios:
+        #
+        #   1. SSP.current_week is behind PE.current_week. complete_content
+        #      bumps SSP.current_week in its advance branch, but the legacy
+        #      cursor can lag if PE advanced via T14 without an immediate
+        #      complete_content call.
+        #
+        #   2. New week just started (pe.weekly_video_done = 0, set by T14
+        #      as the lazy-reset trigger signal) AND SSP.current_content_index
+        #      has advanced past 0 from a previous flow. The student needs the
+        #      FIRST content item of the new week (typically the VideoClass).
+        #      Without this reset, the API serves item N — silently skipping
+        #      items 0..N-1. Observed in ST00051359's case where SSP had
+        #      content_index=1 (Quiz) while pe.weekly_video_done=0 (no W2
+        #      video watched yet).
+        #
+        # All three conditions converge on the same fix: align SSP to PE +
+        # reset content_index to 0. Atomic via a single set_value.
+        ssp_week = cint(progress_data.get("current_week") or 0)
+        ssp_content_index = cint(progress_data.get("current_content_index") or 0)
+        new_week_no_video_yet = (
+            not bool(pe.weekly_video_done) and ssp_content_index > 0
+        )
+        needs_reset = (
+            progress_data["stage"] != learning_unit
+            or ssp_week != current_week
+            or new_week_no_video_yet
+        )
+
+        if needs_reset:
             frappe.db.set_value("StudentStageProgress", progress_data["name"], {
                 "stage": learning_unit,
+                "current_week": current_week,                # NEW: align to PE
                 "current_tier": tier,
                 "is_on_remedial": 1 if tier == REMEDIAL_TIER else 0,
                 "current_content_index": 0,
@@ -388,6 +448,8 @@ def get_next_content(student_id, course_level=None):
             })
             # Removed mid-handler commit per L-017 — Frappe commits at request-end.
             progress_data["stage"] = learning_unit
+            progress_data["current_week"] = current_week
+            progress_data["current_tier"] = tier
             progress_data["current_content_index"] = 0
 
         # Get content items for current LU
