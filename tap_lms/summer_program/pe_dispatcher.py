@@ -657,13 +657,43 @@ def _trigger_flow(flow_id, glific_id, pe_name, action_label):
 
 
 def _get_escalation_steps_for_pe(pe):
-    """Get escalation step configs for a PE's archetype."""
+    """Get escalation step configs for a PE's archetype × current_path.
+
+    Path-aware lookup (task #68 / 2026-05-22):
+      - Pass `pe.current_path` (Core | Remedial) to `_get_escalation_steps`.
+      - If the PE is on Remedial AND the Remedial ArchetypeConfig has no
+        active escalation steps configured, fall back to Core's chain so
+        the dispatcher still has work to do. This prevents a misconfigured
+        Remedial config from silently breaking the escalation handler — a
+        fallback is a better failure mode than "student receives no
+        escalation messages at all and silently drops at grace."
+      - Defaults to PATH_CORE if pe.current_path is empty (defensive — the
+        field is set at enrollment and on T14/T6b, but legacy PEs may
+        have it null).
+    """
     from tap_lms.summer_program.student_progression_sp import _get_escalation_steps
+    from tap_lms.summer_program.constants import PATH_CORE, PATH_REMEDIAL
 
     try:
         student = frappe.get_doc("Student", pe.student)
         batch = frappe.get_doc("Batch", pe.batch)
-        return _get_escalation_steps(student, batch)
+        path = pe.current_path or PATH_CORE
+
+        steps = _get_escalation_steps(student, batch, path=path)
+
+        # Fallback: Remedial config is empty → use Core's chain so the
+        # student still gets nudged. Log so operators notice missing config.
+        if not steps and path == PATH_REMEDIAL:
+            frappe.logger().warning(
+                f"_get_escalation_steps_for_pe: PE {pe.name} is on Remedial "
+                f"but archetype={student.archetype}, arm={student.experiment_arm} "
+                f"has no Remedial escalation_steps configured — falling back "
+                f"to Core's chain. Populate the Remedial ArchetypeConfig to "
+                f"silence this warning."
+            )
+            steps = _get_escalation_steps(student, batch, path=PATH_CORE)
+
+        return steps
     except Exception:
         return []
 

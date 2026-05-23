@@ -65,6 +65,29 @@ def transition(pe, new_state, trigger_source="scheduler", extra_updates=None, sk
     """
     Execute a state transition on a ProgramEnrollment.
 
+    L-011 race-safety (task #27, 2026-05-22):
+      Previously this function did `pe.save(ignore_permissions=True)` which
+      writes EVERY column on the row, not just the dirty ones. Concurrent
+      atomic bumps to columns NOT in `extra_updates` (total_*/weekly_*/
+      grace_*/submission_count/weekly_video_done) — performed by
+      activity_points, quiz_points, save_submission's primary claim, and
+      _award_submission_points_atomic — were silently overwritten by the
+      stale in-memory values pe was loaded with.
+
+      Now uses `frappe.db.set_value` with the targeted updates dict —
+      touches ONLY the fields actually being changed, so concurrent
+      atomic bumps survive. Followed by `pe.reload()` so the in-memory
+      doc reflects (a) our updates AND (b) any concurrent column bumps;
+      downstream code (log_state_transition, _enqueue_contact_field_sync,
+      maintain_collections) sees fresh state, and the Glific contact
+      field push carries the post-bump values in the same payload as
+      the state change.
+
+      Safe because ProgramEnrollment has no controller validate/
+      before_save/after_save hooks and no doc_events registered in
+      hooks.py — the previous pe.save() was just performing the row
+      write, no business-logic hooks to preserve.
+
     Args:
         pe: ProgramEnrollment doc (must be loaded, not just name)
         new_state: target resolved_flow_state
@@ -77,21 +100,32 @@ def transition(pe, new_state, trigger_source="scheduler", extra_updates=None, sk
     """
     old_state = pe.resolved_flow_state
 
-    # Apply state change
-    pe.resolved_flow_state = new_state
-    pe.last_label_change_at = now_datetime()
-
-    # Apply extra updates
+    # Build the targeted updates dict — only fields actually changing.
+    # Concurrent atomic bumps to other columns (handled by activity_points,
+    # quiz_points, feedback hook) will survive because they're not in the
+    # UPDATE SET clause.
+    updates = {
+        "resolved_flow_state": new_state,
+        "last_label_change_at": now_datetime(),
+    }
     if extra_updates:
-        for field, value in extra_updates.items():
-            setattr(pe, field, value)
+        updates.update(extra_updates)
 
-    pe.save(ignore_permissions=True)
+    # Targeted SQL UPDATE via Frappe ORM. set_value updates `modified` and
+    # `modified_by` by default — same audit-trail behavior as pe.save().
+    frappe.db.set_value("ProgramEnrollment", pe.name, updates)
+
+    # Reload the in-memory doc so downstream code (logging, Glific push,
+    # collection maintenance) sees fresh DB state — including any
+    # concurrent column bumps that happened between pe load and now.
+    pe.reload()
 
     # Log the transition
     log_state_transition(pe, old_state, new_state, trigger_source)
 
-    # Update Glific contact fields (async — runs in background worker)
+    # Update Glific contact fields (async — runs in background worker).
+    # The payload built here now reflects ALL post-update column values,
+    # including concurrent atomic bumps that pe.reload() picked up.
     if not skip_glific and pe.glific_id:
         _enqueue_contact_field_sync(pe)
 
@@ -245,7 +279,22 @@ def _sync_contact_fields_job(glific_id, fields, pe_name, retry_count=0, student_
     this revision minimal.
     """
     try:
-        update_contact_fields(glific_id, fields)
+        # Fix 2026-05-22 (task #5): update_contact_fields returns True/False
+        # and writes diagnostics to frappe.logger().error on every failure
+        # mode (Glific GraphQL fetch errors, contact-not-found, mutation
+        # errors, network errors, catch-all) — it NEVER raises. The except
+        # branch below only fires on raised exceptions, so prior to this
+        # fix every False return silently exited and the retry/DLQ machinery
+        # never ran. Raise an explicit marker exception on False so failures
+        # actually flow through retries + the DLQ log entry. Without this
+        # guard the file-log line was the ONLY signal of a dropped write.
+        ok = update_contact_fields(glific_id, fields)
+        if not ok:
+            raise RuntimeError(
+                f"update_contact_fields returned False for contact "
+                f"{glific_id} (PE {pe_name}); see prior logger().error "
+                f"for the specific failure mode."
+            )
     except Exception as e:
         retry_count = (retry_count or 0) + 1
         if retry_count <= GLIFIC_SYNC_MAX_RETRIES:
@@ -428,16 +477,19 @@ def t2_start_escalation(pe, step_number=1, escalation_type="", trigger_source="s
 def t3_escalation_submission(pe, points=0, trigger_source="flow_callback"):
     """T3: normal_escalation → submitted_awaiting_feedback.
 
-    CR-002 v2: extends the existing updates dict to bump the new submission
-    counters (`total_submission_points`, `weekly_submission_points`), set the
-    sticky `weekly_submission_done` flag, and increment `current_streak` and
-    `special_gems` — all in the same atomic save. Streak/gems increment AT
-    SUBMISSION TIME, not deferred to T19.
+    CR-002 v2: sets the sticky `weekly_submission_done` flag and increments
+    `current_streak` + `special_gems`. Streak/gems increment AT SUBMISSION
+    TIME, not deferred to T19.
 
     CR-003 follow-up (2026-05-13): also clears the grace clock fields
     (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
     primary submission ends the week's grace window even if the student
     submitted before the dispatcher escalated all the way to grace_waiting.
+
+    CR-007 follow-up (2026-05-22): `points` is ignored — submission point
+    awards run later in feedback_consumer_hook via atomic SQL. See
+    t7_core_submission's docstring for the L-011 rationale. DO NOT re-add
+    `+ points` reads on the point-stream columns.
 
     NOTE: submission_count is owned by save_submission._try_claim_primary
     (atomic claim); state-machine transitions no longer bump it — see
@@ -445,13 +497,13 @@ def t3_escalation_submission(pe, points=0, trigger_source="flow_callback"):
     double-increment that occurred when _try_claim_primary's UPDATE +
     this transition's update both incremented the column.
     """
+    # CR-007 follow-up (2026-05-22): points parameter intentionally unused.
+    del points  # silence linter; preserve signature
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "last_submission_at": now_datetime(),
-        "total_points": (pe.total_points or 0) + points,
-        # CR-002 v2: submission-points split + streak/gems/sticky flag
-        "total_submission_points": (pe.total_submission_points or 0) + points,
-        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        # CR-002 v2: streak/gems/sticky flag set explicitly. Point-stream
+        # columns owned by the feedback hook's atomic SQL bump.
         "weekly_submission_done": 1,
         "current_streak": (pe.current_streak or 0) + 1,
         "special_gems": (pe.special_gems or 0) + 1,
@@ -566,28 +618,37 @@ def t6b_failed_feedback_to_remedial(pe, week_rule=None, trigger_source="microser
 def t7_core_submission(pe, points=0, trigger_source="flow_callback"):
     """T7: normal_content_delivery → submitted_awaiting_feedback.
 
-    CR-002 v2: extends the existing updates dict to bump the new submission
-    counters (`total_submission_points`, `weekly_submission_points`), set the
-    sticky `weekly_submission_done` flag, and increment `current_streak` and
-    `special_gems` — all in the same atomic save. Streak/gems increment AT
-    SUBMISSION TIME, not deferred to T19.
+    CR-002 v2: sets the sticky `weekly_submission_done` flag and increments
+    `current_streak` + `special_gems`. Streak/gems increment AT SUBMISSION
+    TIME, not deferred to T19.
 
     CR-003 follow-up (2026-05-13): also clears the grace clock fields
     (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
     primary submission ends the week's grace window (which the activity-points
     handler armed when the student watched their first VideoClass).
 
+    CR-007 follow-up (2026-05-22): the `points` parameter is retained for
+    signature compatibility but IGNORED. Submission point awards are now
+    owned by `feedback_consumer_hook._award_submission_points_atomic`
+    (atomic COALESCE SQL), which runs after AI validation. The previous
+    `(pe.X or 0) + points` reads on total_points / total_submission_points
+    / weekly_submission_points opened a read-modify-write window that
+    clobbered concurrent atomic bumps from activity_points / quiz_points
+    / the feedback hook (L-011 violation). DO NOT re-add those lines.
+
     NOTE: submission_count is owned by save_submission._try_claim_primary
     (atomic claim); state-machine transitions no longer bump it — see
     task #80 / audit 2026-05-15.
     """
+    # CR-007 follow-up (2026-05-22): points parameter intentionally unused.
+    # The atomic award fires later in feedback_consumer_hook.
+    del points  # silence linter; preserve signature
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "last_submission_at": now_datetime(),
-        "total_points": (pe.total_points or 0) + points,
-        # CR-002 v2: submission-points split + streak/gems/sticky flag
-        "total_submission_points": (pe.total_submission_points or 0) + points,
-        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        # CR-002 v2: streak/gems/sticky flag set explicitly (not additive on
+        # a stale read). Point-stream columns are owned by the feedback
+        # hook's atomic SQL bump; do NOT include them here.
         "weekly_submission_done": 1,
         "current_streak": (pe.current_streak or 0) + 1,
         "special_gems": (pe.special_gems or 0) + 1,
@@ -618,27 +679,30 @@ def t8_start_remedial_escalation(pe, step_number=1, escalation_type="", trigger_
 def t9_remedial_submission(pe, points=0, trigger_source="flow_callback"):
     """T9: remedial_content_delivery → submitted_awaiting_feedback.
 
-    CR-002 v2: extends the existing updates dict to bump the new submission
-    counters (`total_submission_points`, `weekly_submission_points`), set the
-    sticky `weekly_submission_done` flag, and increment `current_streak` and
-    `special_gems` — all in the same atomic save. Streak/gems increment AT
-    SUBMISSION TIME, not deferred to T19.
+    CR-002 v2: sets the sticky `weekly_submission_done` flag and increments
+    `current_streak` + `special_gems`. Streak/gems increment AT SUBMISSION
+    TIME, not deferred to T19.
 
     CR-003 follow-up (2026-05-13): also clears the grace clock fields
     (`in_grace_window`, `grace_window_end_at`, `grace_window_start`). A
     primary submission ends the week's grace window.
 
+    CR-007 follow-up (2026-05-22): `points` is ignored — submission point
+    awards run later in feedback_consumer_hook via atomic SQL. See
+    t7_core_submission's docstring for the L-011 rationale. DO NOT re-add
+    `+ points` reads on the point-stream columns.
+
     NOTE: submission_count is owned by save_submission._try_claim_primary
     (atomic claim); state-machine transitions no longer bump it — see
     task #80 / audit 2026-05-15.
     """
+    # CR-007 follow-up (2026-05-22): points parameter intentionally unused.
+    del points  # silence linter; preserve signature
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "last_submission_at": now_datetime(),
-        "total_points": (pe.total_points or 0) + points,
-        # CR-002 v2: submission-points split + streak/gems/sticky flag
-        "total_submission_points": (pe.total_submission_points or 0) + points,
-        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        # CR-002 v2: streak/gems/sticky flag set explicitly. Point-stream
+        # columns owned by the feedback hook's atomic SQL bump.
         "weekly_submission_done": 1,
         "current_streak": (pe.current_streak or 0) + 1,
         "special_gems": (pe.special_gems or 0) + 1,
@@ -845,26 +909,29 @@ def t16_program_completed(pe, trigger_source="scheduler"):
 def t17_grace_submission(pe, points=0, trigger_source="flow_callback"):
     """T17: grace_waiting → submitted_awaiting_feedback.
 
-    CR-002 v2: extends the existing updates dict to bump the new submission
-    counters (`total_submission_points`, `weekly_submission_points`), set the
-    sticky `weekly_submission_done` flag, and increment `current_streak` and
-    `special_gems` — all in the same atomic save. Streak/gems increment AT
-    SUBMISSION TIME, not deferred to T19.
+    CR-002 v2: sets the sticky `weekly_submission_done` flag and increments
+    `current_streak` + `special_gems`. Streak/gems increment AT SUBMISSION
+    TIME, not deferred to T19.
+
+    CR-007 follow-up (2026-05-22): `points` is ignored — submission point
+    awards run later in feedback_consumer_hook via atomic SQL. See
+    t7_core_submission's docstring for the L-011 rationale. DO NOT re-add
+    `+ points` reads on the point-stream columns.
 
     NOTE: submission_count is owned by save_submission._try_claim_primary
     (atomic claim); state-machine transitions no longer bump it — see
     task #80 / audit 2026-05-15.
     """
+    # CR-007 follow-up (2026-05-22): points parameter intentionally unused.
+    del points  # silence linter; preserve signature
     return transition(pe, STATE_SUBMITTED_AWAITING, trigger_source, {
         "journey_label": LABEL_SUBMITTED,
         "in_grace_window": 0,
         "grace_window_start": None,
         "grace_window_end_at": None,
         "last_submission_at": now_datetime(),
-        "total_points": (pe.total_points or 0) + points,
-        # CR-002 v2: submission-points split + streak/gems/sticky flag
-        "total_submission_points": (pe.total_submission_points or 0) + points,
-        "weekly_submission_points": (pe.weekly_submission_points or 0) + points,
+        # CR-002 v2: streak/gems/sticky flag set explicitly. Point-stream
+        # columns owned by the feedback hook's atomic SQL bump.
         "weekly_submission_done": 1,
         "current_streak": (pe.current_streak or 0) + 1,
         "special_gems": (pe.special_gems or 0) + 1,
