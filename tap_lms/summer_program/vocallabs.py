@@ -36,10 +36,29 @@ from tap_lms.summer_program.constants import (
     VOCALLABS_MAX_RETRIES,
     VOCALLABS_RETRY_LOG_TITLE,
     VOCALLABS_DLQ_LOG_TITLE,
+    VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE,
+    VOCALLABS_DUPLICATE_PROSPECT_CONSTRAINT,
     VOCALLABS_HTTP_TIMEOUT_SECONDS,
     VOCALLABS_TOKEN_CACHE_KEY,
     VOCALLABS_DEFAULT_TOKEN_TTL,
 )
+
+
+class PermanentVocallabsError(Exception):
+    """Raised for Vocallabs failures that MUST NOT be retried.
+
+    Distinguishes "the parent's phone is already in the prospect group, so
+    addMultipleContactsToGroup can never insert again" (permanent — retrying
+    just wastes worker time and pollutes Error Log) from real transient
+    failures like 502s, network blips, or auth issues (transient — retry).
+
+    Today the only producer is the duplicate-prospect detection in
+    `_call_vocallabs`. Until task #81 lands a Vocallabs lookup endpoint, the
+    only safe action is: log it under a dedicated title, return False, and
+    let the dispatcher continue toward drop on the existing schedule
+    (CR-003 §E4 — a Vocallabs failure does NOT extend the grace window).
+    """
+    pass
 
 
 # ════════════════════════════════════════════════════════════
@@ -139,9 +158,14 @@ def initiate_parent_call(pe_name, escalation_step, retry_count=0):
         if not token:
             raise RuntimeError("Vocallabs auth token fetch returned empty token")
 
+        # Task #81: pass the student doc so _call_vocallabs can read
+        # Student.vocallabs_prospect_id (cached prospect_id from the first
+        # ever parent_call to this phone) and skip the add-to-group step
+        # when it's populated.
         call_response = _call_vocallabs(
             settings=settings,
             token=token,
+            student=student,
             parent_phone=parent_phone,
             student_name=_student_display(student),
             status_text=status_text,
@@ -423,8 +447,23 @@ def _student_display(student):
 # ════════════════════════════════════════════════════════════
 
 
-def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
-    """Run steps 2 + 3 of the Vocallabs sequence.
+def _call_vocallabs(settings, token, student, parent_phone, student_name, status_text):
+    """Run the Vocallabs sequence, reusing a cached prospect_id when possible.
+
+    Cache-on-Student design (task #81):
+      - `Student.vocallabs_prospect_id` stores the UUID Vocallabs returned the
+        FIRST time addMultipleContactsToGroup ran for this student's parent
+        phone.
+      - On subsequent parent_calls (next week, repeat escalation step,
+        second sibling sharing the same phone via a separate Student row
+        that's already had its first call), we skip the add step entirely
+        and go straight to initiateVocallabsCall with the cached id.
+      - First-ever call: add step → cache returned id on Student → call.
+      - First call but phone already in Vocallabs (cold cache + stale data
+        in their system, e.g. test pollution): we hit the uniqueness
+        violation and raise PermanentVocallabsError. The cold-cache
+        recovery requires a Vocallabs lookup-by-phone endpoint (task #81
+        remaining scope).
 
     Verified API contract (Postman 2026-05-21):
 
@@ -457,23 +496,76 @@ def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
       Body: {"agentId": <agent_id>, "prospect_id": <uuid from step 2>}
       Note `prospect_id` is snake_case (not camelCase like `agentId`).
 
-    Returns the final call response dict on success, None on failure
-    (caller treats this as a runtime error and retries via P-007).
+    Step 2.5 — POST {service_url}/b2b/vocallabs/updateContactData (ONLY on
+    cache-hit path, to refresh the per-call data block before initiating)
+      Body: {"prospect_id": <uuid>, "data": {"contact": ..., "student_name":
+            ..., "status": ...}}
+      The Vocallabs `data` block is bound to the prospect record (not the
+      call), so when we re-use a cached prospect_id across weeks we must
+      mutate it before each call to surface the CURRENT week's status_text
+      to the agent. Failure here is non-blocking — the call still places
+      with whatever data is on the prospect record (possibly stale).
+      Sibling race caveat: if two siblings share a parent phone AND share
+      a prospect_id, simultaneous escalations could race on this update.
+      For MVP we accept the race (rare in practice; the team configures
+      status_template to be sibling-agnostic when needed via
+      ParentCallConfig content rather than the code).
+
+    Note: the status_template comes from the team-configured
+    ParentCallConfig (per-week via UnitContentItem on LearningUnit, else
+    VoiceAgentSettings.default_parent_call_config). The code never
+    hard-codes content — `_resolve_parent_call_config` + `_render_status_template`
+    handle resolution. Whatever template the team configures for this
+    week is what gets pushed via updateContactData.
+
+    Returns the final call response dict on success; raises on failure
+    (caller treats RuntimeError as transient and PermanentVocallabsError
+    as no-retry).
     """
     service_url = (settings.service_url or "").rstrip("/")
     auth_headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-
-    # Vocallabs requires every prospect to have a `name`. We don't have the
-    # parent's actual name stored (CR-003 just uses Student.phone), so use
-    # the MVP placeholder "Parent of <student>" — it's what the agent's
-    # template variable {{ contact }} will resolve to during the call.
-    # A future CR can add Student.parent_name and replace this.
     parent_display = f"Parent of {student_name}" if student_name else "Parent"
+    # The data block consumed by the Vocallabs agent at call time. Same
+    # keys whether we're inserting (addMultipleContactsToGroup) or
+    # refreshing (updateContactData) — only one source of truth.
+    data_block = {
+        "contact": parent_display,
+        "student_name": student_name,
+        "status": status_text,
+    }
 
-    # ── Step 2: add parent contact to default group ─────────
+    # ── Cache hit: refresh data then call ─────────────────
+    cached_prospect_id = (getattr(student, "vocallabs_prospect_id", "") or "").strip()
+    if cached_prospect_id:
+        # Refresh the prospect's `data` block so the agent uses THIS call's
+        # rendered template (per the currently-resolved ParentCallConfig for
+        # this week + escalation), not whatever was set on the original
+        # insert. Failure here is logged + swallowed — the call still places
+        # with stale data (better than not calling at all).
+        _refresh_contact_data_best_effort(
+            service_url=service_url,
+            auth_headers=auth_headers,
+            prospect_id=cached_prospect_id,
+            data_block=data_block,
+        )
+        # Note: we trust this id is still valid in Vocallabs. If Vocallabs
+        # has purged it (manual deletion / TTL on their side), the
+        # initiateVocallabsCall below will fail with a runtime error and
+        # retry via the normal transient path. Until that becomes a real
+        # problem, the cached id is treated as authoritative.
+        return _post_initiate_call(
+            service_url=service_url,
+            auth_headers=auth_headers,
+            agent_id=settings.agent_id,
+            prospect_id=cached_prospect_id,
+        )
+
+    # ── Cache miss: insert into prospect group ────────────
+    # addMultipleContactsToGroup sets the data block fresh during insert,
+    # so no separate updateContactData call is needed on this path.
     add_payload = {
         "prospects": [
             {
@@ -482,12 +574,9 @@ def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
                 # `data` is the per-contact variables block consumed by the
                 # Vocallabs agent's prompt template at call time. Keys must
                 # match what the agent prompt references — `contact`,
-                # `student_name`, `status` per the Postman reference.
-                "data": {
-                    "contact": parent_display,
-                    "student_name": student_name,
-                    "status": status_text,
-                },
+                # `student_name`, `status` per the Postman reference. Same
+                # block used by the cache-hit refresh path above.
+                "data": data_block,
                 "prospect_group_id": settings.default_contact_group_id or "",
                 "client_id": settings.client_id or "",
             },
@@ -500,25 +589,140 @@ def _call_vocallabs(settings, token, parent_phone, student_name, status_text):
     )
     prospect_id = _extract_prospect_id(add_response)
     if not prospect_id:
+        # Task #80: classify the duplicate-prospect Hasura uniqueness
+        # violation as a permanent (no-retry) failure. Production saw 12
+        # transient retries + 2 DLQ entries in ~75 seconds for two test PEs
+        # whose parent phones were already in the Vocallabs prospect group
+        # from earlier runs (constraint
+        # `prospects_client_id_prospect_group_id_phone_key`). Retrying
+        # cannot succeed — the same payload will always conflict. Until
+        # task #81's lookup-existing-prospect path lands, the dispatcher
+        # gets back False immediately and the PE continues toward drop.
+        if _is_duplicate_prospect_response(add_response):
+            raise PermanentVocallabsError(
+                f"Vocallabs: parent phone already in prospect group "
+                f"(constraint={VOCALLABS_DUPLICATE_PROSPECT_CONSTRAINT}); "
+                f"Student.vocallabs_prospect_id is empty and Vocallabs "
+                f"lookup-by-phone endpoint is not yet integrated. "
+                f"Call cannot be placed (task #81 remaining scope). "
+                f"response={_safe_summary(add_response)}"
+            )
         raise RuntimeError(
             f"Vocallabs: addMultipleContactsToGroup returned no prospect_id; "
             f"response={_safe_summary(add_response)}"
         )
 
-    # ── Step 3: initiate the call ───────────────────────────
-    # Note: `agentId` is camelCase but `prospect_id` is snake_case per the
-    # verified Postman contract. Inconsistent on Vocallabs' side; don't fix
-    # this to be consistent — match the API.
+    # Cache the prospect_id BEFORE making the call. If the call step fails
+    # (HTTP error, etc.), the retry can skip step 2 next time and recover.
+    _store_prospect_id(student, prospect_id)
+
+    return _post_initiate_call(
+        service_url=service_url,
+        auth_headers=auth_headers,
+        agent_id=settings.agent_id,
+        prospect_id=prospect_id,
+    )
+
+
+def _post_initiate_call(service_url, auth_headers, agent_id, prospect_id):
+    """Step 3 — POST /b2b/vocallabs/initiateVocallabsCall.
+
+    Split out so both the cache-hit and cache-miss branches share one
+    code path. Returns the response dict (caller treats non-empty as
+    success); raises on HTTP error.
+
+    Note: `agentId` is camelCase but `prospect_id` is snake_case per the
+    verified Postman contract. Inconsistent on Vocallabs' side; don't fix
+    this to be consistent — match the API.
+    """
     call_payload = {
-        "agentId": settings.agent_id,
+        "agentId": agent_id,
         "prospect_id": prospect_id,
     }
-    call_response = _http_post(
+    return _http_post(
         url=f"{service_url}/b2b/vocallabs/initiateVocallabsCall",
         payload=call_payload,
         headers=auth_headers,
     )
-    return call_response
+
+
+def _refresh_contact_data_best_effort(service_url, auth_headers, prospect_id, data_block):
+    """POST /b2b/vocallabs/updateContactData to refresh the prospect's data
+    block right before initiating the call (cache-hit path only).
+
+    Why this exists: Vocallabs binds the per-call variables (`contact`,
+    `student_name`, `status`) to the PROSPECT record, not the call. When
+    we re-use a cached prospect_id across weeks, the original `data` from
+    addMultipleContactsToGroup is stale — week 1's rendered status_text
+    is still there when we call in week 3. This step pushes the freshly
+    rendered text (from the currently resolved ParentCallConfig for THIS
+    week) onto the prospect before the call fires.
+
+    Best-effort by design: any failure here is logged + swallowed and the
+    call proceeds with whatever data is on the prospect record. Failing
+    closed (refusing to call on update failure) would cost us a parent
+    contact attempt that we could have made; failing open just means the
+    agent might speak slightly stale variables.
+
+    Body shape (per Vocallabs docs):
+        POST /b2b/vocallabs/updateContactData
+        {"prospect_id": <uuid>, "data": {<key>: <value>, ...}}
+
+    The team configures status_template via ParentCallConfig (per-week via
+    UnitContentItem on LearningUnit, else the default on VoiceAgentSettings).
+    Whatever's resolved + rendered for this week shows up in data_block —
+    the code does not hard-code any content.
+    """
+    try:
+        _http_post(
+            url=f"{service_url}/b2b/vocallabs/updateContactData",
+            payload={"prospect_id": prospect_id, "data": data_block},
+            headers=auth_headers,
+        )
+    except Exception as e:
+        # Non-blocking: the call still places. Status text on the prospect
+        # record may be stale (from a prior week / step), but that's better
+        # than not calling the parent at all.
+        frappe.log_error(
+            f"Vocallabs: updateContactData failed for prospect={prospect_id}: {e}. "
+            f"Call will proceed with stale data on prospect record.",
+            "SP Vocallabs UpdateData",
+        )
+
+
+def _store_prospect_id(student, prospect_id):
+    """Persist the Vocallabs prospect_id on Student.vocallabs_prospect_id.
+
+    Uses `frappe.db.set_value` (not student.save()) to avoid running the
+    full doc lifecycle — this is a single-column write happening in a
+    background job and we don't want it to fire validation, hooks, or
+    timestamp bumps.
+
+    Failures here MUST NOT bubble — we've already obtained a valid
+    prospect_id from Vocallabs and the call will still place. A failed
+    cache write just means the next call will try addMultipleContacts
+    again and re-cache (or fail with PermanentVocallabsError, which is
+    visible in Error Log under the dedicated title).
+    """
+    try:
+        frappe.db.set_value(
+            "Student", student.name,
+            "vocallabs_prospect_id", prospect_id,
+            update_modified=False,
+        )
+        # Reflect it on the in-memory doc too so a re-entrant call within
+        # the same transaction sees the cached value without a DB round-trip.
+        try:
+            student.vocallabs_prospect_id = prospect_id
+        except Exception:
+            pass
+    except Exception as e:
+        frappe.log_error(
+            f"Vocallabs: failed to cache prospect_id={prospect_id} on "
+            f"Student {student.name}: {e}. Call still placed; next call "
+            f"will re-add to Vocallabs and likely hit duplicate-prospect.",
+            "SP Vocallabs Cache",
+        )
 
 
 def _extract_prospect_id(response):
@@ -555,6 +759,60 @@ def _extract_prospect_id(response):
         or data.get("prospect_id")
         or data.get("id")
     )
+
+
+def _is_duplicate_prospect_response(response):
+    """Return True if the addMultipleContactsToGroup response is the Hasura
+    uniqueness-constraint violation indicating the parent's phone is already
+    in the prospect group.
+
+    Verified shape (production, 2026-05-23):
+        {"errors": [
+          {"message": "Uniqueness violation. duplicate key value violates
+                       unique constraint
+                       \\"prospects_client_id_prospect_group_id_phone_key\\"",
+           "extensions": {"code": "constraint-violation",
+                          "path": "$.selectionSet.insert_vocallabs_prospects.args.objects"}}
+        ]}
+
+    Matching strategy:
+      - Substring search for the constraint name anywhere in the response —
+        most specific signal (Vocallabs may change the wrapper format but
+        the underlying constraint name is stable).
+      - Fallback: extensions.code == "constraint-violation" in any errors[]
+        entry. Catches the case where Vocallabs renames the constraint but
+        keeps the GraphQL extension code.
+
+    Defensive against shape variation: lists are unwrapped, non-dicts return
+    False rather than raising.
+    """
+    if response is None:
+        return False
+    if isinstance(response, list):
+        response = response[0] if response else {}
+    if not isinstance(response, dict):
+        return False
+
+    # Cheap path: serialise the whole response and look for the constraint
+    # name. Catches the message anywhere — top-level errors[], nested under
+    # data, or in some future repackaging.
+    try:
+        text = json.dumps(response, default=str)
+    except Exception:
+        text = str(response)
+    if VOCALLABS_DUPLICATE_PROSPECT_CONSTRAINT in text:
+        return True
+
+    # Fallback: walk errors[] and check the GraphQL extension code.
+    errors = response.get("errors")
+    if isinstance(errors, list):
+        for err in errors:
+            if not isinstance(err, dict):
+                continue
+            extensions = err.get("extensions") or {}
+            if extensions.get("code") == "constraint-violation":
+                return True
+    return False
 
 
 def _http_post(url, payload, headers):
@@ -610,13 +868,39 @@ def _handle_failure(pe, escalation_step, parent_phone, error, retry_count):
     5 retries on transient failures, then DLQ to Error Log with a payload
     the operator can replay manually.
 
+    Permanent failures (task #80 — `PermanentVocallabsError`) short-circuit:
+    they get a single Error Log entry under a dedicated title and return
+    False immediately. Retrying cannot help (e.g., the duplicate-prospect
+    constraint will always conflict with the same payload), so retries
+    just waste worker cycles and inflate Error Log noise.
+
     Per CR-003 §E4 a Vocallabs DLQ does NOT extend the grace window. The
     PE proceeds toward drop on its normal schedule.
     """
-    retry_count = (retry_count or 0) + 1
     pe_name = pe.name
     escalation_order = escalation_step.get("escalation_order")
     week = pe.current_week
+
+    # ── Permanent-failure short-circuit (task #80) ──────────
+    if isinstance(error, PermanentVocallabsError):
+        frappe.log_error(
+            title=VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE,
+            message=json.dumps({
+                "reason": "duplicate_prospect_no_retry",
+                "student_id": pe.student,
+                "pe_name": pe_name,
+                "week": week,
+                "escalation_order": escalation_order,
+                "parent_phone": parent_phone,
+                "final_error": str(error),
+                # No retries_attempted — this is a single-shot permanent fail.
+                # Follow-up: task #81 (lookup existing prospect_id).
+                "followup_task": 81,
+            }, indent=2, default=str),
+        )
+        return False
+
+    retry_count = (retry_count or 0) + 1
 
     if retry_count <= VOCALLABS_MAX_RETRIES:
         # Log the transient + re-enqueue (no backoff for parity with the

@@ -23,7 +23,9 @@ from tap_lms.summer_program.constants import (
     PROGRAM_ACTIVE,
     STATE_NORMAL_CONTENT,
     VOCALLABS_DLQ_LOG_TITLE,
+    VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE,
     VOCALLABS_MAX_RETRIES,
+    VOCALLABS_RETRY_LOG_TITLE,
     VOCALLABS_TOKEN_CACHE_KEY,
 )
 
@@ -366,3 +368,558 @@ class TestVocallabsRetry(FrappeTestCase):
             self.assertIn(key, payload, f"DLQ payload missing key {key}")
         self.assertEqual(payload["pe_name"], pe_name)
         self.assertEqual(payload["escalation_order"], 3)
+
+
+# ════════════════════════════════════════════════════════════
+# Task #80: duplicate-prospect permanent-failure path
+# ════════════════════════════════════════════════════════════
+
+
+def _duplicate_prospect_response():
+    """Real Vocallabs/Hasura response shape captured from production
+    (palv2-test-BT52231 Error Log, 2026-05-23 20:07–20:08) when the parent
+    phone is already in the prospect group. Returned with HTTP 200, errors
+    array inside the body — GraphQL convention."""
+    return {
+        "errors": [
+            {
+                "message": (
+                    "Uniqueness violation. duplicate key value violates "
+                    "unique constraint "
+                    "\"prospects_client_id_prospect_group_id_phone_key\""
+                ),
+                "extensions": {
+                    "code": "constraint-violation",
+                    "path": (
+                        "$.selectionSet.insert_vocallabs_prospects."
+                        "args.objects"
+                    ),
+                },
+            }
+        ]
+    }
+
+
+class TestVocallabsDuplicateProspectDetection(FrappeTestCase):
+    """Pure unit tests for the response-shape detector."""
+
+    def test_detects_constraint_name_in_response(self):
+        from tap_lms.summer_program.vocallabs import _is_duplicate_prospect_response
+        self.assertTrue(_is_duplicate_prospect_response(_duplicate_prospect_response()))
+
+    def test_detects_extension_code_when_constraint_name_absent(self):
+        """Fallback path: Vocallabs renames the constraint but keeps the
+        GraphQL extension code `constraint-violation`. We still classify
+        the response as duplicate-prospect."""
+        from tap_lms.summer_program.vocallabs import _is_duplicate_prospect_response
+        response = {
+            "errors": [
+                {
+                    "message": "Uniqueness violation. duplicate key …",
+                    "extensions": {"code": "constraint-violation"},
+                }
+            ]
+        }
+        self.assertTrue(_is_duplicate_prospect_response(response))
+
+    def test_does_not_match_unrelated_responses(self):
+        from tap_lms.summer_program.vocallabs import _is_duplicate_prospect_response
+        # Healthy add-contact response — must NOT be flagged.
+        self.assertFalse(_is_duplicate_prospect_response({
+            "data": {"insert_vocallabs_prospects":
+                     {"returning": [{"id": "p"}], "affected_rows": 1}}
+        }))
+        # Generic GraphQL error (NOT a uniqueness violation) — must NOT be flagged.
+        self.assertFalse(_is_duplicate_prospect_response({
+            "errors": [{"message": "Internal server error",
+                        "extensions": {"code": "internal-error"}}]
+        }))
+        # Defensive — non-dict inputs return False rather than raising.
+        self.assertFalse(_is_duplicate_prospect_response(None))
+        self.assertFalse(_is_duplicate_prospect_response("not a dict"))
+        self.assertFalse(_is_duplicate_prospect_response([]))
+
+
+class TestVocallabsDuplicateProspectPermanentFailure(FrappeTestCase):
+    """End-to-end behavior of `initiate_parent_call` when Vocallabs returns
+    the duplicate-prospect uniqueness violation."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    def setUp(self):
+        frappe.cache().delete_value(VOCALLABS_TOKEN_CACHE_KEY)
+
+    def _make_fake_post(self):
+        """auth ok → addMultipleContactsToGroup returns the uniqueness
+        violation → initiateVocallabsCall must NEVER fire."""
+        def fake_post(url, payload, headers):
+            if url.endswith("/b2b/createAuthToken/"):
+                return {"authToken": "tok-dup"}
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                return _duplicate_prospect_response()
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+                self.fail(
+                    "initiateVocallabsCall must NOT be called when "
+                    "addMultipleContactsToGroup returned uniqueness violation"
+                )
+            self.fail(f"Unexpected URL: {url}")
+        return fake_post
+
+    def test_duplicate_prospect_returns_false_without_retry(self):
+        """Single-shot permanent failure: no retry enqueued, no DLQ entry,
+        function returns False so the dispatcher proceeds toward drop."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student = _ensure_student("dup01", phone="+99999500A")
+        pe_name = _make_pe(self.batch_name, student, "dup01")
+
+        with patch.object(vocallabs, "_http_post", side_effect=self._make_fake_post()), \
+             patch.object(frappe, "enqueue") as fake_enqueue:
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4, etype="parent_call"))
+
+        self.assertFalse(ok)
+        # CRITICAL: no retry was enqueued. The previous bug enqueued 5 retries
+        # for every duplicate-prospect failure, wasting ~15s/call and polluting
+        # Error Log.
+        retry_enqueues = [
+            c for c in fake_enqueue.call_args_list
+            if c.args and c.args[0] == "tap_lms.summer_program.vocallabs.initiate_parent_call"
+        ]
+        self.assertEqual(
+            len(retry_enqueues), 0,
+            "duplicate-prospect must NOT trigger a retry enqueue (task #80)",
+        )
+
+    def test_duplicate_prospect_logs_to_dedicated_title_not_dlq(self):
+        """The Error Log entry uses the duplicate-prospect title, NOT the
+        generic DLQ title — lets ops filter known-state-bug entries from
+        real outages."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student = _ensure_student("dup02", phone="+99999500B")
+        pe_name = _make_pe(self.batch_name, student, "dup02")
+
+        with patch.object(vocallabs, "_http_post", side_effect=self._make_fake_post()), \
+             patch.object(frappe, "log_error", wraps=frappe.log_error) as fake_log:
+            vocallabs.initiate_parent_call(pe_name, _step(order=4, etype="parent_call"))
+
+        titles = [c.kwargs.get("title") for c in fake_log.call_args_list]
+        self.assertIn(
+            VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE, titles,
+            "expected a log entry under the duplicate-prospect title",
+        )
+        self.assertNotIn(
+            VOCALLABS_DLQ_LOG_TITLE, titles,
+            "duplicate-prospect failures must NOT land in the generic DLQ — "
+            "they're a known-state bug, not a real outage",
+        )
+        self.assertNotIn(
+            VOCALLABS_RETRY_LOG_TITLE, titles,
+            "duplicate-prospect failures must NOT emit the transient-retry log",
+        )
+
+    def test_duplicate_prospect_log_payload_has_followup_task(self):
+        """The structured payload identifies this is task #80 and points
+        ops at follow-up task #81 (Vocallabs lookup endpoint) so the
+        problem doesn't get lost in Error Log noise."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student = _ensure_student("dup03", phone="+99999500C")
+        pe_name = _make_pe(self.batch_name, student, "dup03")
+
+        with patch.object(vocallabs, "_http_post", side_effect=self._make_fake_post()), \
+             patch.object(frappe, "log_error", wraps=frappe.log_error) as fake_log:
+            vocallabs.initiate_parent_call(pe_name, _step(order=4, etype="parent_call"))
+
+        dup_calls = [
+            c for c in fake_log.call_args_list
+            if c.kwargs.get("title") == VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE
+        ]
+        self.assertEqual(len(dup_calls), 1)
+        payload = json.loads(dup_calls[0].kwargs["message"])
+        # Documented payload contract.
+        for key in ("reason", "student_id", "pe_name", "week",
+                    "escalation_order", "parent_phone", "final_error",
+                    "followup_task"):
+            self.assertIn(key, payload, f"duplicate-prospect payload missing {key}")
+        self.assertEqual(payload["reason"], "duplicate_prospect_no_retry")
+        self.assertEqual(payload["followup_task"], 81)
+        self.assertEqual(payload["pe_name"], pe_name)
+        self.assertEqual(payload["escalation_order"], 4)
+
+
+# ════════════════════════════════════════════════════════════
+# Task #81: Student.vocallabs_prospect_id cache flow
+# ════════════════════════════════════════════════════════════
+
+
+class TestVocallabsProspectIdCache(FrappeTestCase):
+    """Verify the cache-on-Student design:
+
+      - First call to a fresh phone: addMultipleContactsToGroup fires,
+        prospect_id gets written to Student.vocallabs_prospect_id.
+      - Second call: addMultipleContactsToGroup MUST be skipped — straight
+        to initiateVocallabsCall with the cached id.
+      - Across-sibling and across-week scenarios both reduce to "the
+        cache is populated on the Student" — covered by the second-call
+        assertion.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    def setUp(self):
+        frappe.cache().delete_value(VOCALLABS_TOKEN_CACHE_KEY)
+
+    def test_first_call_writes_prospect_id_to_student(self):
+        """Cache-miss path: addMultipleContactsToGroup fires, returns a
+        prospect_id, and that id is persisted on Student.vocallabs_prospect_id
+        BEFORE initiateVocallabsCall is invoked (so a mid-flight call failure
+        still leaves the cache populated for the retry)."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("cache01", phone="+99999600A")
+        pe_name = _make_pe(self.batch_name, student_name, "cache01")
+
+        # Ensure cache is cold (in case earlier tests in this class left it
+        # populated — though FrappeTestCase should roll back).
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "",
+            update_modified=False,
+        )
+
+        def fake_post(url, payload, headers):
+            if url.endswith("/b2b/createAuthToken/"):
+                return {"authToken": "tok-c1"}
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                return {"data": {"insert_vocallabs_prospects":
+                                 {"affected_rows": 1,
+                                  "returning": [{"id": "prospect-fresh-001"}]}}}
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+                return {"status": "queued"}
+            self.fail(f"Unexpected URL: {url}")
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok)
+        cached = frappe.db.get_value(
+            "Student", student_name, "vocallabs_prospect_id"
+        )
+        self.assertEqual(
+            cached, "prospect-fresh-001",
+            "Student.vocallabs_prospect_id must be populated after first "
+            "successful addMultipleContactsToGroup",
+        )
+
+    def test_second_call_skips_add_uses_cached_prospect_id(self):
+        """Cache-hit path: when Student.vocallabs_prospect_id is set,
+        addMultipleContactsToGroup MUST NOT fire. The call flow is:
+        auth → updateContactData (refresh per-call variables) →
+        initiateVocallabsCall with the cached id."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("cache02", phone="+99999600B")
+        pe_name = _make_pe(self.batch_name, student_name, "cache02")
+
+        # Pre-populate the cache as if a prior call had already inserted
+        # this parent into Vocallabs.
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "prospect-cached-789",
+            update_modified=False,
+        )
+
+        captured = []
+
+        def fake_post(url, payload, headers):
+            captured.append((url, payload))
+            if url.endswith("/b2b/createAuthToken/"):
+                return {"authToken": "tok-c2"}
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                self.fail(
+                    "addMultipleContactsToGroup MUST be skipped when "
+                    "Student.vocallabs_prospect_id is populated (task #81)"
+                )
+            if url.endswith("/b2b/vocallabs/updateContactData"):
+                return {"data": {"update_vocallabs_prospects_by_pk":
+                                 {"id": "prospect-cached-789"}}}
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+                return {"status": "queued"}
+            self.fail(f"Unexpected URL: {url}")
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok)
+
+        # Verify the initiate call used the cached prospect_id, not a new one.
+        init_calls = [
+            (u, p) for u, p in captured
+            if u.endswith("/b2b/vocallabs/initiateVocallabsCall")
+        ]
+        self.assertEqual(len(init_calls), 1)
+        self.assertEqual(init_calls[0][1]["prospect_id"], "prospect-cached-789")
+
+    def test_cache_hit_refreshes_contact_data_before_call(self):
+        """Cache-hit path MUST call updateContactData with the freshly
+        rendered status_text (from the team-configured ParentCallConfig)
+        BEFORE initiateVocallabsCall fires. Otherwise the agent uses the
+        stale data set during the original insert (e.g. week-1 status text
+        delivered to the parent in week 5)."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("cache04", phone="+99999600D")
+        pe_name = _make_pe(self.batch_name, student_name, "cache04")
+
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "prospect-refresh-test",
+            update_modified=False,
+        )
+
+        captured = []
+
+        def fake_post(url, payload, headers):
+            captured.append((url, payload))
+            if url.endswith("/b2b/createAuthToken/"):
+                return {"authToken": "tok-c4"}
+            if url.endswith("/b2b/vocallabs/updateContactData"):
+                return {"data": {"update_vocallabs_prospects_by_pk":
+                                 {"id": "prospect-refresh-test"}}}
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+                return {"status": "queued"}
+            self.fail(f"Unexpected URL: {url}")
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok)
+
+        # updateContactData fired with the expected payload shape.
+        update_calls = [
+            p for u, p in captured if u.endswith("/b2b/vocallabs/updateContactData")
+        ]
+        self.assertEqual(len(update_calls), 1,
+                         "updateContactData must fire exactly once before initiating")
+        update_payload = update_calls[0]
+        self.assertEqual(update_payload["prospect_id"], "prospect-refresh-test")
+        # Body matches the documented Vocallabs shape: {prospect_id, data: {...}}
+        self.assertIn("data", update_payload)
+        self.assertIn("contact", update_payload["data"])
+        self.assertIn("student_name", update_payload["data"])
+        self.assertIn("status", update_payload["data"])
+        # The rendered status_text reflects THIS call's variables (week 1,
+        # step 4) — proves the data is being freshly rendered against the
+        # currently-resolved ParentCallConfig, not pulled from a stale
+        # cached prospect record. Anti-hard-coding check: the template
+        # came from the test's ParentCallConfig fixture, NOT from a string
+        # baked into vocallabs.py.
+        self.assertIn("week 1", update_payload["data"]["status"])
+        self.assertIn("Step 4", update_payload["data"]["status"])
+        self.assertIn("parent_call", update_payload["data"]["status"])
+
+        # Ordering: updateContactData strictly before initiateVocallabsCall.
+        urls_only = [u for u, _ in captured]
+        update_idx = urls_only.index(
+            next(u for u in urls_only if u.endswith("/b2b/vocallabs/updateContactData"))
+        )
+        init_idx = urls_only.index(
+            next(u for u in urls_only if u.endswith("/b2b/vocallabs/initiateVocallabsCall"))
+        )
+        self.assertLess(update_idx, init_idx,
+                        "updateContactData must be called BEFORE initiateVocallabsCall")
+
+    def test_update_contact_data_failure_does_not_block_call(self):
+        """If updateContactData returns an error, the parent_call MUST
+        still place — better to call the parent with slightly stale data
+        than not call at all."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("cache05", phone="+99999600E")
+        pe_name = _make_pe(self.batch_name, student_name, "cache05")
+
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "prospect-update-fails",
+            update_modified=False,
+        )
+
+        init_called = [False]
+
+        def fake_post(url, payload, headers):
+            if url.endswith("/b2b/createAuthToken/"):
+                return {"authToken": "tok-c5"}
+            if url.endswith("/b2b/vocallabs/updateContactData"):
+                # Simulate Vocallabs returning a transient 5xx.
+                raise RuntimeError("Vocallabs updateContactData 502")
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+                init_called[0] = True
+                return {"status": "queued"}
+            self.fail(f"Unexpected URL: {url}")
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok,
+                        "parent_call must still succeed even if updateContactData fails")
+        self.assertTrue(init_called[0],
+                        "initiateVocallabsCall must fire even after updateContactData error")
+
+    def test_cached_prospect_id_survives_across_calls(self):
+        """End-to-end: first call writes the cache, second call reads it.
+
+        Simulates the real production scenario — parent_call fires in W1
+        (inserts prospect, caches id) and again in W2 (must reuse the cached
+        id rather than re-insert).
+        """
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("cache03", phone="+99999600C")
+        pe_name = _make_pe(self.batch_name, student_name, "cache03")
+
+        # Start with cold cache.
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "",
+            update_modified=False,
+        )
+
+        add_call_count = [0]
+
+        def fake_post(url, payload, headers):
+            if url.endswith("/b2b/createAuthToken/"):
+                return {"authToken": "tok-c3"}
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                add_call_count[0] += 1
+                return {"data": {"insert_vocallabs_prospects":
+                                 {"affected_rows": 1,
+                                  "returning": [{"id": "prospect-e2e-001"}]}}}
+            if url.endswith("/b2b/vocallabs/updateContactData"):
+                # Cache-hit path (W2 call) — refresh data before initiating.
+                return {"data": {"update_vocallabs_prospects_by_pk":
+                                 {"id": "prospect-e2e-001"}}}
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+                return {"status": "queued"}
+            self.fail(f"Unexpected URL: {url}")
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post):
+            # W1 call
+            ok1 = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+            # W2 call (simulated — same PE, in real life would be next week)
+            ok2 = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok1)
+        self.assertTrue(ok2)
+        self.assertEqual(
+            add_call_count[0], 1,
+            "addMultipleContactsToGroup must fire EXACTLY ONCE across two "
+            "parent_calls for the same student — second call must hit cache",
+        )
+
+    def test_two_siblings_sharing_phone_each_get_called(self):
+        """Two distinct Students share one parent phone (sibling scenario).
+
+        Pre-condition: BOTH Student rows have the SAME vocallabs_prospect_id
+        populated (e.g. seeded by a prior call to either sibling that wrote
+        through to both — or in MVP, populated manually). With the cache hit
+        on each, both calls succeed without hitting the uniqueness constraint.
+
+        NOTE: today the cache write only updates the calling student's row.
+        For genuine sibling support (auto-propagating prospect_id to a
+        sibling Student when one sibling's call inserts), see task #81
+        remaining scope — needs either a phone-keyed lookup table or
+        Vocallabs lookup endpoint.
+        """
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        shared_phone = "+99999600SIB"
+        sib1 = _ensure_student("sib1", phone=shared_phone)
+        # Two distinct Student rows with the same phone — must be created
+        # via separate _ensure_student paths since the helper short-circuits
+        # on phone collision. Bypass the helper and create directly.
+        sib2 = frappe.new_doc("Student")
+        sib2.name1 = "VocallabsTestStudent-sib2"
+        sib2.phone = shared_phone
+        sib2.glific_id = "glific-vl-sib2"
+        sib2.insert(ignore_permissions=True)
+        sib2_name = sib2.name
+
+        pe1 = _make_pe(self.batch_name, sib1, "sib1")
+        pe2 = _make_pe(self.batch_name, sib2_name, "sib2")
+
+        # Pre-populate cache on BOTH sibling rows with the same prospect_id
+        # (simulating the seed state task #81 establishes — for MVP a manual
+        # CSV import or a one-time backfill).
+        for s in (sib1, sib2_name):
+            frappe.db.set_value(
+                "Student", s,
+                "vocallabs_prospect_id", "prospect-shared-sib",
+                update_modified=False,
+            )
+
+        init_calls = []
+
+        def fake_post(url, payload, headers):
+            if url.endswith("/b2b/createAuthToken/"):
+                return {"authToken": "tok-sib"}
+            if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+                self.fail(
+                    "siblings sharing a phone with cached prospect_id "
+                    "must NOT hit addMultipleContactsToGroup"
+                )
+            if url.endswith("/b2b/vocallabs/updateContactData"):
+                # Both siblings refresh the shared prospect's data block
+                # before their respective calls. This is the documented
+                # sibling-race caveat — second update overwrites first.
+                return {"data": {"update_vocallabs_prospects_by_pk":
+                                 {"id": "prospect-shared-sib"}}}
+            if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+                init_calls.append(payload)
+                return {"status": "queued"}
+            self.fail(f"Unexpected URL: {url}")
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post):
+            ok1 = vocallabs.initiate_parent_call(pe1, _step(order=4))
+            ok2 = vocallabs.initiate_parent_call(pe2, _step(order=4))
+
+        self.assertTrue(ok1)
+        self.assertTrue(ok2)
+        self.assertEqual(len(init_calls), 2)
+        # Both used the same shared prospect_id — the parent phone gets one
+        # call per sibling, but only one Vocallabs prospect record exists.
+        self.assertEqual(init_calls[0]["prospect_id"], "prospect-shared-sib")
+        self.assertEqual(init_calls[1]["prospect_id"], "prospect-shared-sib")

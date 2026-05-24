@@ -311,6 +311,20 @@ MAX_DELIVERY_FAILURES = 3
 VOCALLABS_MAX_RETRIES = 5
 VOCALLABS_RETRY_LOG_TITLE = "SP Vocallabs Retry"
 VOCALLABS_DLQ_LOG_TITLE = "SP Vocallabs DLQ — manual replay required"
+# Task #80: distinct title for permanent (no-retry) failures where the parent
+# phone is already in the Vocallabs prospect group. These are NOT real outages
+# — they're a known limitation of addMultipleContactsToGroup (Hasura uniqueness
+# constraint on client_id+prospect_group_id+phone). Logging under a separate
+# title lets ops filter them from real transient failures and surfaces the
+# scale of the problem until task #81 (Vocallabs lookup endpoint) ships.
+VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE = "SP Vocallabs Duplicate Prospect (lookup required)"
+# Sentinel constraint name returned by Vocallabs Hasura when the parent's
+# (client_id, prospect_group_id, phone) tuple already exists in the
+# vocallabs_prospects table. Matched as a substring against the error message
+# so a future Vocallabs constraint rename only requires updating this constant.
+VOCALLABS_DUPLICATE_PROSPECT_CONSTRAINT = (
+    "prospects_client_id_prospect_group_id_phone_key"
+)
 VOCALLABS_HTTP_TIMEOUT_SECONDS = 10
 VOCALLABS_TOKEN_CACHE_KEY = "vocallabs:auth_token"
 VOCALLABS_DEFAULT_TOKEN_TTL = 3600  # seconds; used if VoiceAgentSettings.auth_token_cache_ttl unset
