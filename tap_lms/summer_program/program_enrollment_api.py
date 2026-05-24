@@ -816,28 +816,44 @@ def _resolve_course_level(student, batch):
     return None
 
 
-def _get_week1_submission_type(batch, archetype, experiment_arm):
-    """Get expected submission type for week 1 from ArchetypeConfig."""
+def _get_expected_submission_type_for_week(batch, archetype, experiment_arm,
+                                            path, week):
+    """Resolve expected_submission_type from ArchetypeConfig + WeekRule.
+
+    Matches the ArchetypeConfig by (batch, archetype, experiment_arm, path)
+    with `is_active=1`. Falls back to `experiment_arm='default'` if the
+    requested arm has no config — same fallback as the enrollment-time
+    lookup, so resets and updates stay consistent with how enrollment
+    originally seeded the PE.
+
+    Returns the `expected_submission_type` string from the matching
+    WeekRule child row, or None if no matching config / week rule exists.
+
+    Single source of truth for "what submission type does THIS PE expect
+    THIS week" — used by enrollment (week=1, Core), dev_tools reset
+    (week=1, Core), and dev_tools.update_student_state (any week/path/
+    archetype/arm change — task #84). All three callers stay in sync.
+    """
     config = frappe.db.get_value(
         "ArchetypeConfig",
         {
             "batch": batch.name,
             "experiment_arm": experiment_arm,
             "archetype": archetype,
-            "path": PATH_CORE,
+            "path": path,
             "is_active": 1,
         },
         "name",
     )
     if not config:
-        # Fallback to default arm
+        # Fallback to default arm — same fallback as the enrollment lookup.
         config = frappe.db.get_value(
             "ArchetypeConfig",
             {
                 "batch": batch.name,
                 "experiment_arm": "default",
                 "archetype": archetype,
-                "path": PATH_CORE,
+                "path": path,
                 "is_active": 1,
             },
             "name",
@@ -845,9 +861,19 @@ def _get_week1_submission_type(batch, archetype, experiment_arm):
     if not config:
         return None
 
-    week_rule = frappe.db.get_value(
+    return frappe.db.get_value(
         "WeekRule",
-        {"parent": config, "parenttype": "ArchetypeConfig", "week": 1},
+        {"parent": config, "parenttype": "ArchetypeConfig", "week": week},
         "expected_submission_type",
     )
-    return week_rule
+
+
+def _get_week1_submission_type(batch, archetype, experiment_arm):
+    """Backwards-compatible thin wrapper — week 1, Core path.
+
+    Kept for callers that don't care about other weeks (enrollment flow,
+    reset_pe_to_state_0). New code should call the general helper directly.
+    """
+    return _get_expected_submission_type_for_week(
+        batch, archetype, experiment_arm, PATH_CORE, 1,
+    )

@@ -49,12 +49,26 @@ from tap_lms.summer_program.constants import (
     PROGRAM_ACTIVE,
     PROGRAM_PAUSED,
     PATH_CORE,
+    # Task #84: pull the canonical lists from constants instead of
+    # hardcoding so the dev_tools validation stays in sync with the
+    # enum source-of-truth used elsewhere (state machine, doctype
+    # Select options, Glific field contracts).
+    ALL_ARCHETYPES,
+    ALL_ARMS,
 )
 # Hoisted at module level so tests can patch at the canonical location
 # `tap_lms.summer_program.dev_tools.{maintain_collections,_enqueue_contact_field_sync}`
 # without depending on Python's late-binding behaviour for inline imports.
 from tap_lms.summer_program.collection_membership import maintain_collections
 from tap_lms.summer_program.state_machine import _enqueue_contact_field_sync
+# Task #82/#84: dev_tools reset must recompute current_expected_submission_type
+# from the archetype's WeekRule, and update_student_state must do the same
+# when week/path/archetype/arm change. The canonical helpers live in the
+# enrollment API module; importing them here keeps a single source of truth.
+from tap_lms.summer_program.program_enrollment_api import (
+    _get_week1_submission_type,
+    _get_expected_submission_type_for_week,
+)
 
 
 # ════════════════════════════════════════════════════════════
@@ -155,7 +169,15 @@ _FIELDS_TO_ZERO = (
     "delivery_failure_count",
     # Grace
     "in_grace_window",
-    # CR-002 v2 gamification
+    # CR-002 v2 gamification — per-stream totals AND the rollup.
+    # Task #85: total_points was previously missing here, so per-stream
+    # totals got zeroed but total_points stayed at its old value, breaking
+    # the invariant `total_activity + total_quiz + total_submission ==
+    # total_points`. This was the exact pattern of ST00051295's drift in
+    # the 2026-05-24 audit (total_points=1053, all per-stream=0). Zeroing
+    # total_points alongside the streams keeps the invariant intact and
+    # makes the Glific reconcile push a coherent state-0 bundle.
+    "total_points",
     "total_activity_points",
     "weekly_activity_points",
     "total_quiz_points",
@@ -178,9 +200,16 @@ _FIELDS_TO_NULL = (
 )
 
 # Fields cleared to empty string.
+# Task #85: current_escalation_type and pause_reason were previously
+# missing. current_escalation_step zeros to 0 but the type string ('parent_call',
+# 'help_note_b') stayed at its old value — Glific contact then ended up with
+# step=0 + type='parent_call' (mismatch). pause_reason similarly carried over
+# 'binge_limit' even though program_status was switched back to active.
 _FIELDS_TO_CLEAR = (
     "next_action_type",
     "drop_reason",
+    "current_escalation_type",
+    "pause_reason",
 )
 
 # Historical/audit rows to delete when delete_history=True.
@@ -371,20 +400,54 @@ def _reset_pe_doc_to_state_0(
         if hasattr(pe, f):
             setattr(pe, f, "")
 
+    # Task #82 (bug fix): recompute current_expected_submission_type so it
+    # matches the archetype's week-1 WeekRule, not whatever stale value the
+    # PE carried from a later week. Mirrors the normal enrollment flow at
+    # program_enrollment_api._process_pe_chunk:268. Without this, Glific
+    # flows fail validation (expecting word_text_voice when the week-1
+    # rule actually expects image, etc.).
+    if hasattr(pe, "current_expected_submission_type"):
+        try:
+            batch_doc = frappe.get_doc("Batch", pe.batch)
+            expected = _get_week1_submission_type(
+                batch_doc, pe.archetype, pe.experiment_arm,
+            )
+            pe.current_expected_submission_type = expected or ""
+            if verbose:
+                print(
+                    f"  recomputed current_expected_submission_type for "
+                    f"archetype={pe.archetype}, arm={pe.experiment_arm}, "
+                    f"path=Core, week=1 → {expected!r}"
+                )
+        except Exception as e:
+            # Don't fail the reset if the lookup goes sideways — leave the
+            # field empty and let the operator notice via the reconcile diff.
+            if verbose:
+                print(
+                    f"  could not recompute current_expected_submission_type: "
+                    f"{e}. Setting to empty string."
+                )
+            pe.current_expected_submission_type = ""
+
     pe.save(ignore_permissions=True)
 
     # ── 3. CR-005: fix Glific group membership ───────────
     maintain_collections(pe, from_state=from_state, to_state=STATE_NORMAL_CONTENT)
 
     # ── 4. Push fresh contact fields to Glific ───────────
+    # Task #83: synchronous reconcile (was: async _enqueue_contact_field_sync).
+    # Matches update_student_state + reset_and_update_student behavior so the
+    # test team gets immediate visibility into what landed on Glific. Returns
+    # a diff so the operator can audit any drift inline.
+    reconcile_result = None
     if push_to_glific and pe.glific_id:
         try:
-            _enqueue_contact_field_sync(pe)
-            if verbose:
-                print(f"  enqueued Glific contact-field sync (glific_id={pe.glific_id})")
+            reconcile_result = reconcile_pe_to_glific(
+                pe.name, dry_run=False, verbose=verbose,
+            )
         except Exception as e:
             if verbose:
-                print(f"  could not enqueue Glific sync: {e}")
+                print(f"  reconcile_pe_to_glific failed: {e}")
 
     # Skip commit under the test runner — FrappeTestCase relies on
     # transaction rollback for test isolation, and an explicit commit
@@ -409,6 +472,9 @@ def _reset_pe_doc_to_state_0(
         "before": before,
         "after": after,
         "history_deleted": history_deleted,
+        # Task #83: synchronous reconcile result, so callers see the diff
+        # that was pushed to Glific (or None if push was skipped).
+        "reconcile": reconcile_result,
     }
 
 
@@ -502,8 +568,13 @@ def reset_pes_for_batch(
 #     what archetype the student "is".
 
 
-_VALID_ARCHETYPES = ("fence_sitter", "dormant", "lurker", "submitter")
-_VALID_ARMS = ("default", "arm_a", "arm_b")
+# Task #84: source these from constants so the validation can never drift
+# out of sync with the canonical enum. Previous hardcoded list had 'lurker'
+# (invalid — never in ALL_ARCHETYPES) and was missing 'irregular_submitter'
+# (canonical) — operators trying to flip to irregular_submitter got a
+# confusing validation error.
+_VALID_ARCHETYPES = tuple(ALL_ARCHETYPES)
+_VALID_ARMS = tuple(ALL_ARMS)
 _VALID_PROGRAM_STATUSES = ("active", "paused", "completed", "dropped")
 _VALID_PATHS = ("Core", "Remedial")
 
@@ -610,6 +681,11 @@ def update_student_state(
         "pe.program_status": pe.program_status if pe else None,
         "pe.current_week": pe.current_week if pe else None,
         "pe.current_path": pe.current_path if pe else None,
+        # Task #84: surface this in the snapshot so callers can verify the
+        # recompute happened (or didn't, if no week/path/archetype/arm change).
+        "pe.current_expected_submission_type": (
+            pe.current_expected_submission_type if pe else None
+        ),
     }
 
     # ── Compute applied diff (only fields the caller passed) ────
@@ -641,6 +717,40 @@ def update_student_state(
         pe_updates["current_path"] = current_path
         applied["pe.current_path"] = current_path
 
+    # Task #84: if ANY of (current_week, current_path, archetype, experiment_arm)
+    # changed, recompute current_expected_submission_type from the WeekRule
+    # for the NEW combination. Without this, the field stays at whatever
+    # value it had pre-update — e.g., caller fast-forwards to week=2 but
+    # current_expected_submission_type is still week-1's value. Glific flows
+    # would then prompt for the wrong submission type and validation fails.
+    # Uses the same _get_expected_submission_type_for_week helper as the
+    # enrollment flow + the reset, so all three paths agree on the rule.
+    if pe and any(k in pe_updates for k in (
+        "current_week", "current_path", "archetype", "experiment_arm",
+    )):
+        # Resolve the post-update values (use update if present, else current PE value).
+        final_week = pe_updates.get("current_week", pe.current_week or 1)
+        final_path = pe_updates.get("current_path", pe.current_path or PATH_CORE)
+        final_archetype = pe_updates.get("archetype", pe.archetype)
+        final_arm = pe_updates.get("experiment_arm", pe.experiment_arm)
+        try:
+            batch_doc = frappe.get_doc("Batch", pe.batch)
+            new_expected = _get_expected_submission_type_for_week(
+                batch_doc, final_archetype, final_arm, final_path, final_week,
+            )
+            new_value = new_expected or ""
+            if pe.current_expected_submission_type != new_value:
+                pe_updates["current_expected_submission_type"] = new_value
+                applied["pe.current_expected_submission_type"] = new_value
+        except Exception as e:
+            # Don't fail the whole update if the lookup errors — fall back
+            # to empty string so the operator notices via the reconcile diff
+            # rather than seeing a stale value persist.
+            pe_updates["current_expected_submission_type"] = ""
+            applied["pe.current_expected_submission_type"] = (
+                f"<recompute failed: {e}> — cleared to empty"
+            )
+
     if dry_run:
         return {
             "student_id": student_id,
@@ -671,6 +781,9 @@ def update_student_state(
         "pe.program_status": pe.program_status if pe else None,
         "pe.current_week": pe.current_week if pe else None,
         "pe.current_path": pe.current_path if pe else None,
+        "pe.current_expected_submission_type": (
+            pe.current_expected_submission_type if pe else None
+        ),
     }
 
     # ── Push to Glific via reconciler ───────────────────────
