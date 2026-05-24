@@ -28,6 +28,7 @@ from tap_lms.summer_program.dev_tools import (
     reset_pe_to_state_0,
     list_pes_for_batch,
     update_student_state,
+    create_test_student_with_pe,
     _assert_dev_site,
 )
 
@@ -630,3 +631,170 @@ class TestUpdateStudentStateRecomputesExpectedSubmissionType(FrappeTestCase):
         self.assertEqual(result["dry_run"], True)
         # If we got here without a ValidationError, the canonical value
         # is now accepted by validation.
+
+
+# ════════════════════════════════════════════════════════════
+# 5. Task #87 — create_test_student_with_pe (one-call Student + PE)
+# ════════════════════════════════════════════════════════════
+
+class TestCreateTestStudentWithPe(FrappeTestCase):
+    """Task #87: completes the dev_tools quartet.
+
+    Verifies the minimal-input contract (name + phone + batch), idempotency
+    on (phone, name1) for Student and (student, batch) for PE, validation
+    of archetype/arm, and the default skip_glific_sync=True behavior.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    @patch("tap_lms.summer_program.dev_tools._assert_dev_site")
+    @patch("tap_lms.summer_program.dev_tools.reconcile_pe_to_glific")
+    def test_minimal_input_creates_student_and_pe(
+        self, mock_reconcile, _mock_guard,
+    ):
+        """Three required args (name, phone, batch) is enough — every other
+        field gets a sensible default. Verifies the headline ergonomic of
+        this API: 1-line student onboarding for tests."""
+        result = create_test_student_with_pe(
+            name=f"CreateTest1-{frappe.utils.random_string(4)}",
+            phone="+919999700001",
+            batch=self.batch_name,
+        )
+
+        self.assertEqual(result["dry_run"], False)
+        self.assertTrue(result["created_student"])
+        self.assertTrue(result["created_pe"])
+        self.assertIsNotNone(result["student_id"])
+        self.assertIsNotNone(result["pe_name"])
+
+        # PE should match _process_pe_chunk's enrollment-time defaults.
+        pe = frappe.get_doc("ProgramEnrollment", result["pe_name"])
+        self.assertEqual(pe.current_week, 1)
+        self.assertEqual(pe.current_path, PATH_CORE)
+        self.assertEqual(pe.current_tier, "Basic")
+        self.assertEqual(pe.resolved_flow_state, STATE_NORMAL_CONTENT)
+        self.assertEqual(pe.journey_label, LABEL_ENROLLED)
+        self.assertEqual(pe.program_status, PROGRAM_ACTIVE)
+        self.assertEqual(pe.archetype, "submitter")
+        self.assertEqual(pe.experiment_arm, "default")
+        self.assertEqual(pe.total_points, 0)
+        self.assertEqual(pe.current_escalation_step, 0)
+
+        # Student.phone normalized to 12-digit form.
+        student = frappe.get_doc("Student", result["student_id"])
+        self.assertEqual(student.phone, "919999700001")
+        self.assertEqual(student.archetype, "submitter")
+
+        # skip_glific_sync=True default → reconcile NOT called.
+        mock_reconcile.assert_not_called()
+
+    @patch("tap_lms.summer_program.dev_tools._assert_dev_site")
+    @patch("tap_lms.summer_program.dev_tools.reconcile_pe_to_glific")
+    def test_idempotent_on_rerun(self, mock_reconcile, _mock_guard):
+        """Second call with the same (name, phone, batch) reuses both
+        Student and PE rather than creating duplicates. Critical for
+        test workflows that run repeatedly against the same fixture."""
+        kwargs = {
+            "name": f"CreateTest2-{frappe.utils.random_string(4)}",
+            "phone": "+919999700002",
+            "batch": self.batch_name,
+        }
+
+        first = create_test_student_with_pe(**kwargs)
+        second = create_test_student_with_pe(**kwargs)
+
+        # Same student and PE returned both times
+        self.assertEqual(first["student_id"], second["student_id"])
+        self.assertEqual(first["pe_name"], second["pe_name"])
+
+        # First call created everything, second call reused
+        self.assertTrue(first["created_student"])
+        self.assertTrue(first["created_pe"])
+        self.assertFalse(second["created_student"])
+        self.assertFalse(second["created_pe"])
+
+    @patch("tap_lms.summer_program.dev_tools._assert_dev_site")
+    @patch("tap_lms.summer_program.dev_tools.reconcile_pe_to_glific")
+    def test_glific_sync_when_enabled(self, mock_reconcile, _mock_guard):
+        """When skip_glific_sync=False AND glific_id is set, reconcile runs.
+        Mirrors the production sync path so tests can exercise it
+        deliberately without polluting the default fast-path."""
+        mock_reconcile.return_value = {
+            "pe": "x", "glific_id": "test-glific-001",
+            "diff": [], "pushed": True,
+        }
+
+        result = create_test_student_with_pe(
+            name=f"CreateTest3-{frappe.utils.random_string(4)}",
+            phone="+919999700003",
+            batch=self.batch_name,
+            glific_id="test-glific-001",
+            skip_glific_sync=False,
+        )
+
+        self.assertTrue(result["created_pe"])
+        self.assertTrue(result["glific_synced"])
+        mock_reconcile.assert_called_once()
+
+    @patch("tap_lms.summer_program.dev_tools._assert_dev_site")
+    def test_validates_archetype_and_batch(self, _mock_guard):
+        """Bad enum values and missing batch raise ValidationError early —
+        before any DB writes. Saves time on typo'd test invocations."""
+        # Invalid archetype
+        with self.assertRaises(frappe.ValidationError):
+            create_test_student_with_pe(
+                name="CreateTest4-bad-archetype",
+                phone="+919999700004",
+                batch=self.batch_name,
+                archetype="not_a_real_archetype",
+            )
+
+        # Invalid arm
+        with self.assertRaises(frappe.ValidationError):
+            create_test_student_with_pe(
+                name="CreateTest4-bad-arm",
+                phone="+919999700005",
+                batch=self.batch_name,
+                experiment_arm="not_a_real_arm",
+            )
+
+        # Missing batch
+        with self.assertRaises(frappe.ValidationError):
+            create_test_student_with_pe(
+                name="CreateTest4-no-batch",
+                phone="+919999700006",
+                batch="DoesNotExistBatch",
+            )
+
+        # Empty required field
+        with self.assertRaises(frappe.ValidationError):
+            create_test_student_with_pe(
+                name="", phone="+919999700007", batch=self.batch_name,
+            )
+
+    @patch("tap_lms.summer_program.dev_tools._assert_dev_site")
+    @patch("tap_lms.summer_program.dev_tools.reconcile_pe_to_glific")
+    def test_dry_run_no_writes(self, mock_reconcile, _mock_guard):
+        """dry_run=True returns the computed payload without touching DB.
+        Useful for previewing what an op would produce without committing."""
+        before_student_count = frappe.db.count("Student")
+        before_pe_count = frappe.db.count("ProgramEnrollment")
+
+        result = create_test_student_with_pe(
+            name=f"CreateTest5-dry-{frappe.utils.random_string(4)}",
+            phone="+919999700008",
+            batch=self.batch_name,
+            dry_run=True,
+        )
+
+        self.assertEqual(result["dry_run"], True)
+        self.assertIsNone(result["student_id"])
+        self.assertIsNone(result["pe_name"])
+        self.assertIn("would_use", result)
+        # No DB writes
+        self.assertEqual(frappe.db.count("Student"), before_student_count)
+        self.assertEqual(frappe.db.count("ProgramEnrollment"), before_pe_count)
+        mock_reconcile.assert_not_called()

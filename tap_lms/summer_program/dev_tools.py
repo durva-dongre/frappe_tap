@@ -55,6 +55,9 @@ from tap_lms.summer_program.constants import (
     # Select options, Glific field contracts).
     ALL_ARCHETYPES,
     ALL_ARMS,
+    # Task #87: TIER_BY_WEEK gives the week-1 default tier (Basic)
+    # for create_test_student_with_pe — mirrors _process_pe_chunk.
+    TIER_BY_WEEK,
 )
 # Hoisted at module level so tests can patch at the canonical location
 # `tap_lms.summer_program.dev_tools.{maintain_collections,_enqueue_contact_field_sync}`
@@ -800,6 +803,338 @@ def update_student_state(
         "after": after,
         "applied": applied,
         "reconcile": reconcile_result,
+        "dry_run": False,
+    }
+
+
+# ════════════════════════════════════════════════════════════
+# Create a fresh test Student + ProgramEnrollment in one call
+# ════════════════════════════════════════════════════════════
+#
+# Task #87 — completes the dev_tools quartet (reset, update_student_state,
+# reset_and_update_student, create_test_student_with_pe). The QA team
+# needed a single API to spin up a new student against an existing batch
+# without going through the full Backend Student Onboarding flow (CSV
+# upload → page handler → manual Glific contact creation → BPR pipeline).
+#
+# This is a TEST-ONLY shortcut. It bypasses BPR counters, the legacy
+# LearningState/EngagementState seeding, and (by default) the Glific
+# contact-creation roundtrip. Use Backend Student Onboarding for
+# production onboarding.
+#
+# Minimum input set (3 required + 1 highly recommended):
+#   name, phone, batch        — must pass
+#   glific_id                 — optional but skip_glific_sync forces False
+#                               when this is empty
+#
+# Everything else has sensible defaults that mirror _process_pe_chunk's
+# enrollment-time logic. See CLAUDE.md "Conventions for this app" for
+# the L-029 note that archetype/experiment_arm are NORMALLY upstream-
+# supplied; the default here is for test convenience only.
+
+
+@frappe.whitelist(allow_guest=False)
+def create_test_student_with_pe(
+    name,
+    phone,
+    batch,
+    glific_id="",
+    archetype="submitter",
+    experiment_arm="default",
+    language=None,
+    course_level=None,
+    grade=None,
+    school_id=None,
+    gender="Not Available",
+    skip_glific_sync=True,
+    glific_group_id=None,
+    dry_run=False,
+    i_know_this_is_destructive=False,
+):
+    """Create a Student + ProgramEnrollment in one call for testing.
+
+    Mirrors _process_pe_chunk's field-set on the PE side, so the resulting
+    PE matches what a real BPR-driven enrollment produces. Differences
+    from production onboarding:
+      - Bypasses BPR.total_enrolled counter update (no BPR involved).
+      - Skips LearningState / EngagementState / StudentStageProgress
+        initialization (legacy onboarding state, not needed for SP testing).
+      - Default skip_glific_sync=True — does NOT enqueue the 28-field
+        contact-field push or add the contact to any Glific group. Tests
+        usually don't want real Glific HTTP calls.
+      - Skips the sibling-PE check by design (test student normally has
+        a unique glific_id so won't collide; if you reuse a glific_id,
+        the partial unique index in Postgres still catches the collision
+        and raises DuplicateEntryError).
+
+    Idempotency:
+      - On (phone, name1) for Student: reuses existing Student doc.
+      - On (student, batch) for active/paused PE: returns the existing PE.
+
+    Args:
+        name: Student.name1 (display name). Required.
+        phone: Phone number; normalized to 12-digit (`91XXXXXXXXXX`). Required.
+        batch: Batch doc name (e.g. 'palv2-test-BT52231'). Must exist. Required.
+        glific_id: Student.glific_id + PE.glific_id. Empty string is allowed
+            (Glific sync auto-skips); pass a real ID if testing Glific flows.
+        archetype: PE.archetype + Student.archetype. Default 'submitter'.
+            Must be in constants.ALL_ARCHETYPES.
+        experiment_arm: PE.experiment_arm + Student.experiment_arm. Default
+            'default'. Must be in constants.ALL_ARMS.
+        language: Optional TAP Language link.
+        course_level: Optional Course Level link. If None, PE.course_level=None
+            (content-delivery APIs that depend on course_level will fail —
+            pass a real Course Level if testing those paths).
+        grade: Optional Student.grade.
+        school_id: Optional School link.
+        gender: Default 'Not Available'.
+        skip_glific_sync: If True (default), don't enqueue the 28-field push.
+            Set False to exercise the real Glific sync end-to-end.
+        glific_group_id: Optional Glific group ID. When skip_glific_sync=False
+            AND glific_id is set, calls add_contact_to_group as a follow-up.
+        dry_run: Validate inputs + return the would-be payload without writing.
+        i_know_this_is_destructive: Bypass the production-site safety guard.
+
+    Returns:
+        {
+            "student_id": <Student.name>,
+            "pe_name": <ProgramEnrollment.name>,
+            "created_student": <bool>,    # False if reused existing
+            "created_pe": <bool>,         # False if reused existing
+            "glific_synced": <bool>,
+            "expected_submission_type": <str | None>,
+            "dry_run": <bool>,
+        }
+
+    Raises:
+        frappe.PermissionError on suspected production site without override.
+        frappe.ValidationError on invalid enum value, missing Batch, or
+            unparseable phone.
+    """
+    import frappe.utils
+    dry_run = _coerce_bool(dry_run)
+    skip_glific_sync = _coerce_bool(skip_glific_sync)
+    i_know_this_is_destructive = _coerce_bool(i_know_this_is_destructive)
+
+    _assert_dev_site(i_know_this_is_destructive=i_know_this_is_destructive)
+    frappe.db.rollback()  # PG txn hygiene
+
+    # ── Input validation ─────────────────────────────────────
+    if not name or not str(name).strip():
+        frappe.throw("name is required", frappe.ValidationError)
+    if not phone or not str(phone).strip():
+        frappe.throw("phone is required", frappe.ValidationError)
+    if not batch or not str(batch).strip():
+        frappe.throw("batch is required", frappe.ValidationError)
+    if not frappe.db.exists("Batch", batch):
+        frappe.throw(f"Batch not found: {batch}", frappe.ValidationError)
+    if archetype not in _VALID_ARCHETYPES:
+        frappe.throw(
+            f"Invalid archetype {archetype!r}; must be one of {_VALID_ARCHETYPES}",
+            frappe.ValidationError,
+        )
+    if experiment_arm not in _VALID_ARMS:
+        frappe.throw(
+            f"Invalid experiment_arm {experiment_arm!r}; must be one of {_VALID_ARMS}",
+            frappe.ValidationError,
+        )
+
+    # Normalize phone the same way Backend Student Onboarding does
+    # (12-digit Indian format with country code).
+    from tap_lms.tap_lms.page.backend_onboarding_process.backend_onboarding_process import (
+        normalize_phone_number, find_existing_student_by_phone_and_name,
+    )
+    phone_12, phone_10 = normalize_phone_number(phone)
+    if not phone_12:
+        frappe.throw(
+            f"Could not normalize phone {phone!r}; expected 10-digit "
+            f"or 12-digit with 91 prefix.",
+            frappe.ValidationError,
+        )
+    normalized_phone = phone_12   # Backend onboarding stores 12-digit form
+
+    batch_doc = frappe.get_doc("Batch", batch)
+
+    # ── Compute the expected_submission_type now so dry-run shows it ──
+    expected_submission = _get_week1_submission_type(
+        batch_doc, archetype, experiment_arm,
+    )
+
+    if dry_run:
+        return {
+            "student_id": None,
+            "pe_name": None,
+            "created_student": None,
+            "created_pe": None,
+            "glific_synced": False,
+            "expected_submission_type": expected_submission,
+            "dry_run": True,
+            "would_use": {
+                "name1": name, "phone": normalized_phone,
+                "glific_id": glific_id, "archetype": archetype,
+                "experiment_arm": experiment_arm, "language": language,
+                "course_level": course_level, "grade": grade,
+                "school_id": school_id, "gender": gender,
+                "batch": batch,
+            },
+        }
+
+    # ── Resolve or create Student ────────────────────────────
+    existing = find_existing_student_by_phone_and_name(normalized_phone, name)
+    if existing:
+        student_id = existing["name"]
+        created_student = False
+        # Update key fields in case the test re-runs with different params
+        # (archetype/arm flips are the common test pattern).
+        student_doc = frappe.get_doc("Student", student_id)
+        student_doc.archetype = archetype
+        student_doc.experiment_arm = experiment_arm
+        if glific_id:
+            student_doc.glific_id = glific_id
+        if language:
+            student_doc.language = language
+        if grade:
+            student_doc.grade = grade
+        if school_id:
+            student_doc.school_id = school_id
+        student_doc.save(ignore_permissions=True)
+    else:
+        student_doc = frappe.new_doc("Student")
+        student_doc.name1 = name
+        student_doc.phone = normalized_phone
+        student_doc.gender = gender
+        student_doc.status = "active"
+        student_doc.joined_on = frappe.utils.nowdate()
+        student_doc.archetype = archetype
+        student_doc.experiment_arm = experiment_arm
+        if glific_id:
+            student_doc.glific_id = glific_id
+        if language:
+            student_doc.language = language
+        if grade:
+            student_doc.grade = grade
+        if school_id:
+            student_doc.school_id = school_id
+        student_doc.insert(ignore_permissions=True)
+        student_id = student_doc.name
+        created_student = True
+
+    # ── Idempotency: return existing active/paused PE if one exists ──
+    existing_pe = frappe.db.get_value(
+        "ProgramEnrollment",
+        {
+            "student": student_id,
+            "batch": batch,
+            "program_status": ["in", [PROGRAM_ACTIVE, PROGRAM_PAUSED]],
+        },
+        "name",
+        order_by="creation desc",
+    )
+    if existing_pe:
+        return {
+            "student_id": student_id,
+            "pe_name": existing_pe,
+            "created_student": created_student,
+            "created_pe": False,
+            "glific_synced": False,
+            "expected_submission_type": expected_submission,
+            "dry_run": False,
+            "note": "PE already exists for (student, batch); returning it idempotently.",
+        }
+
+    # ── Create the PE (mirrors _process_pe_chunk lines 251-283) ──
+    pe = frappe.new_doc("ProgramEnrollment")
+    pe.enrollment = f"{student_id}-{batch}"
+    pe.student = student_id
+    pe.batch = batch
+    pe.program_type = batch_doc.program_type or "Summer"
+    pe.glific_id = glific_id or ""
+    pe.course_level = course_level
+    pe.language = language
+    pe.experiment_arm = experiment_arm
+    pe.archetype = archetype
+    pe.current_path = PATH_CORE
+    pe.current_tier = TIER_BY_WEEK.get(1, "Basic")
+    pe.journey_label = LABEL_ENROLLED
+    pe.last_label_change_at = frappe.utils.now_datetime()
+    pe.program_status = PROGRAM_ACTIVE
+    pe.resolved_flow_state = STATE_NORMAL_CONTENT
+    pe.current_expected_submission_type = expected_submission
+    pe.current_week = 1
+    pe.max_allowed_week = (batch_doc.current_calendar_week or 1) + 1
+    pe.total_points = 0
+    pe.current_streak = 0
+    pe.pause_count = 0
+    pe.submission_count = 0
+    pe.quiz_completed = 0
+    pe.in_grace_window = 0
+    pe.current_escalation_step = 0
+    pe.current_escalation_type = ""
+    pe.delivery_failure_count = 0
+    pe.re_engagement_count = 0
+    pe.next_action_at = None
+    pe.next_action_type = ""
+
+    try:
+        pe.insert(ignore_permissions=True)
+    except frappe.DuplicateEntryError as e:
+        # Sibling-glific_id collision caught by the partial unique index.
+        # Re-query and return the existing PE rather than erroring.
+        frappe.db.rollback()
+        existing_pe = frappe.db.get_value(
+            "ProgramEnrollment",
+            {
+                "batch": batch, "glific_id": glific_id,
+                "program_status": ["in", [PROGRAM_ACTIVE, PROGRAM_PAUSED]],
+            },
+            "name",
+        )
+        return {
+            "student_id": student_id,
+            "pe_name": existing_pe,
+            "created_student": created_student,
+            "created_pe": False,
+            "glific_synced": False,
+            "expected_submission_type": expected_submission,
+            "dry_run": False,
+            "note": f"Sibling PE collision (glific_id={glific_id}); returned existing PE.",
+        }
+
+    # ── Optional Glific sync ────────────────────────────────
+    glific_synced = False
+    if not skip_glific_sync and pe.glific_id:
+        try:
+            reconcile_pe_to_glific(pe.name, dry_run=False, verbose=False)
+            glific_synced = True
+        except Exception as e:
+            frappe.log_error(
+                f"create_test_student_with_pe: reconcile failed for "
+                f"pe={pe.name}: {e}",
+                "SP Dev Tools Create",
+            )
+
+        # Optional group add
+        if glific_group_id:
+            try:
+                from tap_lms.glific_integration import add_contact_to_group
+                add_contact_to_group(pe.glific_id, glific_group_id)
+            except Exception as e:
+                frappe.log_error(
+                    f"create_test_student_with_pe: add_contact_to_group "
+                    f"failed for glific_id={pe.glific_id} group={glific_group_id}: {e}",
+                    "SP Dev Tools Create",
+                )
+
+    if not getattr(frappe.flags, "in_test", False):
+        frappe.db.commit()
+
+    return {
+        "student_id": student_id,
+        "pe_name": pe.name,
+        "created_student": created_student,
+        "created_pe": True,
+        "glific_synced": glific_synced,
+        "expected_submission_type": expected_submission,
         "dry_run": False,
     }
 
