@@ -328,3 +328,21 @@ VOCALLABS_DUPLICATE_PROSPECT_CONSTRAINT = (
 VOCALLABS_HTTP_TIMEOUT_SECONDS = 10
 VOCALLABS_TOKEN_CACHE_KEY = "vocallabs:auth_token"
 VOCALLABS_DEFAULT_TOKEN_TTL = 3600  # seconds; used if VoiceAgentSettings.auth_token_cache_ttl unset
+
+# ── Vocallabs auto-backfill (task #81) ──────────────────
+# When addMultipleContactsToGroup returns the uniqueness-constraint error
+# (parent phone already in the prospect group AND Student.vocallabs_prospect_id
+# is empty), the wrapper paginates GET /b2b/vocallabs/getContacts to find
+# the existing prospect_id by phone, caches it on Student, then proceeds
+# with the call. Without this, every cold-cache encounter with a previously
+# inserted phone would require manual operator backfill.
+#
+# Cost: each lookup is a sequential pagination over getContacts. PAGE_SIZE
+# tuned to balance HTTP roundtrips against payload size; MAX_PAGES caps the
+# worst-case at 10k contacts scanned (≈1-2 min wall-clock at typical
+# Vocallabs response times) so a misconfigured matcher can't hang a worker
+# indefinitely. The lookup is rare in steady state — only fires on the very
+# first call for a parent whose phone Vocallabs already has on file.
+VOCALLABS_LOOKUP_PAGE_SIZE = 200
+VOCALLABS_LOOKUP_MAX_PAGES = 50
+VOCALLABS_LOOKUP_LOG_TITLE = "SP Vocallabs Lookup"

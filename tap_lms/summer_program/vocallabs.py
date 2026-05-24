@@ -38,6 +38,9 @@ from tap_lms.summer_program.constants import (
     VOCALLABS_DLQ_LOG_TITLE,
     VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE,
     VOCALLABS_DUPLICATE_PROSPECT_CONSTRAINT,
+    VOCALLABS_LOOKUP_PAGE_SIZE,
+    VOCALLABS_LOOKUP_MAX_PAGES,
+    VOCALLABS_LOOKUP_LOG_TITLE,
     VOCALLABS_HTTP_TIMEOUT_SECONDS,
     VOCALLABS_TOKEN_CACHE_KEY,
     VOCALLABS_DEFAULT_TOKEN_TTL,
@@ -589,23 +592,58 @@ def _call_vocallabs(settings, token, student, parent_phone, student_name, status
     )
     prospect_id = _extract_prospect_id(add_response)
     if not prospect_id:
-        # Task #80: classify the duplicate-prospect Hasura uniqueness
-        # violation as a permanent (no-retry) failure. Production saw 12
-        # transient retries + 2 DLQ entries in ~75 seconds for two test PEs
-        # whose parent phones were already in the Vocallabs prospect group
-        # from earlier runs (constraint
-        # `prospects_client_id_prospect_group_id_phone_key`). Retrying
-        # cannot succeed — the same payload will always conflict. Until
-        # task #81's lookup-existing-prospect path lands, the dispatcher
-        # gets back False immediately and the PE continues toward drop.
+        # Task #80 + #81: when the Hasura uniqueness constraint fires,
+        # the parent phone is already in the Vocallabs prospect group
+        # from a prior insert (test pollution, earlier launch, or any
+        # out-of-band add). We auto-recover by paginating getContacts
+        # to find the existing prospect_id, then cache it on Student
+        # so future calls hit the cache-hit path directly.
+        #
+        # Cost: each lookup is a sequential pagination over getContacts
+        # (typically <5s for the test cohort, capped at ~1-2 min by
+        # VOCALLABS_LOOKUP_MAX_PAGES). Fires ONLY on cold-cache encounter
+        # with a previously inserted phone — once it succeeds and writes
+        # the cache, every future call for that student is instant.
+        #
+        # If lookup also fails (unfamiliar response shape, phone not
+        # actually present in the scanned range, HTTP error during
+        # pagination), we fall through to PermanentVocallabsError so
+        # behavior degrades to fail-fast — same as the pre-lookup
+        # behavior. Visible in Error Log under the dedicated title.
         if _is_duplicate_prospect_response(add_response):
+            existing_id = _lookup_prospect_id_by_phone(
+                service_url=service_url,
+                auth_headers=auth_headers,
+                client_id=settings.client_id,
+                prospect_group_id=settings.default_contact_group_id or "",
+                phone=parent_phone,
+            )
+            if existing_id:
+                # Found it — cache + refresh + call.
+                _store_prospect_id(student, existing_id)
+                _refresh_contact_data_best_effort(
+                    service_url=service_url,
+                    auth_headers=auth_headers,
+                    prospect_id=existing_id,
+                    data_block=data_block,
+                )
+                return _post_initiate_call(
+                    service_url=service_url,
+                    auth_headers=auth_headers,
+                    agent_id=settings.agent_id,
+                    prospect_id=existing_id,
+                )
+            # Lookup failed — fall back to the pre-lookup behavior.
             raise PermanentVocallabsError(
                 f"Vocallabs: parent phone already in prospect group "
                 f"(constraint={VOCALLABS_DUPLICATE_PROSPECT_CONSTRAINT}); "
-                f"Student.vocallabs_prospect_id is empty and Vocallabs "
-                f"lookup-by-phone endpoint is not yet integrated. "
-                f"Call cannot be placed (task #81 remaining scope). "
-                f"response={_safe_summary(add_response)}"
+                f"Student.vocallabs_prospect_id was empty AND getContacts "
+                f"lookup-by-phone did not return a match within "
+                f"{VOCALLABS_LOOKUP_MAX_PAGES} pages "
+                f"({VOCALLABS_LOOKUP_MAX_PAGES * VOCALLABS_LOOKUP_PAGE_SIZE} "
+                f"contacts scanned). Call cannot be placed; operator may need "
+                f"to backfill the prospect_id manually or verify the "
+                f"Vocallabs response shape. add_response={_safe_summary(add_response)}"
             )
         raise RuntimeError(
             f"Vocallabs: addMultipleContactsToGroup returned no prospect_id; "
@@ -644,6 +682,206 @@ def _post_initiate_call(service_url, auth_headers, agent_id, prospect_id):
         payload=call_payload,
         headers=auth_headers,
     )
+
+
+def _lookup_prospect_id_by_phone(service_url, auth_headers, client_id,
+                                  prospect_group_id, phone):
+    """Paginate /b2b/vocallabs/getContacts looking for an existing prospect
+    that matches our (client_id, prospect_group_id, phone) tuple.
+
+    Fires from the cache-miss duplicate-prospect branch in _call_vocallabs —
+    Vocallabs has told us via the Hasura uniqueness violation that the
+    prospect exists; we just need its UUID. The docs (verified 2026-05-24)
+    show getContacts only accepts `limit`+`offset` query params with no
+    filter, so we paginate client-side and match phones.
+
+    Phone matching:
+      - Exact string match first (handles E.164 / non-E.164 consistency
+        when both sides use the same form).
+      - Falls back to last-10-digits match (handles country-code drift —
+        "9411795145" vs "919411795145" vs "+919411795145" all hash to
+        "9411795145"). 10 digits is enough to disambiguate Indian numbers,
+        which is the launch scope.
+      - When the contact record exposes client_id / prospect_group_id,
+        we further constrain to those — so this is safe to run against a
+        Vocallabs account with multiple groups or multi-tenant clients.
+
+    Returns the prospect UUID string on success, None on:
+      - Phone not found within MAX_PAGES * PAGE_SIZE contacts scanned
+      - HTTP error during pagination (logged + treated as not found so
+        the caller falls back to PermanentVocallabsError)
+      - Unrecognized response shape (logged + treated as not found)
+
+    All Error Log entries use VOCALLABS_LOOKUP_LOG_TITLE so ops can
+    separately track lookup health (e.g. monitor for a sudden spike if
+    Vocallabs changes their response schema).
+    """
+    target_digits = "".join(ch for ch in str(phone or "") if ch.isdigit())[-10:]
+    if not target_digits:
+        return None
+
+    pages_scanned = 0
+    contacts_scanned = 0
+    try:
+        for page in range(VOCALLABS_LOOKUP_MAX_PAGES):
+            offset = page * VOCALLABS_LOOKUP_PAGE_SIZE
+            response = _http_get(
+                url=f"{service_url}/b2b/vocallabs/getContacts",
+                params={"limit": VOCALLABS_LOOKUP_PAGE_SIZE, "offset": offset},
+                headers=auth_headers,
+            )
+            pages_scanned += 1
+            contacts = _extract_contacts_list(response)
+            if contacts is None:
+                # Shape unrecognized on the first response — log + bail.
+                # Don't keep paginating against a misunderstood endpoint.
+                frappe.log_error(
+                    f"Vocallabs: lookup-by-phone unrecognized getContacts "
+                    f"response shape at offset={offset}; "
+                    f"response={_safe_summary(response)}",
+                    VOCALLABS_LOOKUP_LOG_TITLE,
+                )
+                return None
+            if not contacts:
+                # Empty list = end of pagination.
+                break
+            contacts_scanned += len(contacts)
+
+            for c in contacts:
+                if not isinstance(c, dict):
+                    continue
+                c_phone = str(
+                    c.get("phone") or c.get("phone_number") or ""
+                ).strip()
+                if not c_phone:
+                    continue
+                c_digits = "".join(ch for ch in c_phone if ch.isdigit())[-10:]
+                if c_phone != phone and c_digits != target_digits:
+                    continue
+                # Optional tighteners — skip mismatched client/group when
+                # Vocallabs exposes those fields.
+                c_client = c.get("client_id")
+                c_group = c.get("prospect_group_id")
+                if c_client and client_id and c_client != client_id:
+                    continue
+                if c_group and prospect_group_id and c_group != prospect_group_id:
+                    continue
+                pid = c.get("id") or c.get("prospect_id") or c.get("uuid")
+                if pid:
+                    return pid
+
+            # Short page = end of data.
+            if len(contacts) < VOCALLABS_LOOKUP_PAGE_SIZE:
+                break
+    except Exception as e:
+        frappe.log_error(
+            f"Vocallabs: lookup-by-phone pagination failed at page "
+            f"{pages_scanned} (offset={pages_scanned * VOCALLABS_LOOKUP_PAGE_SIZE}) "
+            f"for phone={phone}: {e}. Returning None — caller will raise "
+            f"PermanentVocallabsError so the dispatcher keeps moving.",
+            VOCALLABS_LOOKUP_LOG_TITLE,
+        )
+        return None
+
+    # Scanned all available pages without a match.
+    frappe.log_error(
+        f"Vocallabs: phone {phone} not found in getContacts after "
+        f"{pages_scanned} pages ({contacts_scanned} contacts scanned). "
+        f"Either the phone really isn't on Vocallabs (response-shape bug?), "
+        f"or it's beyond the {VOCALLABS_LOOKUP_MAX_PAGES}-page cap. Operator "
+        f"may need to backfill Student.vocallabs_prospect_id manually.",
+        VOCALLABS_LOOKUP_LOG_TITLE,
+    )
+    return None
+
+
+def _extract_contacts_list(response):
+    """Defensively pull the list of contact dicts out of a getContacts
+    response.
+
+    Docs don't show the response schema, so we try the common Hasura/
+    Vocallabs shapes in priority order. Returns:
+      - list (possibly empty) of contact dicts on success
+      - None if we can't find a list anywhere — caller treats this as
+        "unrecognized shape, stop paginating"
+
+    The empty-list-vs-None distinction matters: empty list = legitimate
+    end-of-pagination (don't log an error); None = response is genuinely
+    not what we expected (log an error and bail).
+    """
+    if response is None:
+        return None
+    if isinstance(response, list):
+        return response
+
+    if not isinstance(response, dict):
+        return None
+
+    # Hasura-style: data.vocallabs_prospects (matches the
+    # insert_vocallabs_prospects shape from addMultipleContactsToGroup —
+    # likely the same table queried directly).
+    data = response.get("data")
+    if isinstance(data, dict):
+        for key in ("vocallabs_prospects", "prospects", "contacts"):
+            v = data.get(key)
+            if isinstance(v, list):
+                return v
+        # Single-list-value shape: {"data": {"X": [...]}}
+        for v in data.values():
+            if isinstance(v, list):
+                return v
+            # One more level: {"data": {"X": {"prospects": [...]}}}
+            if isinstance(v, dict):
+                for nested_key in ("prospects", "vocallabs_prospects",
+                                   "data", "result"):
+                    nv = v.get(nested_key)
+                    if isinstance(nv, list):
+                        return nv
+    elif isinstance(data, list):
+        return data
+
+    # Top-level list keys: {"contacts": [...]} / {"prospects": [...]}
+    for key in ("contacts", "prospects", "result", "items"):
+        v = response.get(key)
+        if isinstance(v, list):
+            return v
+
+    return None
+
+
+def _http_get(url, params, headers):
+    """GET equivalent of _http_post. Tries the Frappe helper first
+    (centralized outbound HTTP audit), falls back to raw requests with the
+    same 10s timeout.
+    """
+    try:
+        from frappe.integrations.utils import make_get_request
+        return make_get_request(url, params=params, headers=headers)
+    except ImportError:
+        pass
+    except Exception as e:
+        raise RuntimeError(f"Vocallabs HTTP GET error (Frappe helper): {e}")
+
+    try:
+        import requests
+    except ImportError:
+        raise RuntimeError(
+            "Vocallabs: requests library not available and "
+            "frappe.integrations.utils.make_get_request not importable."
+        )
+
+    response = requests.get(
+        url, params=params, headers=headers,
+        timeout=VOCALLABS_HTTP_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    try:
+        return response.json()
+    except ValueError:
+        raise RuntimeError(
+            f"Vocallabs: non-JSON response body from {url}: "
+            f"{response.text[:500]!r}"
+        )
 
 
 def _refresh_contact_data_best_effort(service_url, auth_headers, prospect_id, data_block):

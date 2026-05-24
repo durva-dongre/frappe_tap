@@ -923,3 +923,280 @@ class TestVocallabsProspectIdCache(FrappeTestCase):
         # call per sibling, but only one Vocallabs prospect record exists.
         self.assertEqual(init_calls[0]["prospect_id"], "prospect-shared-sib")
         self.assertEqual(init_calls[1]["prospect_id"], "prospect-shared-sib")
+
+
+# ════════════════════════════════════════════════════════════
+# Task #81 — auto-backfill via getContacts pagination
+# ════════════════════════════════════════════════════════════
+
+
+def _duplicate_then_lookup_fake_post(test_case, lookup_pages,
+                                      lookup_url_substr="/b2b/vocallabs/getContacts"):
+    """Build a fake _http_post + _http_get pair for the auto-backfill path.
+
+    `lookup_pages` is a list of getContacts response dicts; each call to
+    _http_get returns the next page.
+
+    addMultipleContactsToGroup returns the duplicate-prospect response,
+    triggering the lookup → cache → call flow.
+    """
+    state = {"page_idx": 0, "update_contact_called": False,
+             "init_called": False}
+
+    def fake_post(url, payload, headers):
+        if url.endswith("/b2b/createAuthToken/"):
+            return {"authToken": "tok-lookup"}
+        if url.endswith("/b2b/vocallabs/addMultipleContactsToGroup"):
+            return _duplicate_prospect_response()
+        if url.endswith("/b2b/vocallabs/updateContactData"):
+            state["update_contact_called"] = True
+            return {"data": {"update_vocallabs_prospects_by_pk":
+                             {"id": "x"}}}
+        if url.endswith("/b2b/vocallabs/initiateVocallabsCall"):
+            state["init_called"] = True
+            return {"status": "queued", "prospect_id_used": payload.get("prospect_id")}
+        test_case.fail(f"Unexpected POST URL: {url}")
+
+    def fake_get(url, params, headers):
+        if lookup_url_substr in url:
+            idx = state["page_idx"]
+            state["page_idx"] += 1
+            if idx < len(lookup_pages):
+                return lookup_pages[idx]
+            return {"data": {"vocallabs_prospects": []}}    # end of pagination
+        test_case.fail(f"Unexpected GET URL: {url}")
+
+    return fake_post, fake_get, state
+
+
+class TestVocallabsAutoBackfillViaLookup(FrappeTestCase):
+    """End-to-end tests for the cold-cache + already-in-Vocallabs path.
+
+    Scenario: Student.vocallabs_prospect_id is empty AND the parent phone
+    is already in Vocallabs from a prior insert (test pollution / earlier
+    launch / out-of-band add). Our code should:
+      1. Try addMultipleContactsToGroup → get uniqueness violation
+      2. Paginate /b2b/vocallabs/getContacts to find the existing prospect_id
+      3. Cache it on Student.vocallabs_prospect_id
+      4. updateContactData with fresh per-call variables
+      5. initiateVocallabsCall with the recovered prospect_id
+
+    Without this auto-backfill, operators would need to run a manual
+    backfill script for every cohort that has any test pollution.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    def setUp(self):
+        frappe.cache().delete_value(VOCALLABS_TOKEN_CACHE_KEY)
+
+    def test_duplicate_prospect_recovered_via_lookup(self):
+        """Happy path: phone is on page 1 of getContacts. Auto-backfill
+        finds it, caches it, refreshes data, places the call."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("auto01", phone="+919876500001")
+        pe_name = _make_pe(self.batch_name, student_name, "auto01")
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "",
+            update_modified=False,
+        )
+
+        # getContacts page 1: the phone is here, with prospect_id "uuid-recovered"
+        page1 = {
+            "data": {
+                "vocallabs_prospects": [
+                    {"id": "uuid-noise-1", "phone": "+918888888888",
+                     "client_id": "test-client", "prospect_group_id": "group-VLT"},
+                    {"id": "uuid-recovered", "phone": "+919876500001",
+                     "client_id": "test-client", "prospect_group_id": "group-VLT"},
+                    {"id": "uuid-noise-2", "phone": "+917777777777",
+                     "client_id": "test-client", "prospect_group_id": "group-VLT"},
+                ]
+            }
+        }
+        fake_post, fake_get, state = _duplicate_then_lookup_fake_post(self, [page1])
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post), \
+             patch.object(vocallabs, "_http_get", side_effect=fake_get):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok, "auto-backfill should recover and place the call")
+
+        # Cache populated with the recovered id.
+        cached = frappe.db.get_value("Student", student_name, "vocallabs_prospect_id")
+        self.assertEqual(cached, "uuid-recovered",
+                         "Student.vocallabs_prospect_id must hold the recovered UUID")
+
+        # Both downstream calls fired.
+        self.assertTrue(state["update_contact_called"],
+                        "updateContactData must fire after lookup-recovered id")
+        self.assertTrue(state["init_called"],
+                        "initiateVocallabsCall must fire after lookup-recovered id")
+
+    def test_lookup_paginates_multiple_pages(self):
+        """Phone is on page 2 — pagination must continue past empty matches."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("auto02", phone="+919876500002")
+        pe_name = _make_pe(self.batch_name, student_name, "auto02")
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "",
+            update_modified=False,
+        )
+
+        # Page 1: full of unrelated contacts. Page 2: target phone.
+        page1 = {
+            "data": {
+                "vocallabs_prospects": [
+                    {"id": f"noise-{i}", "phone": f"+9100000{i:05d}"}
+                    for i in range(200)  # PAGE_SIZE
+                ]
+            }
+        }
+        page2 = {
+            "data": {
+                "vocallabs_prospects": [
+                    {"id": "uuid-page2", "phone": "+919876500002"},
+                ]
+            }
+        }
+        fake_post, fake_get, state = _duplicate_then_lookup_fake_post(
+            self, [page1, page2]
+        )
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post), \
+             patch.object(vocallabs, "_http_get", side_effect=fake_get):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            frappe.db.get_value("Student", student_name, "vocallabs_prospect_id"),
+            "uuid-page2",
+        )
+        self.assertEqual(state["page_idx"], 2,
+                         "should have fetched exactly 2 pages")
+
+    def test_phone_match_normalizes_country_code(self):
+        """Phone may differ in country-code form on Vocallabs side
+        (`+919876500003` vs `9876500003` vs `919876500003`). The matcher
+        must hit the right prospect across these variants."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        # Student is stored as the 10-digit form.
+        student_name = _ensure_student("auto03", phone="9876500003")
+        pe_name = _make_pe(self.batch_name, student_name, "auto03")
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "",
+            update_modified=False,
+        )
+
+        # Vocallabs stores the E.164 form.
+        page1 = {
+            "data": {
+                "vocallabs_prospects": [
+                    {"id": "uuid-e164", "phone": "+919876500003"},
+                ]
+            }
+        }
+        fake_post, fake_get, _ = _duplicate_then_lookup_fake_post(self, [page1])
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post), \
+             patch.object(vocallabs, "_http_get", side_effect=fake_get):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertTrue(ok, "10-digit ↔ E.164 phone normalization must match")
+        self.assertEqual(
+            frappe.db.get_value("Student", student_name, "vocallabs_prospect_id"),
+            "uuid-e164",
+        )
+
+    def test_lookup_failure_falls_back_to_permanent_error(self):
+        """If getContacts never returns the phone, behavior degrades to the
+        pre-lookup PermanentVocallabsError — same as before this feature,
+        no spurious retries."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("auto04", phone="+919876500004")
+        pe_name = _make_pe(self.batch_name, student_name, "auto04")
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "",
+            update_modified=False,
+        )
+
+        # Pagination returns 2 pages of unrelated contacts then empty.
+        page1 = {
+            "data": {
+                "vocallabs_prospects": [
+                    {"id": f"unrelated-{i}", "phone": f"+9100000{i:05d}"}
+                    for i in range(3)
+                ]
+            }
+        }
+        fake_post, fake_get, _ = _duplicate_then_lookup_fake_post(self, [page1])
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post), \
+             patch.object(vocallabs, "_http_get", side_effect=fake_get), \
+             patch.object(frappe, "log_error", wraps=frappe.log_error) as fake_log:
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertFalse(ok, "lookup miss must fall back to fail-fast")
+
+        # Cache stays empty.
+        self.assertFalse(frappe.db.get_value(
+            "Student", student_name, "vocallabs_prospect_id"))
+
+        # Exactly one Duplicate-Prospect log entry, exactly one Lookup log entry.
+        titles = [c.kwargs.get("title") for c in fake_log.call_args_list]
+        self.assertIn(VOCALLABS_DUPLICATE_PROSPECT_LOG_TITLE, titles)
+        # NO retry / DLQ entries.
+        self.assertNotIn("SP Vocallabs Retry", titles)
+        self.assertNotIn(VOCALLABS_DLQ_LOG_TITLE, titles)
+
+    def test_lookup_handles_unrecognized_response_shape(self):
+        """Vocallabs response schema isn't documented — if their shape
+        ever changes, the matcher must bail gracefully rather than crash
+        or hang."""
+        from tap_lms.summer_program import vocallabs
+
+        cfg = _ensure_parent_call_config()
+        _ensure_voice_settings(enabled=1, default_config=cfg)
+
+        student_name = _ensure_student("auto05", phone="+919876500005")
+        pe_name = _make_pe(self.batch_name, student_name, "auto05")
+        frappe.db.set_value(
+            "Student", student_name,
+            "vocallabs_prospect_id", "",
+            update_modified=False,
+        )
+
+        # Shape we can't parse — no list anywhere.
+        bad_page = {"status": "ok", "metadata": {"total": 42}}
+        fake_post, fake_get, _ = _duplicate_then_lookup_fake_post(self, [bad_page])
+
+        with patch.object(vocallabs, "_http_post", side_effect=fake_post), \
+             patch.object(vocallabs, "_http_get", side_effect=fake_get):
+            ok = vocallabs.initiate_parent_call(pe_name, _step(order=4))
+
+        self.assertFalse(ok,
+                         "unrecognized response shape must fail safely "
+                         "(PermanentVocallabsError)")
