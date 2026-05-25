@@ -86,13 +86,23 @@ def award_quiz_points(attempt):
     # ── Atomic UPDATE on PE (P-002 / L-011) ─────────────────
     # Weekly column always adds the full new earned (effort semantics).
     # COALESCE is race-safe vs T19's reset of weekly_quiz_points (E5).
+    #
+    # CR-011 (2026-05-25): switched to **eager** totals. Pre-CR-011 the
+    # per-event handler only bumped weekly_quiz_points and let T14 roll
+    # weekly→total at week advance, which left mid-week state incoherent
+    # (a student saw weekly_quiz_points=3 but total_quiz_points=0 and
+    # total_points=0 on Glific). Now total_quiz_points and total_points
+    # are bumped in the SAME atomic UPDATE so the invariant
+    # `stream_sum == total_points` holds at ALL TIMES, not just post-T14.
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET weekly_quiz_points = COALESCE(weekly_quiz_points, 0) + %s
+           SET weekly_quiz_points = COALESCE(weekly_quiz_points, 0) + %s,
+               total_quiz_points  = COALESCE(total_quiz_points,  0) + %s,
+               total_points       = COALESCE(total_points,       0) + %s
          WHERE name = %s
         """,
-        (earned, pe.name),
+        (earned, earned, earned, pe.name),
     )
 
     # ── Push contact fields ─────────────────────────────────

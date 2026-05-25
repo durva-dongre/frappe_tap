@@ -245,19 +245,28 @@ def _compute_submission_points(pe, submission_name, result_status):
 def _award_submission_points_atomic(pe_name, points):
     """Atomic COALESCE bump on submission-point columns (L-011 / P-002 pattern).
 
-    Mirrors the atomic SQL used by activity_points.award_activity_points. This
-    writes the weekly bucket only; total_activity_points, total_submission_points,
-    and total_points roll up once during week advance.
+    Mirrors the atomic SQL used by activity_points.award_activity_points.
+
+    CR-011 (2026-05-25): switched to **eager** totals. Pre-CR-011 this writer
+    only bumped weekly_submission_points and relied on T14 to roll weekly→total
+    at week advance. That left mid-week state incoherent on Glific (a student
+    who earned submission points saw weekly_submission_points=N but
+    total_submission_points=0 and total_points=0 until week advance). Now
+    total_submission_points and total_points are bumped in the SAME atomic
+    UPDATE so the invariant `stream_sum == total_points` holds at ALL TIMES,
+    not just post-T14.
     """
     if not points:
         return
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET weekly_submission_points = COALESCE(weekly_submission_points, 0) + %s
+           SET weekly_submission_points = COALESCE(weekly_submission_points, 0) + %s,
+               total_submission_points  = COALESCE(total_submission_points,  0) + %s,
+               total_points             = COALESCE(total_points,             0) + %s
          WHERE name = %s
         """,
-        (points, pe_name),
+        (points, points, points, pe_name),
     )
 
 

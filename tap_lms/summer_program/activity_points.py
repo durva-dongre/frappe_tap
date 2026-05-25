@@ -157,10 +157,9 @@ def award_activity_points(scl):
             },
         )
 
-    # ── 5b. Atomic UPDATE on PE (P-002 / L-011 + CR-003 grace arm + CR-008 lazy reset) ──
+    # ── 5b. Atomic UPDATE on PE (P-002 / L-011 + CR-003 grace arm + CR-008 lazy reset + CR-011 eager totals) ──
     # COALESCE-update is race-tolerant against T19's reset of
-    # weekly_activity_points (E5). Cumulative totals are rolled up once during
-    # week advance from weekly_activity_points + weekly_submission_points.
+    # weekly_activity_points (E5).
     #
     # The CASE WHEN clauses fire IFF weekly_video_done = 0 at UPDATE time.
     # Postgres reads OLD row values in CASE WHEN within the same UPDATE
@@ -174,6 +173,13 @@ def award_activity_points(scl):
     # student's W1 stats stay visible on Glific through the inter-week gap).
     # Instead, the first VideoClass of the new week wipes them and bumps the
     # video's points — atomically, in this single UPDATE.
+    #
+    # CR-011 eager totals (2026-05-25): total_activity_points and total_points
+    # are now bumped here on every VideoClass completion (ungated — they always
+    # fire when pts > 0), so the cumulative totals stay coherent with weekly_*
+    # at all times. T14 no longer rolls weekly→total. Note these lines are
+    # OUTSIDE the lazy-reset CASE WHEN: the lazy reset only zeros the OTHER
+    # weekly_* buckets at the 0→1 flip; total_* are independent of that gate.
     #
     # Assumption (confirmed with the team 2026-05-23, managed in UI + Glific):
     # every week has at least one VideoClass; VideoClass is always the first
@@ -211,10 +217,12 @@ def award_activity_points(scl):
                                                ELSE grace_window_end_at END,
                in_grace_window          = CASE WHEN weekly_video_done = 0
                                                THEN 1
-                                               ELSE in_grace_window END
+                                               ELSE in_grace_window END,
+               total_activity_points    = COALESCE(total_activity_points, 0) + %s,
+               total_points             = COALESCE(total_points,          0) + %s
          WHERE name = %s
         """,
-        (pts, pts, grace_window_days, pe.name),
+        (pts, pts, grace_window_days, pts, pts, pe.name),
     )
 
     # ── 6. Audit-field anchor (written AFTER PE update so retries skip) ──

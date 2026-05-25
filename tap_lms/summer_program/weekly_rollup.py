@@ -18,22 +18,23 @@ def _int_field(source, name):
 def calculate_week_advance_rollup(pe):
     """Return cumulative point/streak/gem updates for week advance.
 
-    Weekly buckets are rolled into cumulative totals, then the caller resets
-    those weekly fields on the persisted ProgramEnrollment row.
+    Pre-CR-011 this added weekly_* to total_* (the "lazy rollup" design):
+    per-event handlers only bumped weekly_* columns, and T14 rolled them
+    into total_*. Mid-week, totals were incoherent — a student who earned
+    quiz points saw weekly_quiz_points=N but total_quiz_points=0 until the
+    week advance.
 
-    Product rule: submissions are part of activity for the student-facing
-    activity total, so total_activity_points rolls up both weekly activity and
-    weekly submission points. total_submission_points is still maintained as
-    its own stream for reporting.
+    Post-CR-011 (2026-05-25) totals are **eager**. The per-event handlers
+    (`quiz_points.py`, `activity_points.py`, `feedback_consumer_hook.py`)
+    bump total_* AND weekly_* in the same atomic UPDATE, so totals stay
+    coherent at all times. T14 therefore only needs to RESET weekly_* —
+    the totals returned here are pass-through (unchanged from input). The
+    invariant `stream_sum == total_points` holds at ALL TIMES under
+    CR-011, not just post-T14.
+
+    The streak/gem penalty branch (weekly_video_done && !weekly_submission_done)
+    is independent of the points design and survives unchanged.
     """
-    weekly_activity = _int_field(pe, "weekly_activity_points")
-    weekly_submission = _int_field(pe, "weekly_submission_points")
-    weekly_quiz = _int_field(pe, "weekly_quiz_points")
-    weekly_bonus_quiz = _int_field(pe, "bonus_quiz_points")
-
-    weekly_activity_total = weekly_activity + weekly_submission
-    weekly_total = weekly_activity_total + weekly_quiz + weekly_bonus_quiz
-
     streak_update = _int_field(pe, "current_streak")
     gems_update = _int_field(pe, "special_gems")
     if bool(_field(pe, "weekly_video_done", 0)) and not bool(_field(pe, "weekly_submission_done", 0)):
@@ -43,9 +44,13 @@ def calculate_week_advance_rollup(pe):
     return {
         "current_streak": streak_update,
         "special_gems": gems_update,
-        "total_activity_points": _int_field(pe, "total_activity_points") + weekly_activity_total,
-        "total_submission_points": _int_field(pe, "total_submission_points") + weekly_submission,
-        "total_quiz_points": _int_field(pe, "total_quiz_points") + weekly_quiz,
-        # total_points is the sum-of-everything cumulative counter.
-        "total_points": _int_field(pe, "total_points") + weekly_total,
+        # CR-011: total_* fields are now updated eagerly per-event (see
+        # quiz_points.py, activity_points.py, feedback_consumer_hook.py).
+        # T14's rollup no longer adds weekly→total — it just resets weekly_*.
+        # Returning the existing total values unchanged signals to the caller
+        # that T14 should NOT mutate them.
+        "total_activity_points": _int_field(pe, "total_activity_points"),
+        "total_submission_points": _int_field(pe, "total_submission_points"),
+        "total_quiz_points": _int_field(pe, "total_quiz_points"),
+        "total_points": _int_field(pe, "total_points"),
     }
