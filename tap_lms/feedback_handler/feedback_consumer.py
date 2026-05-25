@@ -183,6 +183,7 @@ class FeedbackConsumer:
                 message_data, submission_id = self.processor.parse_and_validate(body)
             except ValueError as e:
                 frappe.logger().error(f"Invalid message format: {str(e)}. Body: {body}")
+                frappe.db.rollback()
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
             
@@ -195,11 +196,16 @@ class FeedbackConsumer:
                 self.processor.ensure_submission_exists(submission_id)
             except ValueError as e:
                 frappe.logger().error(f"{str(e)}. Rejecting message.")
+                frappe.db.rollback()
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
 
-            # Process the message
+            # Process the message and commit before triggering external flows.
+            # Glific may immediately call back into our public feedback API; if
+            # this transaction is still open, that API only sees the previous
+            # committed Submission.status (usually "Processing").
             self.processor.update_submission(message_data)
+            frappe.db.commit()
 
             # Send Glific notification (non-critical - don't fail message if this fails)
             try:
@@ -210,13 +216,13 @@ class FeedbackConsumer:
 
             # Summer Program: trigger T12 state transition (non-critical)
             try:
+                frappe.db.begin()
                 self._update_sp_state(submission_id, message_data)
+                frappe.db.commit()
             except Exception as sp_error:
+                frappe.db.rollback()
                 frappe.logger().warning(f"SP state update failed for {submission_id}: {str(sp_error)}")
                 # Continue - pe_dispatcher's feedback_timeout handler is the safety net
-
-            # Commit transaction
-            frappe.db.commit()
 
             # Acknowledge message only after successful processing
             ch.basic_ack(delivery_tag=method.delivery_tag)
