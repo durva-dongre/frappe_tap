@@ -316,25 +316,16 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         self.assertEqual(pe.weekly_submission_done, 0,
                          "preserved (was 0 entering T14)")
         # Weekly buckets STILL roll into cumulative totals at T14; the lazy
-        # reset is orthogonal to the rollup. Task #77 fix: each total_*
-        # gets ONLY its corresponding weekly_* (no submission double-count).
+        # reset is orthogonal to the rollup. Product rule: submission is part
+        # of activity, so total_activity includes weekly submission points.
         # Pre-rollup setup: total_activity=30, total_quiz=15, total_submission=50.
         # weekly_activity=10, weekly_quiz=5, weekly_submission=0, bonus=2.
-        self.assertEqual(pe.total_activity_points, 40)   # 30 + 10 (was 30+10+0)
+        self.assertEqual(pe.total_activity_points, 40)   # 30 + 10 + 0
         self.assertEqual(pe.total_quiz_points, 20)       # 15 + 5
         self.assertEqual(pe.total_submission_points, 50)  # 50 + 0
         # total_points += weekly_act + weekly_quiz + weekly_sub + weekly_bonus
         # = 95 + 10 + 5 + 0 + 2 = 112
         self.assertEqual(pe.total_points, 112)
-        # Invariant: streams sum to total_points minus bonus (bonus is in
-        # total_points but not in any stream total).
-        self.assertEqual(
-            pe.total_activity_points + pe.total_quiz_points
-            + pe.total_submission_points + 2,   # + bonus contributed
-            pe.total_points,
-            "task #77: streams + bonus must sum to total_points "
-            "(no submission double-count)",
-        )
         # Week advanced + journey label updated
         self.assertEqual(pe.current_week, 2)
         self.assertEqual(pe.journey_label, LABEL_WEEK_ADVANCED)
@@ -364,9 +355,7 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=2)
 
         pe.reload()
-        # Rollup math (task #77 fix: each total_* gets only its own weekly_*)
-        self.assertEqual(pe.total_activity_points, 10,
-                         "task #77: total_activity = 0 + 10 (NOT 10+25)")
+        self.assertEqual(pe.total_activity_points, 35)
         self.assertEqual(pe.total_submission_points, 25)
         self.assertEqual(pe.total_quiz_points, 7)
         # total_points = 0 + 10 + 25 + 7 + 3 = 45
@@ -380,12 +369,6 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         self.assertEqual(pe.special_gems, 1)
         # weekly_video_done must flip to 0 (lazy-reset trigger signal)
         self.assertEqual(pe.weekly_video_done, 0)
-        # Invariant: streams + bonus = total_points
-        self.assertEqual(
-            pe.total_activity_points + pe.total_quiz_points
-            + pe.total_submission_points + 3,
-            pe.total_points,
-        )
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_activity_only_week_adds_activity_to_existing_total(self, mock_sync):
@@ -412,7 +395,7 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=3)
 
         pe.reload()
-        # Rollup math (task #77 fix). Pre-rollup: total_activity=35,
+        # Rollup math. Pre-rollup: total_activity=35,
         # total_sub=25, total_points=35. This week: weekly_act=10, weekly_sub=0.
         self.assertEqual(pe.total_activity_points, 45)   # 35 + 10
         self.assertEqual(pe.total_submission_points, 25)  # unchanged (no sub this week)
@@ -449,10 +432,9 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         t14_week_advance(pe, new_week=3)
 
         pe.reload()
-        # Rollup math (task #77 fix). Pre-rollup: total_act=35, total_sub=25,
+        # Rollup math. Pre-rollup: total_act=35, total_sub=25,
         # total_points=35. This week: weekly_act=10, weekly_sub=25.
-        self.assertEqual(pe.total_activity_points, 45,   # 35 + 10 (NOT 35+10+25)
-                         "task #77: total_activity = previous + weekly_activity only")
+        self.assertEqual(pe.total_activity_points, 70)   # 35 + 10 + 25
         self.assertEqual(pe.total_submission_points, 50)  # 25 + 25
         self.assertEqual(pe.total_points, 70)             # 35 + 10 + 25 + 0
         # CR-008: weekly_* PRESERVED (next VideoClass wipes them)
@@ -461,12 +443,6 @@ class TestT19WeekAdvanceExtended(FrappeTestCase):
         self.assertEqual(pe.current_streak, 2)
         self.assertEqual(pe.special_gems, 2)
         self.assertEqual(pe.weekly_video_done, 0)
-        # Invariant
-        self.assertEqual(
-            pe.total_activity_points + pe.total_quiz_points + pe.total_submission_points,
-            pe.total_points,
-            "task #77: streams must sum to total_points",
-        )
 
     @patch("tap_lms.summer_program.state_machine._enqueue_contact_field_sync")
     def test_t19_streak_unchanged_when_not_assigned(self, mock_sync):

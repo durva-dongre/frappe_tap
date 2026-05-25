@@ -4,13 +4,8 @@ Run without bench or a Frappe server:
 
     python3 -m unittest tap_lms.summer_program.tests.test_weekly_rollup_local -v
 
-Updated 2026-05-23 (task #77): expected values corrected after removing
-the double-count of weekly_submission_points into total_activity_points.
-Previously each weekly_submission contributed to BOTH total_activity AND
-total_submission; now it contributes only to total_submission. The bug
-was discovered via a production diagnostic against palv2-test-BT52231
-(ST00051359 showed total_activity=35, total_submission=25, total_points=36
-→ stream_sum 61 ≠ total_points 36).
+Product rule: submission is part of student activity. At week advance,
+total_activity_points receives weekly_activity_points + weekly_submission_points.
 """
 import unittest
 
@@ -18,15 +13,9 @@ from tap_lms.summer_program.weekly_rollup import calculate_week_advance_rollup
 
 
 class TestWeeklyRollupLocal(unittest.TestCase):
-    """Pin the invariant:
-        total_activity_points + total_quiz_points + total_submission_points
-        + bonus_quiz_points (if pushed to total)
-        == total_points
-    """
-
     def test_activity_and_submission_week_each_count_once(self):
         """Single week: weekly_activity=10, weekly_submission=25.
-        After rollup, total_activity += 10 (NOT 10+25), total_submission += 25.
+        After rollup, total_activity += 10+25, total_submission += 25.
         total_points += full sum (10 + 25 + 0 + 0 = 35)."""
         result = calculate_week_advance_rollup({
             "total_activity_points": 0,
@@ -43,21 +32,12 @@ class TestWeeklyRollupLocal(unittest.TestCase):
             "weekly_submission_done": 1,
         })
 
-        self.assertEqual(result["total_activity_points"], 10,
-                         "activity total gets ONLY weekly_activity, not "
-                         "weekly_activity + weekly_submission (task #77 fix)")
+        self.assertEqual(result["total_activity_points"], 35)
         self.assertEqual(result["total_submission_points"], 25)
         self.assertEqual(result["total_quiz_points"], 0)
         self.assertEqual(result["total_points"], 35)
         self.assertEqual(result["current_streak"], 1)
         self.assertEqual(result["special_gems"], 1)
-        # Invariant
-        self.assertEqual(
-            result["total_activity_points"] + result["total_quiz_points"]
-            + result["total_submission_points"],
-            result["total_points"],
-            "stream sum must equal total_points (no double-count)",
-        )
 
     def test_activity_only_week_adds_to_existing_activity_total(self):
         """Second week with activity only (no submission this week)."""
@@ -82,12 +62,6 @@ class TestWeeklyRollupLocal(unittest.TestCase):
         # Penalty branch: weekly_video_done=1, weekly_submission_done=0
         self.assertEqual(result["current_streak"], 0)
         self.assertEqual(result["special_gems"], 1)
-        # Invariant
-        self.assertEqual(
-            result["total_activity_points"] + result["total_quiz_points"]
-            + result["total_submission_points"],
-            result["total_points"],
-        )
 
     def test_activity_and_submission_week_adds_both_to_existing_totals(self):
         """Second week with both activity AND submission."""
@@ -106,17 +80,11 @@ class TestWeeklyRollupLocal(unittest.TestCase):
             "weekly_submission_done": 1,
         })
 
-        self.assertEqual(result["total_activity_points"], 20)    # 10 + 10
+        self.assertEqual(result["total_activity_points"], 45)    # 10 + 10 + 25
         self.assertEqual(result["total_submission_points"], 50)  # 25 + 25
         self.assertEqual(result["total_points"], 70)             # 35 + 10 + 25
         self.assertEqual(result["current_streak"], 2)
         self.assertEqual(result["special_gems"], 2)
-        # Invariant
-        self.assertEqual(
-            result["total_activity_points"] + result["total_quiz_points"]
-            + result["total_submission_points"],
-            result["total_points"],
-        )
 
     def test_quiz_and_bonus_roll_into_total_points(self):
         """Quiz week + bonus points. total_points includes both."""
@@ -142,16 +110,6 @@ class TestWeeklyRollupLocal(unittest.TestCase):
         # weekly_video_done=0 → no penalty branch
         self.assertEqual(result["current_streak"], 2)
         self.assertEqual(result["special_gems"], 2)
-        # NOTE: bonus_quiz_points is included in total_points but isn't in
-        # any of the three stream totals — so the strict
-        # stream_sum == total_points invariant only holds when
-        # bonus_quiz_points = 0. With bonus=3 added in this case, total_points
-        # exceeds the stream sum by exactly the bonus.
-        self.assertEqual(
-            result["total_activity_points"] + result["total_quiz_points"]
-            + result["total_submission_points"] + 3,   # + bonus_quiz contributed
-            result["total_points"],
-        )
 
     def test_zero_week_no_op(self):
         """Empty week (no activity, no submission, no quiz, no bonus).
