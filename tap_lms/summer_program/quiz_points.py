@@ -126,13 +126,30 @@ def award_quiz_points(attempt):
 @frappe.whitelist(allow_guest=False)
 @glific_response
 def award_bonus_quiz_points(student_id, points, **_glific_kwargs):
-    """Award independent bonus quiz points to the student's active PE.
+    """Award bonus points (independent of regular quiz attempts) to the
+    student's active PE.
+
+    Use case: Glific flow runs an independent bonus activity. When the
+    student completes it, the Glific webhook calls this endpoint with the
+    point value. Bonus points are tracked in a dedicated column
+    (`bonus_quiz_points`) so the bonus stream is distinguishable from
+    regular per-question quiz points, AND they contribute to `total_points`
+    so leaderboards / dashboards see the student's true cumulative score.
+
+    Updates (atomically, in one statement):
+      - `bonus_quiz_points` += points (the dedicated bonus stream column)
+      - `total_points`      += points (CR-011 invariant — task #92, 2026-05-25)
+
+    Does NOT update:
+      - `weekly_quiz_points` / `total_quiz_points` — bonus is independent
+        of regular quiz attempts (which go through `award_quiz_points`).
+      - `weekly_*` — bonus is a lifetime counter, not subject to T14 reset.
+
+    Invariant preserved (task #85, CR-011):
+        total_activity + total_quiz + total_submission + bonus_quiz_points
+        == total_points
 
     `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
-
-    Bonus quiz points are intentionally independent: they update only
-    ProgramEnrollment.bonus_quiz_points.
-    They do not change total_points, total_quiz_points, or weekly_quiz_points.
     """
     student_id = resolve_student(student_id)
     if not student_id:
@@ -147,13 +164,21 @@ def award_bonus_quiz_points(student_id, points, **_glific_kwargs):
         return {"success": False}
 
     old_bonus_points = int(pe.bonus_quiz_points or 0)
+    # Task #92 (2026-05-25): bonus_quiz_points AND total_points both bumped
+    # in the same atomic UPDATE. Pre-fix, only bonus_quiz_points was updated,
+    # which broke the CR-011 invariant (stream_sum == total_points) by
+    # exactly the awarded value — Glific would show inflated bonus but
+    # stale total_points until the next regular event happened to land.
+    # COALESCE is race-safe vs concurrent quiz / activity / submission
+    # updates that also touch total_points (per L-011).
     frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET bonus_quiz_points = COALESCE(bonus_quiz_points, 0) + %s
+           SET bonus_quiz_points = COALESCE(bonus_quiz_points, 0) + %s,
+               total_points      = COALESCE(total_points,      0) + %s
          WHERE name = %s
         """,
-        (parsed_points, pe.name),
+        (parsed_points, parsed_points, pe.name),
     )
 
     pe.reload()

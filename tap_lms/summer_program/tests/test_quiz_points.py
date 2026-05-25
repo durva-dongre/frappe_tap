@@ -350,3 +350,161 @@ class TestQuizPoints(FrappeTestCase):
             FakeAns(q2, 0),  # wrong → 1
         ])
         self.assertEqual(compute_quiz_points(attempt), 11)
+
+
+# ════════════════════════════════════════════════════════════
+# Task #92 — award_bonus_quiz_points must update total_points
+# ════════════════════════════════════════════════════════════
+
+class TestAwardBonusQuizPoints(FrappeTestCase):
+    """Task #92 (2026-05-25): bonus_quiz_points are awarded by Glific via
+    the `award_bonus_quiz_points` whitelisted endpoint when a student
+    completes an independent bonus activity (separate from regular quiz
+    attempts). They must update BOTH `bonus_quiz_points` (the dedicated
+    stream column) AND `total_points` (the cumulative scoreboard), and
+    must NOT leak into `weekly_quiz_points` or `total_quiz_points`
+    (those are reserved for regular quiz attempts).
+
+    Pre-task #92 the SQL only bumped `bonus_quiz_points`, breaking the
+    CR-011 invariant `total_activity + total_quiz + total_submission
+    + bonus_quiz_points == total_points`.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.batch_name = _ensure_batch()
+
+    def _setup_pe(self, suffix, total_points=0, bonus=0,
+                  total_quiz=0, weekly_quiz=0):
+        student = _ensure_student(suffix)
+        pe_name = _make_pe(self.batch_name, student, suffix)
+        # Seed starting state via direct DB write so we exercise the
+        # COALESCE branch of the SQL on a non-zero baseline.
+        frappe.db.set_value("ProgramEnrollment", pe_name, {
+            "total_points": total_points,
+            "bonus_quiz_points": bonus,
+            "total_quiz_points": total_quiz,
+            "weekly_quiz_points": weekly_quiz,
+        }, update_modified=False)
+        return student, pe_name
+
+    def test_bonus_award_updates_total_points_and_bonus(self):
+        """The headline regression: awarding 10 bonus points bumps BOTH
+        bonus_quiz_points (+10) AND total_points (+10)."""
+        from tap_lms.summer_program.quiz_points import award_bonus_quiz_points
+
+        student, pe_name = self._setup_pe(
+            "bonus01", total_points=50, bonus=0,
+            total_quiz=8, weekly_quiz=4,
+        )
+
+        result = award_bonus_quiz_points(student, 10)
+        self.assertTrue(result.get("success"),
+                        f"award should succeed, got {result}")
+
+        pe = frappe.db.get_value("ProgramEnrollment", pe_name,
+            ["total_points", "bonus_quiz_points",
+             "total_quiz_points", "weekly_quiz_points"], as_dict=True)
+        self.assertEqual(pe.total_points, 60,
+                         "total_points must reflect the +10 bonus")
+        self.assertEqual(pe.bonus_quiz_points, 10,
+                         "bonus_quiz_points must reflect the +10 bonus")
+        # Bonus must NOT leak into regular-quiz columns
+        self.assertEqual(pe.total_quiz_points, 8,
+                         "total_quiz_points must be untouched — bonus is "
+                         "independent of regular quiz attempts")
+        self.assertEqual(pe.weekly_quiz_points, 4,
+                         "weekly_quiz_points must be untouched — bonus is "
+                         "independent of regular quiz attempts")
+
+    def test_bonus_award_preserves_invariant(self):
+        """After awarding bonus points, the CR-011 invariant must hold:
+        total_activity + total_quiz + total_submission + bonus_quiz_points
+        == total_points."""
+        from tap_lms.summer_program.quiz_points import award_bonus_quiz_points
+
+        student, pe_name = self._setup_pe(
+            "bonus02", total_points=83, bonus=0,
+        )
+        # Seed per-stream so invariant starts true: 25 + 8 + 50 + 0 == 83
+        frappe.db.set_value("ProgramEnrollment", pe_name, {
+            "total_activity_points": 25,
+            "total_quiz_points": 8,
+            "total_submission_points": 50,
+        }, update_modified=False)
+
+        award_bonus_quiz_points(student, 15)
+
+        pe = frappe.db.get_value("ProgramEnrollment", pe_name,
+            ["total_points", "total_activity_points", "total_quiz_points",
+             "total_submission_points", "bonus_quiz_points"], as_dict=True)
+        stream_sum = (pe.total_activity_points + pe.total_quiz_points
+                      + pe.total_submission_points + pe.bonus_quiz_points)
+        self.assertEqual(stream_sum, pe.total_points,
+                         "CR-011 invariant must hold post-bonus-award")
+        self.assertEqual(pe.total_points, 98,
+                         "83 + 15 bonus = 98")
+        self.assertEqual(pe.bonus_quiz_points, 15)
+
+    def test_multiple_bonus_awards_accumulate(self):
+        """Three sequential bonus awards (5, 7, 3) must accumulate to
+        +15 on both columns. Verifies COALESCE-add semantics rather
+        than overwrite."""
+        from tap_lms.summer_program.quiz_points import award_bonus_quiz_points
+
+        student, pe_name = self._setup_pe("bonus03", total_points=0, bonus=0)
+
+        award_bonus_quiz_points(student, 5)
+        award_bonus_quiz_points(student, 7)
+        award_bonus_quiz_points(student, 3)
+
+        pe = frappe.db.get_value("ProgramEnrollment", pe_name,
+            ["total_points", "bonus_quiz_points"], as_dict=True)
+        self.assertEqual(pe.bonus_quiz_points, 15)
+        self.assertEqual(pe.total_points, 15)
+
+    def test_invalid_inputs_return_failure_without_mutating(self):
+        """Negative, non-numeric, and empty inputs must return
+        {'success': False} and leave the PE state untouched."""
+        from tap_lms.summer_program.quiz_points import award_bonus_quiz_points
+
+        student, pe_name = self._setup_pe(
+            "bonus04", total_points=42, bonus=7,
+        )
+
+        for bad in ("-5", "abc", "", None, "1.5"):
+            result = award_bonus_quiz_points(student, bad)
+            self.assertFalse(result.get("success"),
+                             f"input {bad!r} should fail validation")
+
+        pe = frappe.db.get_value("ProgramEnrollment", pe_name,
+            ["total_points", "bonus_quiz_points"], as_dict=True)
+        self.assertEqual(pe.total_points, 42,
+                         "total_points must be untouched on validation failure")
+        self.assertEqual(pe.bonus_quiz_points, 7,
+                         "bonus_quiz_points must be untouched on validation failure")
+
+    def test_event_log_records_bonus_award(self):
+        """Each successful award must write a `bonus_quiz_points_awarded`
+        ProgramEventLog row so the audit trail (and the
+        recompute-from-audit script) can reconstruct the total."""
+        from tap_lms.summer_program.quiz_points import award_bonus_quiz_points
+
+        student, pe_name = self._setup_pe("bonus05", total_points=0, bonus=0)
+        award_bonus_quiz_points(student, 25)
+
+        events = frappe.db.sql("""
+            SELECT event_type, new_value, old_value, trigger_source,
+                   LEFT(details::text, 200) AS details
+            FROM "tabProgramEventLog"
+            WHERE enrollment = %s
+              AND event_type = 'bonus_quiz_points_awarded'
+            ORDER BY created_at DESC LIMIT 1
+        """, (pe_name,), as_dict=True)
+        self.assertEqual(len(events), 1, "exactly one bonus event expected")
+        ev = events[0]
+        self.assertEqual(ev.new_value, "25")
+        self.assertEqual(ev.old_value, "0")
+        self.assertEqual(ev.trigger_source, "microservice")
+        self.assertIn("25", ev.details)
