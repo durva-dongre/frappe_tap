@@ -578,5 +578,177 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
         self.assertIn(call(), mock_frappe.db.rollback.call_args_list)
 
 
+# ════════════════════════════════════════════════════════════
+# Task #93 — structured-envelope hardening (api-standard-glific Rule 7)
+# ════════════════════════════════════════════════════════════
+
+class TestSaveSubmissionStructuredErrors(unittest.TestCase):
+    """Task #93 (2026-05-25): every error path in save_submission MUST
+    return the flat envelope via frappe.local.response, never raise.
+
+    Discord report 2026-05-25: Mayank (ST00052222) hit HTTP 500 because
+    Glific sent `submission=""` for his emoji flow. The downstream
+    _normalize_submission_payload raised
+    `frappe.ValidationError("Submission is required")`; the retry loop
+    didn't catch it; Frappe's HTTP layer returned raw HTML instead of
+    the documented `{success: false, status: ...}` envelope. This
+    violates docs/api-standard-glific.md Rule 7. Same bug class as
+    Layer 2 (#89) but for in-function exceptions, not parameter binding.
+    """
+
+    def test_empty_submission_returns_structured_envelope(self):
+        """The headline regression — Mayank's exact failing payload.
+        Empty `submission=""` must short-circuit with `status='submission_empty'`,
+        not raise / surface as HTML 500."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+            mock_frappe.DoesNotExistError = type(
+                "DoesNotExistError", (Exception,), {})
+
+            result = save_submission.save_submission(
+                student_id="ST00052222",
+                submission="",                # empty — the bug trigger
+                organization_id=12,           # Glific kwarg
+                assignment_id="GetReadyForScratchJr Main-Basic",
+            )
+
+        # Function MUST return cleanly (not raise) so the HTTP layer
+        # serializes the response envelope instead of returning HTML.
+        self.assertIsNone(result, "function must use frappe.local.response, not return")
+        # Response body matches the documented structured envelope.
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "submission_empty")
+        self.assertIn("user_message", mock_frappe.local.response)
+        self.assertIn("error_detail", mock_frappe.local.response)
+
+    def test_whitespace_only_submission_treated_as_empty(self):
+        """Defensive: '   ' (whitespace) is functionally empty — same
+        structured response, no exception."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                submission="    ",            # whitespace-only
+                assignment_id="ASN-1",
+            )
+
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "submission_empty")
+
+    def test_none_submission_treated_as_empty(self):
+        """`submission=None` (not passed at all) → same structured response."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                assignment_id="ASN-1",
+                # submission not passed at all
+            )
+
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "submission_empty")
+
+    def test_validation_error_from_inner_function_returns_envelope(self):
+        """If `_save_submission_once` raises ValidationError (e.g., student
+        not enrolled, assignment not found, week out of range), the wrapper
+        must convert to structured response — NOT let it escape as HTML 500."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_save_submission_once") as inner:
+            mock_frappe.local.response = {}
+            ValidationError = type("ValidationError", (Exception,), {})
+            mock_frappe.ValidationError = ValidationError
+            mock_frappe.DoesNotExistError = type(
+                "DoesNotExistError", (Exception,), {})
+
+            inner.side_effect = ValidationError("Student not enrolled")
+
+            result = save_submission.save_submission(
+                student_id="STU-NOT-EXIST",
+                submission="real submission",
+                assignment_id="ASN-1",
+            )
+
+        self.assertIsNone(result)
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "validation_error")
+        self.assertIn("Student not enrolled",
+                      mock_frappe.local.response["error_detail"])
+
+    def test_does_not_exist_error_returns_envelope(self):
+        """`frappe.DoesNotExistError` (e.g., assignment_id refers to a
+        missing doc) → `status='not_found'` envelope, not HTML 500."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_save_submission_once") as inner:
+            mock_frappe.local.response = {}
+            DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+            mock_frappe.DoesNotExistError = DoesNotExistError
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+
+            inner.side_effect = DoesNotExistError("Assignment ASN-X not found")
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                submission="real submission",
+                assignment_id="ASN-X",
+            )
+
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"], "not_found")
+
+    def test_unknown_exception_returns_internal_error_envelope(self):
+        """Even a totally unexpected exception (KeyError, TypeError in
+        a helper, etc.) must NOT escape as HTML 500. The wrapper logs
+        the error AND returns structured response."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_save_submission_once") as inner, \
+                patch.object(save_submission, "_is_serialization_failure",
+                             return_value=False):
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+            mock_frappe.DoesNotExistError = type(
+                "DoesNotExistError", (Exception,), {})
+
+            inner.side_effect = KeyError("unexpected key 'foo'")
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                submission="real submission",
+                assignment_id="ASN-1",
+            )
+
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "internal_error")
+        # log_error MUST have fired so ops can investigate root cause.
+        self.assertTrue(
+            mock_frappe.log_error.called,
+            "internal_error path must log to Error Log for ops visibility",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

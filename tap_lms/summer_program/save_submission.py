@@ -94,6 +94,23 @@ def save_submission(student_id, assignment_id=None, submission=None,
         dict with: status (accepted|duplicate|rejected), is_primary,
                    points_awarded, submission_count, submission_id
     """
+    # Task #93 (2026-05-25): pre-validate empty submission and short-circuit
+    # with structured response. Prevents the downstream
+    # `_normalize_submission_payload` from raising
+    # `frappe.ValidationError("Submission is required")`, which would
+    # escape the retry loop and surface as raw HTTP 500 HTML — violating
+    # api-standard-glific.md Rule 7. Surfaces as a clean `status="submission_empty"`
+    # branch for Glific flows. Discord report 2026-05-25: Mayank (ST00052222)
+    # blocked here because his emoji-flow webhook sent submission="".
+    if submission is None or not str(submission).strip():
+        frappe.local.response.update({
+            "success": False,
+            "status": "submission_empty",
+            "user_message": "Please submit your response.",
+            "error_detail": "submission parameter is empty or whitespace-only",
+        })
+        return
+
     last_error = None
     for attempt in range(1, SAVE_SUBMISSION_DB_RETRY_ATTEMPTS + 1):
         try:
@@ -104,9 +121,53 @@ def save_submission(student_id, assignment_id=None, submission=None,
                 week=week,
                 content_id=content_id,
             )
+        except frappe.ValidationError as e:
+            # Task #93: convert validation errors to structured response per
+            # api-standard-glific.md Rule 7. Any `frappe.throw` call inside
+            # `_save_submission_once` raises ValidationError; without this
+            # catch, those escape to Frappe's HTTP layer and surface as raw
+            # HTML 500. Glific flows expect the flat envelope so they can
+            # branch on `status`.
+            frappe.db.rollback()
+            frappe.local.response.update({
+                "success": False,
+                "status": "validation_error",
+                "user_message": str(e) or "Validation error.",
+                "error_detail": str(e),
+            })
+            return
+        except frappe.DoesNotExistError as e:
+            # Same pattern for missing-record errors (student, assignment,
+            # PE not found). Structured envelope, not HTML 500.
+            frappe.db.rollback()
+            frappe.local.response.update({
+                "success": False,
+                "status": "not_found",
+                "user_message": "Required record not found.",
+                "error_detail": str(e),
+            })
+            return
         except Exception as e:
             if not _is_serialization_failure(e):
-                raise
+                # Unknown exception — log + structured response. Per Rule 7
+                # an unhandled error must NEVER surface as raw HTML 500.
+                # Logged under "SP Save Submission" so ops can investigate
+                # the root cause while Glific gets a parseable answer.
+                frappe.db.rollback()
+                frappe.log_error(
+                    f"save_submission unhandled exception for "
+                    f"student_id={student_id}, assignment_id={assignment_id}: "
+                    f"{type(e).__name__}: {e}",
+                    "SP Save Submission",
+                )
+                frappe.local.response.update({
+                    "success": False,
+                    "status": "internal_error",
+                    "user_message": "Could not process your submission. "
+                                    "Please try again later.",
+                    "error_detail": f"{type(e).__name__}: {e}",
+                })
+                return
 
             last_error = e
             frappe.db.rollback()
@@ -607,8 +668,32 @@ def _build_submission_response(pe, student_id, submission_doc, is_primary, point
 # ════════════════════════════════════════════════════════════
 
 def _update_engagement(student_id):
-    """Update EngagementState on submission."""
+    """Update EngagementState on submission.
+
+    Task #94 hardening (2026-05-25):
+      - On INSERT (new EngagementState), explicitly set known-NOT-NULL-drift
+        fields (`average_response_time` etc.) to empty string. The doctype
+        JSON declares them as plain Data fields (no `reqd: 1`), but the
+        production DB has a NOT NULL constraint on `average_response_time`
+        from a manual `ALTER TABLE ... SET NOT NULL` that was never
+        backported to the JSON. Without the default, the INSERT raises
+        `NotNullViolation`, which poisons the outer Postgres txn (L-030),
+        which then breaks the subsequent `frappe.log_error` call with
+        `InFailedSqlTransaction`, which cascades up to the @frappe.whitelist
+        boundary as raw HTTP 500 HTML — breaking Glific's flow.
+      - Wrap the EngagementState mutation in a SAVEPOINT so any future
+        schema drift in this doctype fails CONTAINED (rolled back to the
+        savepoint) instead of poisoning save_submission's outer txn.
+      - On exception: rollback to the savepoint FIRST so the txn is clean
+        before we attempt `frappe.log_error` (L-030).
+
+    The submission itself is independent of EngagementState — losing the
+    EngagementState write is acceptable; losing the submission is not.
+    """
+    savepoint = f"engagement_{frappe.utils.random_string(8)}"
     try:
+        frappe.db.sql(f"SAVEPOINT {savepoint}")
+
         es = frappe.db.get_value(
             "EngagementState", {"student": student_id},
             ["name", "last_activity_date", "current_streak"], as_dict=True,
@@ -635,8 +720,28 @@ def _update_engagement(student_id):
             new_es.last_activity_date = today_date
             new_es.current_streak = 1
             new_es.last_updated = now_datetime()
+            # Task #94: defaults for fields that have DB-level NOT NULL
+            # constraints even though the doctype JSON says they're nullable.
+            # Schema drift — production DB was manually ALTERed at some
+            # point. Setting empty string satisfies NOT NULL.
+            new_es.average_response_time = ""
+            new_es.completion_rate = ""
+            new_es.re_engagement_attempts = ""
             new_es.insert(ignore_permissions=True)
+
+        frappe.db.sql(f"RELEASE SAVEPOINT {savepoint}")
     except Exception as e:
+        # Rollback to savepoint clears the poisoned-txn state from the
+        # failed EngagementState write. WITHOUT this, the subsequent
+        # log_error fails with InFailedSqlTransaction and escapes up to
+        # the whitelisted entry-point as HTML 500.
+        try:
+            frappe.db.sql(f"ROLLBACK TO SAVEPOINT {savepoint}")
+        except Exception:
+            # Savepoint may not exist if SAVEPOINT itself failed earlier.
+            # Last-resort rollback (loses the whole txn — better than
+            # propagating the unhandled exception).
+            frappe.db.rollback()
         frappe.log_error(f"EngagementState error: {str(e)}", "SP Engagement")
 
 
