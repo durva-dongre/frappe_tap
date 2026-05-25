@@ -115,8 +115,10 @@ def award_quiz_points(attempt):
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def award_bonus_quiz_points(student_id, points):
+def award_bonus_quiz_points(student_id, points, **_glific_kwargs):
     """Award independent bonus quiz points to the student's active PE.
+
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
 
     Bonus quiz points are intentionally independent: they update only
     ProgramEnrollment.bonus_quiz_points.

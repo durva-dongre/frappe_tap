@@ -30,9 +30,11 @@ from tap_lms.summer_program.event_log import log_event
 
 
 @frappe.whitelist(allow_guest=False)
-def reactivate_student(student_id):
+def reactivate_student(student_id, **_glific_kwargs):
     """
     API A5: reactivate_student
+
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
 
     Resumes a paused student. Called by SP_Incoming_Router when a paused
     student sends any WhatsApp message.

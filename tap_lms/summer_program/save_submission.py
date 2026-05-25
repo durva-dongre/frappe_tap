@@ -65,7 +65,8 @@ def _is_serialization_failure(error):
 
 
 @frappe.whitelist(allow_guest=True)
-def save_submission(student_id, assignment_id=None, submission=None, week=None, content_id=None):
+def save_submission(student_id, assignment_id=None, submission=None,
+                    week=None, content_id=None, **_glific_kwargs):
     """
     API A3: save_submission
 
@@ -81,6 +82,13 @@ def save_submission(student_id, assignment_id=None, submission=None, week=None, 
                     use this name; pattern P-006 keeps it around for one
                     cycle with a deprecation log. New flows should use
                     assignment_id. Restored 2026-05-15 (task #78 / audit).
+        **_glific_kwargs: absorbs any extra fields Glific injects into its
+                    outbound webhook payload (e.g. `organization_id`, the
+                    multi-tenant tag added 2026-05-25 — discord report:
+                    Himani re Mayank ST00052222). Per task #89 / future
+                    L-043, every Glific-consumed endpoint accepts these
+                    silently so a Glific-side payload expansion can never
+                    TypeError us into a raw HTML 500. Ignored at this layer.
 
     Returns:
         dict with: status (accepted|duplicate|rejected), is_primary,
@@ -308,9 +316,12 @@ def _save_submission_once(student_id, assignment_id=None, submission=None, week=
 
 
 @frappe.whitelist(allow_guest=True)
-def get_submission_feedback(submission_id):
+def get_submission_feedback(submission_id, **_glific_kwargs):
     """
     Get feedback for a summer-program submission.
+
+    `**_glific_kwargs` absorbs Glific-injected fields (organization_id, etc.)
+    per task #89. Ignored at this layer.
 
     Args:
         submission_id: Submission document ID

@@ -63,9 +63,12 @@ DEFAULT_LANGUAGE = "English"
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def get_weekly_content(student_id, course_level=None):
+def get_weekly_content(student_id, course_level=None, **_glific_kwargs):
     """
     Get the current week's content for a Summer Program student.
+
+    `**_glific_kwargs` absorbs Glific-injected fields (organization_id,
+    etc.) per task #89 — ignored at this layer.
     Returns the appropriate LearningUnit (Core or Remedial)
     based on the student's archetype, submission history,
     and ArchetypeConfig rules.
@@ -223,8 +226,10 @@ def get_weekly_content(student_id, course_level=None):
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def get_next_content(student_id, course_level=None):
+def get_next_content(student_id, course_level=None, **_glific_kwargs):
     """
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
+
     Get next content item for a Summer Program student.
     Steps through LearningUnit items one at a time using
     current_content_index in StudentStageProgress.
@@ -600,8 +605,11 @@ def get_next_content(student_id, course_level=None):
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def get_content_details(content_type, content_id, language=None, student_id=None):
+def get_content_details(content_type, content_id, language=None,
+                        student_id=None, **_glific_kwargs):
     """
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
+
     Get detailed information about a specific content item.
     Returns type-specific payload:
       - VideoClass: youtube_url, plio_url, video_file + translations
@@ -765,9 +773,12 @@ def get_content_details(content_type, content_id, language=None, student_id=None
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def complete_content(student_id, course_level, content_type, content_id):
+def complete_content(student_id, course_level, content_type, content_id,
+                     **_glific_kwargs):
     """
     Mark non-quiz content as complete and advance to next item.
+
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
     For Quiz content, use start_quiz / submit_answer instead.
 
     Called by: Glific after student views a video, reads a note, etc.
@@ -952,10 +963,13 @@ def _advance_to_next_content(progress_data, course_level):
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def start_quiz(student_id, course_level, quiz_id, language=None):
+def start_quiz(student_id, course_level, quiz_id, language=None,
+               **_glific_kwargs):
     """
     Begin a quiz attempt or resume an existing in-progress attempt.
     Returns the first (or current) question with options A/B/C/D.
+
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
 
     Called by: Glific quiz sub-flow after get_next_content returns
     a Quiz content item.
@@ -1135,9 +1149,12 @@ def _resume_quiz(attempt, progress_data, language=None):
 
 @frappe.whitelist(allow_guest=False)
 @glific_response
-def submit_answer(student_id, quiz_attempt_id, question_index, answer, language=None):
+def submit_answer(student_id, quiz_attempt_id, question_index, answer,
+                  language=None, **_glific_kwargs):
     """
     Submit an answer for the current quiz question.
+
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
 
     On the last question, automatically completes the quiz and returns
     pass/fail result. Server-side time tracking per question.

@@ -17,10 +17,12 @@ EXPECTED_SUBMISSION_LABELS = {
 
 
 @frappe.whitelist(allow_guest=False)
-def get_submission_message(student_id, flow_type):
+def get_submission_message(student_id, flow_type, **_glific_kwargs):
     """
     Get the appropriate submission message for a student, based on their current
     state and the content they are submitting against.
+
+    `**_glific_kwargs` absorbs Glific-injected fields per task #89 — ignored.
 
     Args:
         student_id: Student document name

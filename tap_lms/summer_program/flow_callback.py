@@ -90,12 +90,16 @@ def _response(pe, status_value, **extras):
 
 
 @frappe.whitelist(allow_guest=True)
-def update_flow_status(student_id, flow_name, status, metadata=None):
+def update_flow_status(student_id, flow_name, status, metadata=None,
+                       **_glific_kwargs):
     """
     API A4: update_flow_status
 
     Called by EVERY Glific flow on completion. This is how Glific tells the
     backend that a flow finished, and what the outcome was.
+
+    `**_glific_kwargs` absorbs Glific-injected fields (organization_id, etc.)
+    per task #89. Ignored at this layer.
 
     Args:
         student_id: Student document name or glific_id
