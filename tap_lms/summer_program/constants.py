@@ -244,12 +244,25 @@ CF_WEEKLY_SUBMISSION_POINTS = "weekly_submission_points"
 CF_SPECIAL_GEMS = "special_gems"
 CF_WEEKLY_SUBMISSION_DONE = "weekly_submission_done"
 
-# NOTE (2026-05-25): pre-CR-002 Glific flows reading `@contact.fields.streak`
-# and `@contact.fields.gems` see STALE values — those legacy keys are no
-# longer written by the backend (canonical writes go to `current_streak`
-# and `special_gems` only). Glific-flow owners must migrate their flows to
-# the canonical keys. We considered a backend dual-write alias bridge but
-# rejected it per L-027 (MVP) — Glific is the right place to fix it.
+# IMPORTANT — multi-tenant Glific boundary (2026-05-26):
+# Legacy Glific contact fields like `streak`, `gems`, `bonus_points`,
+# `current_activity_points`, `recent_quiz_points`, `streak_v1`,
+# `orginal_streak`, `total_p`, etc. exist on the shared Glific organisation
+# and are OWNED BY OTHER PROGRAMS (TLM, scert, pocflow, …). The Glific org
+# has ~470 contact field definitions across all programs that share it.
+#
+# **The SP backend must NEVER write to a contact field it didn't create.**
+# Writing to `streak` or `gems` from SP would silently clobber values that
+# other programs depend on for their own flow logic. Treat the SP namespace
+# as exactly the 29 fields registered by `dev_tools.bootstrap_sp_contact_fields()`
+# — anything else on the contact is out of bounds.
+#
+# Therefore: SP writes to `current_streak` and `special_gems` (our canonical,
+# SP-owned keys); we do NOT alias-bridge to the legacy `streak`/`gems` keys
+# even if pre-CR-002 SP flows still reference them. The fix for any
+# SP-owned flow still reading legacy keys is to update the flow to point
+# at the SP-owned key. Other programs' flows reading their own legacy keys
+# are untouched, as intended.
 
 # ── CR-003 escalation channel routing fields ──────────────
 # Pushed before the SP_Escalation flow trigger so Glific can branch on the

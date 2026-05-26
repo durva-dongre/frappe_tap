@@ -198,12 +198,18 @@ def _enqueue_contact_field_sync(pe):
     INTENTIONALLY EXCLUDED:
         weekly_video_done — internal state-machine flag for T19 streak/gem
                             penalty branch; never pushed to Glific.
-        streak / gems     — pre-CR-002 legacy Glific keys. NOT written by
-                            the backend; Glific flows must migrate to read
-                            `current_streak` / `special_gems` directly.
-                            Stale legacy values in Glific contact cache are
-                            cosmetic — flows that branch on them need to be
-                            updated to the canonical keys. See L-008.
+        streak / gems     — these are LEGACY Glific keys OWNED BY OTHER
+                            and other programs sharing the same Glific
+                            organisation (TLM, scert, pocflow, …). The
+                            shared org has ~470 contact field definitions
+                            across all programs; the SP backend MUST NOT
+                            write to any field outside its registered
+                            namespace (the 29 SP-owned fields above) —
+                            doing so would silently clobber data that
+                            other programs rely on. SP-owned canonical
+                            keys are `current_streak` and `special_gems`.
+                            See L-008 (rename = breakage) and constants.py
+                            multi-tenant boundary note.
 
     If you add a new contact field to the SP, update both this function
     AND _process_pe_chunk's enrollment-time push so the cache is consistent
