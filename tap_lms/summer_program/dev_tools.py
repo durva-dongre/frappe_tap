@@ -1516,6 +1516,115 @@ def reconcile_batch_to_glific(batch_name, dry_run=False, verbose=True):
 
 
 # ════════════════════════════════════════════════════════════
+# Bootstrap: register SP contact field DEFINITIONS on Glific
+# Added 2026-05-26 — Glific support flagged that updateContact only writes
+# field VALUES; flow dropdowns and @contact.fields.X resolution need a
+# separate createContactsField call per field DEFINITION. Without this,
+# template tokens render as literal text (e.g. Himani's "Submission Missing!"
+# card showing "@co" instead of bonus_quiz_points).
+# ════════════════════════════════════════════════════════════
+
+# (shortcode, display_name) tuples — shortcode MUST match the CF_* constants
+# in constants.py so @contact.fields.<shortcode> matches what we push. Display
+# names are human-readable for the Glific UI dropdown.
+#
+# When you add a new contact field to the SP, add a row here AND re-run
+# `bootstrap_sp_contact_fields()` to register the definition on every Glific
+# org. Without that step the value will be set but flows can't read it.
+SP_CONTACT_FIELD_DEFINITIONS = [
+    # Identity (7) — pushed once at enrollment, immutable thereafter.
+    ("student_id",                       "Student ID"),
+    ("student_name",                     "Student Name"),
+    ("batch_id",                         "Batch ID"),
+    ("archetype",                        "Archetype"),
+    ("language_id",                      "Language ID"),
+    ("experiment_arm",                   "Experiment Arm"),
+    ("course_level",                     "Course Level"),
+    # Base state (11) — re-pushed on every state-machine transition.
+    ("resolved_flow_state",              "Resolved Flow State"),
+    ("current_week",                     "Current Week"),
+    ("current_path",                     "Current Path"),
+    ("current_tier",                     "Current Tier"),
+    ("program_status",                   "Program Status"),
+    ("total_points",                     "Total Points"),
+    ("current_streak",                   "Current Streak"),
+    ("grace_window_end_at",              "Grace Window End At"),
+    ("current_expected_submission_type", "Expected Submission Type"),
+    ("last_escalation_step",             "Last Escalation Step"),
+    ("submission_count",                 "Submission Count"),
+    # CR-002 v2 gamification (9 — includes bonus_quiz_points added 2026-05-25).
+    ("total_activity_points",            "Total Activity Points"),
+    ("weekly_activity_points",           "Weekly Activity Points"),
+    ("total_quiz_points",                "Total Quiz Points"),
+    ("weekly_quiz_points",               "Weekly Quiz Points"),
+    ("total_submission_points",          "Total Submission Points"),
+    ("weekly_submission_points",         "Weekly Submission Points"),
+    ("special_gems",                     "Special Gems"),
+    ("weekly_submission_done",           "Weekly Submission Done"),
+    ("bonus_quiz_points",                "Bonus Quiz Points"),
+    # CR-003 escalation routing (2).
+    ("escalation_order",                 "Escalation Order"),
+    ("escalation_type",                  "Escalation Type"),
+]
+
+
+def bootstrap_sp_contact_fields(verbose=True):
+    """Register every SP contact field DEFINITION on the connected Glific org.
+
+    Idempotent — fields already registered return "shortcode already taken"
+    from Glific, which the `register_contact_field` helper treats as success.
+
+    Run this ONCE per Glific organization (dev, prod) right after the app
+    is installed / connected to that org. Re-run whenever a new field is
+    added to `SP_CONTACT_FIELD_DEFINITIONS` (cheap and safe to re-run any
+    time — already-registered fields are no-ops).
+
+    Why this exists: Glific's updateContact mutation writes the VALUE into
+    the contacts.fields JSON column, but the field is invisible to the Flow
+    Editor (no dropdown entry, @contact.fields.X renders as literal text)
+    until a separate createContactsField mutation registers the DEFINITION.
+    Glific support confirmed this 2026-05-26 in response to the "Submission
+    Missing!" card rendering @contact.fields.bonus_quiz_points as garbled
+    text on Himani's contact (ST00051295).
+
+    Returns:
+        Dict {shortcode: bool} where bool=True means the field is now
+        registered (either freshly created or already existed).
+    """
+    from tap_lms.glific_integration import register_contact_field
+
+    results = {}
+    ok_count = 0
+    fail_count = 0
+    for shortcode, display_name in SP_CONTACT_FIELD_DEFINITIONS:
+        ok = register_contact_field(shortcode, display_name)
+        results[shortcode] = ok
+        if ok:
+            ok_count += 1
+        else:
+            fail_count += 1
+        if verbose:
+            status = "✓" if ok else "✗"
+            print(f"  {status}  {shortcode:32s}  ({display_name})")
+
+    if verbose:
+        print(
+            f"\nbootstrap_sp_contact_fields DONE: "
+            f"{ok_count}/{len(SP_CONTACT_FIELD_DEFINITIONS)} registered "
+            f"({fail_count} failed)."
+        )
+        if fail_count:
+            print(
+                "Failures listed above — check the Glific Error Log for "
+                "the underlying GraphQL response. Common causes: API key "
+                "rotated, network blip, or a field name with an invalid "
+                "character that Glific rejected."
+            )
+
+    return results
+
+
+# ════════════════════════════════════════════════════════════
 # Internal helpers
 # ════════════════════════════════════════════════════════════
 

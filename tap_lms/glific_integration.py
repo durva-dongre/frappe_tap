@@ -274,6 +274,142 @@ def update_contact_fields(contact_id, fields_to_update, language_id=None):
         frappe.logger().error(f"Glific update_contact_fields error for {contact_id}: {str(e)}")
         return False
 
+
+# ════════════════════════════════════════════════════════════
+# CONTACT FIELD DEFINITION (createContactsField)
+# ════════════════════════════════════════════════════════════
+# Added 2026-05-26 (task #3 per session) in response to Glific support
+# ticket reply by Priyanshu (Glific) re. Himani-TAP escalation_order issue.
+#
+# Glific separates contact field VALUE from contact field DEFINITION:
+#   - VALUE      → stored in contacts.fields JSON via `updateContact`.
+#                  Visible in the contact profile JSON.
+#   - DEFINITION → registered in the contacts_fields table via
+#                  `createContactsField`. Required to make the field:
+#                    (a) selectable in the Flow Editor variable dropdown,
+#                    (b) resolvable via @contact.fields.<shortcode> in
+#                        flow templates / send-message nodes,
+#                    (c) returned in webhook query parameters where
+#                        applicable.
+#
+# Without (b), template tokens like @contact.fields.bonus_quiz_points
+# render as LITERAL TEXT to the end user — the root cause of the
+# "Submission Missing!" garbled card on Himani's contact (2026-05-26).
+#
+# Idempotency: createContactsField returns an error with key 'shortcode'
+# and message like 'has already been taken' when the field exists. The
+# helper treats that as a no-op (returns True). Other errors return False.
+#
+# Run once per Glific organization (dev, prod) via the bootstrap function
+# `dev_tools.bootstrap_sp_contact_fields()`. After that, the standard
+# update_contact_fields path is sufficient because the definitions persist.
+
+def register_contact_field(shortcode, display_name, value_type="TEXT",
+                           scope="CONTACT"):
+    """Register a Glific contact field DEFINITION (idempotent).
+
+    Args:
+        shortcode:   String — exact key used in @contact.fields.<shortcode>.
+                     Must match the CF_* constant from constants.py.
+        display_name: String — human-readable name shown in the Glific UI.
+        value_type:  Glific enum — TEXT / NUMBER / DATE / etc. TEXT is the
+                     safe default because Glific's flow rendering converts
+                     numbers to strings anyway and the JSON we store via
+                     updateContact uses {"type": "string"}.
+        scope:       CONTACT (default — per-contact) or WA_GROUP / RELATIONSHIP.
+                     We only use CONTACT.
+
+    Returns:
+        True  — field now exists (newly created OR already existed).
+        False — registration failed for some other reason. Logged.
+
+    Network: one POST to Glific GraphQL API. Synchronous.
+    """
+    settings = get_glific_settings()
+    url = f"{settings.api_url}/api"
+    headers = get_glific_auth_headers()
+
+    payload = {
+        "query": """
+        mutation CreateContactsField($input: ContactsFieldInput!) {
+          createContactsField(input: $input) {
+            contactsField {
+              id
+              name
+              shortcode
+              valueType
+              scope
+            }
+            errors {
+              key
+              message
+            }
+          }
+        }
+        """,
+        "variables": {
+            "input": {
+                "name": display_name,
+                "shortcode": shortcode,
+                "valueType": value_type,
+                "scope": scope,
+            },
+        },
+    }
+
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+
+        if "errors" in data:
+            frappe.logger().error(
+                f"Glific register_contact_field GraphQL error "
+                f"for shortcode={shortcode!r}: {data['errors']}"
+            )
+            return False
+
+        result = data.get("data", {}).get("createContactsField", {})
+        mutation_errors = result.get("errors") or []
+
+        # Idempotency: treat "already taken" / "already exists" as success.
+        if mutation_errors:
+            for err in mutation_errors:
+                msg = (err.get("message") or "").lower()
+                if ("already" in msg) or ("taken" in msg) or ("exists" in msg):
+                    # Already registered — no-op success.
+                    return True
+            # Some other mutation error (validation, permission, etc.)
+            frappe.logger().error(
+                f"Glific register_contact_field mutation error "
+                f"for shortcode={shortcode!r}: {mutation_errors}"
+            )
+            return False
+
+        if result.get("contactsField"):
+            return True
+
+        # Empty errors AND no contactsField — unexpected response shape.
+        frappe.logger().error(
+            f"Glific register_contact_field unexpected response "
+            f"for shortcode={shortcode!r}: {data}"
+        )
+        return False
+
+    except requests.exceptions.RequestException as e:
+        frappe.logger().error(
+            f"Glific register_contact_field network error "
+            f"for shortcode={shortcode!r}: {e}"
+        )
+        return False
+    except Exception as e:
+        frappe.logger().error(
+            f"Glific register_contact_field error "
+            f"for shortcode={shortcode!r}: {e}"
+        )
+        return False
+
+
 def get_contact_by_phone(phone):
     settings = get_glific_settings()
     url = f"{settings.api_url}/api"
