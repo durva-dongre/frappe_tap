@@ -102,6 +102,15 @@ scheduler_events = {
         "0 * * * *": [
             "tap_lms.summer_program.pre_launch.feedback_ready_watchdog",
         ],
+        # Task #97 (2026-05-25, CR-???): every-10-minute PE→Glific drift
+        # reconciliation. Pre-launch cadence — catches drift from
+        # db.set_value / Frappe Desk UI edits that bypass
+        # _enqueue_contact_field_sync. Post-launch: revisit and relax to
+        # hourly or daily once cohort stabilizes and Desk edits drop to
+        # zero. See scheduler.periodic_glific_reconcile docstring.
+        "*/10 * * * *": [
+            "tap_lms.summer_program.scheduler.periodic_glific_reconcile",
+        ],
     },
 }
 

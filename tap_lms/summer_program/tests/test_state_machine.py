@@ -598,13 +598,20 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         self.assertIn("escalation_order", fields)
         self.assertIn("escalation_type", fields)
 
+        # Task #98 (2026-05-25): bonus_quiz_points added to per-transition
+        # push so the Glific gamification card's
+        # @contact.fields.bonus_quiz_points always resolves.
+        self.assertIn("bonus_quiz_points", fields)
+
         # Total count = 11 state-mutating + 8 CR-002 v2 gamification +
-        # 2 CR-003 (escalation_order + escalation_type) = 21 per-transition
+        # 1 (task #98) bonus_quiz_points +
+        # 2 CR-003 (escalation_order + escalation_type) = 22 per-transition
         # push fields. (The other 7 immutables live elsewhere.)
         self.assertEqual(
-            len(fields), 21,
+            len(fields), 22,
             "Per-transition sync pushes 11 existing + 8 gamification + "
-            "2 CR-003 (escalation_order + escalation_type) = 21 fields",
+            "1 bonus_quiz_points + 2 CR-003 (escalation_order + escalation_type) "
+            "= 22 fields",
         )
 
 

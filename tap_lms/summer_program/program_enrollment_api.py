@@ -29,6 +29,10 @@ from tap_lms.summer_program.constants import (
     CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
     CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
+    # Task #98 (2026-05-25): bonus_quiz_points added to enrollment-time push
+    # so the contact has the field from day one (and the Glific gamification
+    # card never renders the literal @contact.fields.bonus_quiz_points text).
+    CF_BONUS_QUIZ_POINTS,
     # CR-003 escalation routing (2 fields, initialized to empty/0 — no
     # escalation at enrollment time)
     CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
@@ -347,9 +351,10 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
                     CF_EXPECTED_SUBMISSION: expected_submission or "",
                     CF_LAST_ESCALATION_STEP: "0",
                     CF_SUBMISSION_COUNT: "0",
-                    # ── 8 CR-002 v2 gamification (all 0 at enrollment) ──
-                    # bonus_quiz_points is intentionally excluded — see the
-                    # docstring on _enqueue_contact_field_sync.
+                    # ── 9 CR-002 v2 gamification (all 0 at enrollment) ──
+                    # Includes bonus_quiz_points (added 2026-05-25 task #98)
+                    # so the Glific gamification card's
+                    # @contact.fields.bonus_quiz_points resolves from day one.
                     CF_TOTAL_ACTIVITY_POINTS: "0",
                     CF_WEEKLY_ACTIVITY_POINTS: "0",
                     CF_TOTAL_QUIZ_POINTS: "0",
@@ -358,6 +363,10 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
                     CF_WEEKLY_SUBMISSION_POINTS: "0",
                     CF_SPECIAL_GEMS: "0",
                     CF_WEEKLY_SUBMISSION_DONE: "0",
+                    # Task #98 (2026-05-25): bonus_quiz_points seeded at 0
+                    # so the Glific gamification card finds the field on
+                    # day one and doesn't render the literal template text.
+                    CF_BONUS_QUIZ_POINTS: "0",
                     # ── 2 CR-003 escalation routing (empty at enrollment) ──
                     CF_ESCALATION_ORDER: "0",
                     CF_ESCALATION_TYPE: "",
@@ -585,6 +594,9 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
             CF_WEEKLY_SUBMISSION_POINTS: "0",
             CF_SPECIAL_GEMS: "0",
             CF_WEEKLY_SUBMISSION_DONE: "0",
+            # Task #98 (2026-05-25): bonus_quiz_points seeded at 0 — see
+            # _process_pe_chunk for full rationale.
+            CF_BONUS_QUIZ_POINTS: "0",
             # ── 2 CR-003 escalation routing (empty at enrollment) ──
             CF_ESCALATION_ORDER: "0",
             CF_ESCALATION_TYPE: "",
@@ -722,14 +734,39 @@ def get_student_state(student_id):
     """
     API A1: get_student_state
 
-    Fallback API when Glific contact fields may be stale.
-    Returns current PE state as a single SELECT by student_id.
+    Fallback API when Glific contact fields may be stale OR missing.
+    Returns full Glific-parity PE state as a single flat-map response.
 
-    Called by SP_Incoming_Router as fallback if contact fields seem
-    inconsistent.
+    Used by Glific flows that:
+      (a) hit a stale contact.fields snapshot (flow execution captured the
+          contact state before the latest sync landed), or
+      (b) need a key that's not pushed to contact.fields (none currently —
+          bonus_quiz_points was added 2026-05-25 — but a defensive single
+          source of truth saves debugging time when this kind of drift
+          appears in the future).
+
+    Field parity with the Glific contact-field sync payload:
+      Identity (7): student_id, student_name, batch_id, archetype,
+                    language_id, experiment_arm, course_level
+      State (21):   resolved_flow_state, current_week, current_path,
+                    current_tier, program_status, total_points,
+                    current_streak, grace_window_end_at,
+                    current_expected_submission_type, last_escalation_step,
+                    submission_count, total_activity_points,
+                    weekly_activity_points, total_quiz_points,
+                    weekly_quiz_points, total_submission_points,
+                    weekly_submission_points, special_gems,
+                    weekly_submission_done, bonus_quiz_points,
+                    escalation_order, escalation_type
+      Bonus (debug): name (PE doc name), batch (PE.batch doc name),
+                    journey_label, in_grace_window, program_type, language,
+                    current_escalation_type, glific_id
 
     Response (via frappe.local.response per docs/api-standard-glific.md Rule 1):
         Flat dict with `success` + `status` + PE fields. Does NOT return.
+
+    Last expanded 2026-05-25 (task #99) for full Glific parity in
+    response to the ST00051295 "Submission Missing!" template-render bug.
     """
     student_id = _resolve_student(student_id)
     if not student_id:
@@ -756,13 +793,16 @@ def get_student_state(student_id):
             "submission_count", "current_escalation_step",
             "current_escalation_type", "course_level",
             "language", "glific_id",
-            # CR-002 v2 — 8 new gamification fields. Flat-map per
+            # CR-002 v2 — 9 gamification fields. Flat-map per
             # docs/api-standard-glific.md Rule 1 (no nesting, no arrays).
             # `weekly_video_done` is internal-only and intentionally omitted.
+            # `bonus_quiz_points` added 2026-05-25 (task #99) for full
+            # Glific-parity — Glific flow template references it.
             "total_activity_points", "weekly_activity_points",
             "total_quiz_points", "weekly_quiz_points",
             "total_submission_points", "weekly_submission_points",
             "special_gems", "weekly_submission_done",
+            "bonus_quiz_points",
         ],
         as_dict=True,
         order_by="modified desc",
@@ -784,10 +824,34 @@ def get_student_state(student_id):
     if "current_escalation_step" in pe_data:
         pe_data["last_escalation_step"] = pe_data.pop("current_escalation_step")
 
+    # Task #99 (2026-05-25): also expose `escalation_order` for symmetry
+    # with the Glific contact-field sync payload (`last_escalation_step`
+    # and `escalation_order` share the same source — pe.current_escalation_step
+    # — and Glific has both keys, so we return both here too).
+    pe_data["escalation_order"] = pe_data.get("last_escalation_step", 0)
+
+    # Identity fields (7) — fetch from joined Student / Batch / TAP Language
+    # rows. These are CHEAP single-row lookups via db.get_value, NOT full
+    # doc hydrations (which would pull child tables on every API call).
+    student_name = frappe.db.get_value("Student", student_id, "name1") or ""
+
+    batch_id = ""
+    if pe_data.get("batch"):
+        batch_id = frappe.db.get_value("Batch", pe_data["batch"], "batch_id") or ""
+
+    language_id = ""
+    if pe_data.get("language"):
+        language_id = str(
+            frappe.db.get_value("TAP Language", pe_data["language"], "glific_language_id") or ""
+        )
+
     frappe.local.response.update({
         "success": True,
         "status": "ok",
         "student_id": student_id,
+        "student_name": student_name,
+        "batch_id": batch_id,
+        "language_id": language_id,
         **pe_data,
     })
 

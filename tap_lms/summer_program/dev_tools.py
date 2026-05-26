@@ -1291,6 +1291,7 @@ def reconcile_pe_to_glific(pe_name, dry_run=False, verbose=True):
         CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
         CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
         CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
+        CF_BONUS_QUIZ_POINTS,
         CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
     )
 
@@ -1340,6 +1341,10 @@ def reconcile_pe_to_glific(pe_name, dry_run=False, verbose=True):
         CF_WEEKLY_SUBMISSION_POINTS: str(pe.weekly_submission_points or 0),
         CF_SPECIAL_GEMS: str(pe.special_gems or 0),
         CF_WEEKLY_SUBMISSION_DONE: str(int(pe.weekly_submission_done or 0)),
+        # Task #98 (2026-05-25): reconcile bonus_quiz_points too — required
+        # for the periodic_glific_reconcile cron to push the field on PEs
+        # that were enrolled before task #98 landed.
+        CF_BONUS_QUIZ_POINTS: str(pe.bonus_quiz_points or 0),
         CF_ESCALATION_ORDER: str(pe.current_escalation_step or 0),
         CF_ESCALATION_TYPE: getattr(pe, "current_escalation_type", "") or "",
     }
@@ -1399,11 +1404,18 @@ def reconcile_pe_to_glific(pe_name, dry_run=False, verbose=True):
 def reconcile_batch_to_glific(batch_name, dry_run=False, verbose=True):
     """Reconcile every active/paused PE in a batch to Glific.
 
-    Loops PEs and calls reconcile_pe_to_glific per row. Prints a one-line
-    summary per PE plus totals at the end.
+    Loops PEs and calls reconcile_pe_to_glific per row. When `verbose=True`
+    (default, suits bench-console callers) prints a one-line summary per
+    PE, a per-field roll-up so drift patterns are visible (added 2026-05-25
+    — "which fields are drifting across the cohort?"), plus totals at the
+    end. When `verbose=False` (used by `periodic_glific_reconcile` cron)
+    stays silent — the caller logs its own per-batch summary so we don't
+    spam stdout every 10 minutes.
 
     Returns: {pe_name: <per-pe result dict>, ...}
     """
+    from collections import Counter, defaultdict
+
     dry_run = _coerce_bool(dry_run)
 
     rows = frappe.db.sql(
@@ -1416,14 +1428,20 @@ def reconcile_batch_to_glific(batch_name, dry_run=False, verbose=True):
         as_dict=True,
     )
     if not rows:
-        print(f"No active/paused PEs in batch {batch_name}.")
+        if verbose:
+            print(f"No active/paused PEs in batch {batch_name}.")
         return {}
 
-    print(f"Reconciling {len(rows)} PEs in batch {batch_name} "
-          f"({'DRY RUN' if dry_run else 'LIVE'})…")
+    if verbose:
+        print(f"Reconciling {len(rows)} PEs in batch {batch_name} "
+              f"({'DRY RUN' if dry_run else 'LIVE'})…")
     results = {}
     total_mismatches = 0
     total_pushed = 0
+    # Aggregations for the per-field roll-up.
+    field_drift_counts = Counter()      # field -> num PEs drifting on that field
+    field_drift_examples = defaultdict(list)  # field -> [(pe, student, frappe, glific), ...]
+    pes_with_drift = []                  # PEs that had ≥1 mismatch
     for row in rows:
         try:
             result = reconcile_pe_to_glific(row.name, dry_run=dry_run, verbose=False)
@@ -1432,14 +1450,68 @@ def reconcile_batch_to_glific(batch_name, dry_run=False, verbose=True):
             total_mismatches += n
             if result.get("pushed"):
                 total_pushed += 1
-            print(f"  {row.name}  student={row.student}  mismatches={n}  "
-                  f"{'pushed' if result.get('pushed') else 'no-push'}")
+            if n:
+                pes_with_drift.append((row.name, row.student, n))
+                for d in result["diff"]:
+                    field_drift_counts[d["field"]] += 1
+                    # Keep up to 3 examples per field so the roll-up stays terse.
+                    # Use .get() defensively — callers / tests may pass diff
+                    # entries that only carry a `field` key (e.g. mocks).
+                    if len(field_drift_examples[d["field"]]) < 3:
+                        field_drift_examples[d["field"]].append(
+                            (row.name, row.student,
+                             d.get("frappe"), d.get("glific"))
+                        )
+            if verbose:
+                print(f"  {row.name}  student={row.student}  mismatches={n}  "
+                      f"{'pushed' if result.get('pushed') else 'no-push'}")
         except Exception as e:
             results[row.name] = {"error": str(e)}
-            print(f"  {row.name}  student={row.student}  FAILED: {e}")
+            if verbose:
+                print(f"  {row.name}  student={row.student}  FAILED: {e}")
 
-    print(f"\nDone — total mismatches across {len(rows)} PEs: {total_mismatches}; "
-          f"PEs pushed: {total_pushed}.")
+    if verbose:
+        print(f"\nDone — total mismatches across {len(rows)} PEs: "
+              f"{total_mismatches}; PEs pushed: {total_pushed}.")
+
+    # ── Per-field roll-up ───────────────────────────────────────────
+    # Shows which fields drift the most across the cohort. Useful for
+    # spotting systemic bugs (e.g. "total_points drifts on 12 PEs" =
+    # silent sync failure in award handler; "current_streak drifts on
+    # 1 PE" = isolated incident). Silent in cron mode (verbose=False).
+    if verbose and field_drift_counts:
+        print(f"\nPer-field drift roll-up ({len(field_drift_counts)} fields, "
+              f"{len(pes_with_drift)}/{len(rows)} PEs affected):")
+        # Sort by count desc, then field name.
+        for field, count in sorted(field_drift_counts.items(),
+                                   key=lambda kv: (-kv[1], kv[0])):
+            print(f"  {field:30s}  {count:>3d} PE(s)")
+            for pe_name, student, frappe_val, glific_val in field_drift_examples[field]:
+                print(f"      e.g. {pe_name}  student={student}  "
+                      f"frappe={frappe_val!r}  glific={glific_val!r}")
+        # Highlight critical fields (silent bugs vs cosmetic drift).
+        CRITICAL = {
+            "total_points",
+            "total_activity_points",
+            "weekly_activity_points",
+            "total_quiz_points",
+            "weekly_quiz_points",
+            "total_submission_points",
+            "weekly_submission_points",
+            "special_gems",
+            "current_streak",
+            "resolved_flow_state",
+            "program_status",
+            "current_week",
+        }
+        critical_drift = {f: n for f, n in field_drift_counts.items() if f in CRITICAL}
+        if critical_drift:
+            print(f"\n  ⚠ CRITICAL field drift (likely a real bug — "
+                  f"check award handlers / state-machine sync):")
+            for field, count in sorted(critical_drift.items(),
+                                       key=lambda kv: (-kv[1], kv[0])):
+                print(f"      {field:30s}  {count:>3d} PE(s)")
+
     return results
 
 

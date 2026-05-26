@@ -230,7 +230,8 @@ CF_SUBMISSION_COUNT = "submission_count"
 
 # ── CR-002 v2 gamification fields ─────────────────────────
 # 8 new contact fields pushed alongside the existing 18 (cache size 26 after
-# this CR; 28 after CR-003 also ships escalation_order + escalation_type).
+# this CR; 28 after CR-003 also ships escalation_order + escalation_type;
+# 29 after task #98 also ships bonus_quiz_points — 2026-05-25).
 # Glific gamification rendering reads these directly via @contact.<field_name>;
 # per L-008 the names are public contract — do not rename.
 CF_TOTAL_ACTIVITY_POINTS = "total_activity_points"
@@ -243,10 +244,18 @@ CF_WEEKLY_SUBMISSION_POINTS = "weekly_submission_points"
 CF_SPECIAL_GEMS = "special_gems"
 CF_WEEKLY_SUBMISSION_DONE = "weekly_submission_done"
 
+# NOTE (2026-05-25): pre-CR-002 Glific flows reading `@contact.fields.streak`
+# and `@contact.fields.gems` see STALE values — those legacy keys are no
+# longer written by the backend (canonical writes go to `current_streak`
+# and `special_gems` only). Glific-flow owners must migrate their flows to
+# the canonical keys. We considered a backend dual-write alias bridge but
+# rejected it per L-027 (MVP) — Glific is the right place to fix it.
+
 # ── CR-003 escalation channel routing fields ──────────────
 # Pushed before the SP_Escalation flow trigger so Glific can branch on the
 # current step's escalation_order and escalation_type (help_note_a /
-# help_note_b / voice_note / parent_call). Cache size 26 → 28 after CR-003.
+# help_note_b / voice_note / parent_call). Cache size 26 → 28 after CR-003;
+# → 29 after task #98 (bonus_quiz_points, 2026-05-25).
 # Per L-008, these names are public contract — do not rename.
 CF_ESCALATION_ORDER = "escalation_order"
 CF_ESCALATION_TYPE = "escalation_type"

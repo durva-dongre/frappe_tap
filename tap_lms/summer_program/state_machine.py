@@ -43,7 +43,7 @@ from tap_lms.summer_program.constants import (
     CF_TOTAL_ACTIVITY_POINTS, CF_WEEKLY_ACTIVITY_POINTS,
     CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
-    CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
+    CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE, CF_BONUS_QUIZ_POINTS,
     # CR-003 — 2 new escalation channel routing fields
     CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
     GLIFIC_SYNC_MAX_RETRIES, GLIFIC_SYNC_RETRY_LOG_TITLE, GLIFIC_SYNC_DLQ_LOG_TITLE,
@@ -147,13 +147,14 @@ def _enqueue_contact_field_sync(pe):
     doesn't need to reload the doc. This keeps the API response fast
     (~50ms) while Glific sync happens in the background (~200-500ms).
 
-    ── Field provenance — the 28 SP contact fields ────────────────────
-    This function builds the recurring 21-field STATE payload pushed on
+    ── Field provenance — the 29 SP contact fields ────────────────────
+    This function builds the recurring 22-field STATE payload pushed on
     every state-machine transition. The 7 IDENTITY fields below (immutable
     after enrollment) are pushed ONCE by `_process_pe_chunk` at PE creation
-    and never re-synced from here. Total cache size on Glific: 28 fields.
+    and never re-synced from here. Total cache size on Glific: 29 fields
+    (was 28 pre-task-#98; bonus_quiz_points added 2026-05-25).
 
-    21 STATE fields (this function — re-synced on every transition):
+    22 STATE fields (this function — re-synced on every transition):
         resolved_flow_state         pe.resolved_flow_state
         current_week                pe.current_week
         current_path                pe.current_path
@@ -168,7 +169,7 @@ def _enqueue_contact_field_sync(pe):
                                      T14 week advance, read directly here)
         last_escalation_step        pe.current_escalation_step
         submission_count            pe.submission_count
-        # CR-002 v2 gamification (8):
+        # CR-002 v2 gamification (9 — bonus_quiz_points added 2026-05-25 task #98):
         total_activity_points       pe.total_activity_points
         weekly_activity_points      pe.weekly_activity_points
         total_quiz_points           pe.total_quiz_points
@@ -177,6 +178,13 @@ def _enqueue_contact_field_sync(pe):
         weekly_submission_points    pe.weekly_submission_points
         special_gems                pe.special_gems
         weekly_submission_done      pe.weekly_submission_done
+        bonus_quiz_points           pe.bonus_quiz_points
+                                    (added 2026-05-25 task #98 — the Glific
+                                     gamification card references
+                                     @contact.fields.bonus_quiz_points and
+                                     was rendering literal template text
+                                     when the field was missing, e.g. for
+                                     ST00051295)
         # CR-003 escalation routing (2):
         escalation_order            pe.current_escalation_step (re-aliased)
         escalation_type             pe.current_escalation_type (denormalized,
@@ -188,10 +196,14 @@ def _enqueue_contact_field_sync(pe):
         experiment_arm, course_level
 
     INTENTIONALLY EXCLUDED:
-        bonus_quiz_points — recorded on ProgramEnrollment, but excluded from
-                            the standard sync payload in this version.
         weekly_video_done — internal state-machine flag for T19 streak/gem
                             penalty branch; never pushed to Glific.
+        streak / gems     — pre-CR-002 legacy Glific keys. NOT written by
+                            the backend; Glific flows must migrate to read
+                            `current_streak` / `special_gems` directly.
+                            Stale legacy values in Glific contact cache are
+                            cosmetic — flows that branch on them need to be
+                            updated to the canonical keys. See L-008.
 
     If you add a new contact field to the SP, update both this function
     AND _process_pe_chunk's enrollment-time push so the cache is consistent
@@ -210,8 +222,10 @@ def _enqueue_contact_field_sync(pe):
         CF_LAST_ESCALATION_STEP: str(pe.current_escalation_step or 0),
         CF_SUBMISSION_COUNT: str(pe.submission_count or 0),
         # ── CR-002 v2: 8 new gamification fields ──
-        # Pushed alongside the existing fields so the cache size on Glific is
-        # 26 after this CR (28 after CR-003 also ships escalation_order/type).
+        # Pushed alongside the existing fields. Cache evolution:
+        #   - 26 after CR-002 v2 (+ 8 gamification fields)
+        #   - 28 after CR-003 (+ escalation_order, escalation_type)
+        #   - 29 after task #98 (+ bonus_quiz_points)
         # `weekly_video_done` is intentionally NOT included — internal-only.
         CF_TOTAL_ACTIVITY_POINTS: str(pe.total_activity_points or 0),
         CF_WEEKLY_ACTIVITY_POINTS: str(pe.weekly_activity_points or 0),
@@ -221,6 +235,11 @@ def _enqueue_contact_field_sync(pe):
         CF_WEEKLY_SUBMISSION_POINTS: str(pe.weekly_submission_points or 0),
         CF_SPECIAL_GEMS: str(pe.special_gems or 0),
         CF_WEEKLY_SUBMISSION_DONE: str(int(pe.weekly_submission_done or 0)),
+        # 2026-05-25 (task #98): added to sync payload because the
+        # Glific gamification card references @contact.fields.bonus_quiz_points
+        # and was rendering literal text when the field was missing. The earlier
+        # "intentionally excluded" stance has been retired — the card needs it.
+        CF_BONUS_QUIZ_POINTS: str(pe.bonus_quiz_points or 0),
         # ── CR-003: escalation_order + escalation_type are re-synced here so
         # the Glific contact cache reflects the current escalation step on
         # every transition. The dispatcher's T2/T4/T8/T10 calls now resolve

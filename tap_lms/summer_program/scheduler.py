@@ -290,3 +290,123 @@ def weekly_content_delivery_trigger():
                 f"{bpr['name']}: {e}",
                 "SP Weekly Content Delivery",
             )
+
+
+# ════════════════════════════════════════════════════════════
+# Periodic Glific reconciliation safety net (added 2026-05-25)
+# ════════════════════════════════════════════════════════════
+
+def periodic_glific_reconcile():
+    """Every-10-min safety net — push PE truth to Glific for every active batch.
+
+    Cadence (set in hooks.scheduler_events.cron, '*/10 * * * *'):
+      Pre-launch: every 10 minutes — catches drift within ~5min on average
+      while the QA team is actively editing PEs via Frappe Desk and console.
+      Post-launch: revisit. Once the cohort stabilizes and Desk edits go
+      to zero, hourly or daily is sufficient. The cron entry in hooks.py
+      is the only thing to change.
+
+    Cost per run on a 45-PE cohort: ~45 Glific GraphQL reads + writes
+    only for fields that drifted. Typical run completes in ~15 seconds.
+
+    Why this exists (CLAUDE.md "set_value bypasses save hooks" gotcha
+    applied to Glific-mirrored PE columns):
+
+      `frappe.db.set_value` and Frappe Desk UI edits on ProgramEnrollment
+      do NOT trigger `_enqueue_contact_field_sync`. Operational backfills,
+      QA manual edits, and any path that updates a Glific-mirrored column
+      without going through `_apply_transition_to_pe` /
+      `dev_tools.update_student_state` therefore leave Glific stale until
+      the next state-machine transition happens to re-push.
+
+      Reconcile sweep on 2026-05-25 (palv2-test-BT52231) found 16/45 PEs
+      drifting on `total_points`, 2 on `archetype` + `experiment_arm`,
+      and a few isolated stream-column drifts — all from set_value
+      bypasses (no DLQ entries, no reset events, sync machinery healthy
+      when invoked).
+
+    What it does:
+      For every active Batch (matched via active BPRs), call
+      `dev_tools.reconcile_batch_to_glific(..., dry_run=False)` which
+      diffs each PE's Glific-mirrored fields against the PE record and
+      pushes only the fields that differ. The per-field roll-up is
+      printed to the scheduler log so operators can spot systemic drift.
+
+    Idempotency:
+      `reconcile_pe_to_glific` is idempotent — re-running on a clean PE
+      produces an empty diff and pushes nothing. Running often is
+      essentially free for PEs that aren't drifting.
+
+    Failure isolation:
+      Per-batch try/except so one batch's failure doesn't stop the rest.
+      Per-PE try/except is inside reconcile_batch_to_glific (already
+      logs the FAILED status line).
+
+    Overlap protection:
+      If a run is still executing when the next 10-minute trigger fires,
+      Frappe's scheduler queues the next one (won't run in parallel for
+      the same scheduled-job id). A 45-PE batch finishes in seconds, so
+      this is effectively a non-issue unless Glific is timing out badly.
+    """
+    from tap_lms.summer_program import dev_tools
+
+    active_batches = frappe.db.sql(
+        """
+        SELECT DISTINCT batch
+          FROM "tabBatchProgramRun"
+         WHERE status = %s
+        """,
+        (BPR_ACTIVE,),
+        as_dict=True,
+    )
+
+    if not active_batches:
+        frappe.logger().info("periodic_glific_reconcile: no active BPRs — nothing to reconcile.")
+        return
+
+    total_pes_checked = 0
+    total_pushed = 0
+    total_mismatches = 0
+    for row in active_batches:
+        batch_name = row.batch
+        if not batch_name:
+            continue
+        try:
+            results = dev_tools.reconcile_batch_to_glific(
+                batch_name, dry_run=False, verbose=False,
+            )
+        except Exception as e:
+            frappe.log_error(
+                f"periodic_glific_reconcile: batch {batch_name} failed: {e}",
+                "SP Periodic Glific Reconcile",
+            )
+            continue
+
+        batch_pushed = 0
+        batch_mismatches = 0
+        for pe_name, result in results.items():
+            if "error" in result:
+                continue
+            total_pes_checked += 1
+            diff_len = len(result.get("diff") or [])
+            batch_mismatches += diff_len
+            if result.get("pushed"):
+                batch_pushed += 1
+        total_pushed += batch_pushed
+        total_mismatches += batch_mismatches
+
+        # Only log per-batch when there's actual work — at 10-min cadence
+        # the no-drift case dominates and noisy logs hide real signal.
+        if batch_mismatches or batch_pushed:
+            frappe.logger().info(
+                f"periodic_glific_reconcile: batch={batch_name} "
+                f"pes={len(results)} mismatches={batch_mismatches} "
+                f"pushed={batch_pushed}"
+            )
+
+    # Roll-up logs only when work happened, same reason.
+    if total_mismatches or total_pushed:
+        frappe.logger().info(
+            f"periodic_glific_reconcile DONE: pes={total_pes_checked} "
+            f"mismatches={total_mismatches} pushed={total_pushed}"
+        )
