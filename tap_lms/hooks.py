@@ -102,15 +102,26 @@ scheduler_events = {
         "0 * * * *": [
             "tap_lms.summer_program.pre_launch.feedback_ready_watchdog",
         ],
-        # Task #97 (2026-05-25, CR-???): every-10-minute PE→Glific drift
-        # reconciliation. Pre-launch cadence — catches drift from
-        # db.set_value / Frappe Desk UI edits that bypass
-        # _enqueue_contact_field_sync. Post-launch: revisit and relax to
-        # hourly or daily once cohort stabilizes and Desk edits drop to
-        # zero. See scheduler.periodic_glific_reconcile docstring.
-        "*/10 * * * *": [
-            "tap_lms.summer_program.scheduler.periodic_glific_reconcile",
-        ],
+        # Task #97 / removed 2026-05-26 (L-027 MVP discipline):
+        # `periodic_glific_reconcile` was wired here at */10 cadence as a
+        # drift safety net. After diagnosing the real root cause of the
+        # Himani / ST00051295 rendering bug (missing createContactsField
+        # definitions, NOT value drift), the cron stopped being MVP-
+        # justified — in production normal operation, students don't have
+        # Desk access and code paths fire the sync hook correctly. The
+        # `set_value` bypass is operator-driven (console backfills).
+        #
+        # The function `scheduler.periodic_glific_reconcile` is preserved
+        # for MANUAL invocation from bench console when needed. Same for
+        # `dev_tools.reconcile_pe_to_glific(pe_name)` and
+        # `dev_tools.reconcile_batch_to_glific(batch_name)`.
+        #
+        # If post-launch logs show silent value drift, re-enable here at a
+        # cadence appropriate to the observed frequency (likely daily, not
+        # */10) — uncomment and `bench migrate`.
+        # "*/10 * * * *": [
+        #     "tap_lms.summer_program.scheduler.periodic_glific_reconcile",
+        # ],
     },
 }
 

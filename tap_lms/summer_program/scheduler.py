@@ -297,17 +297,34 @@ def weekly_content_delivery_trigger():
 # ════════════════════════════════════════════════════════════
 
 def periodic_glific_reconcile():
-    """Every-10-min safety net — push PE truth to Glific for every active batch.
+    """Manual safety-net — push PE truth to Glific for every active batch.
 
-    Cadence (set in hooks.scheduler_events.cron, '*/10 * * * *'):
-      Pre-launch: every 10 minutes — catches drift within ~5min on average
-      while the QA team is actively editing PEs via Frappe Desk and console.
-      Post-launch: revisit. Once the cohort stabilizes and Desk edits go
-      to zero, hourly or daily is sufficient. The cron entry in hooks.py
-      is the only thing to change.
+    Status (2026-05-26): registered as a callable, but NOT wired into
+    hooks.scheduler_events.cron. The */10-min cron entry was removed once
+    the real root cause of the Himani / ST00051295 rendering bug was
+    diagnosed as missing createContactsField definitions (fixed via
+    `dev_tools.bootstrap_sp_contact_fields`), not value drift. Per L-027
+    MVP discipline: production normal operation doesn't create the drift
+    condition this guards against, so a continuously running cron isn't
+    justified.
 
-    Cost per run on a 45-PE cohort: ~45 Glific GraphQL reads + writes
-    only for fields that drifted. Typical run completes in ~15 seconds.
+    When to use this function:
+      - After a console session that ran multiple `frappe.db.set_value`
+        calls against Glific-mirrored PE columns.
+      - As a periodic operator-driven sanity check (e.g. once a week).
+      - As a one-shot cleanup if the team reports gamification-card
+        rendering issues that smell like drift.
+
+    Alternatives for single-PE work:
+      - `dev_tools.reconcile_pe_to_glific(pe_name)` — single PE.
+      - `dev_tools.reconcile_batch_to_glific(batch_name, dry_run=True)` —
+        cohort-wide read-only sweep with a per-field drift roll-up. Pass
+        `dry_run=False` to push.
+
+    Cost per invocation on a 45-PE cohort: ~45 Glific GraphQL reads +
+    writes only for fields that drifted. Typical run completes in ~15
+    seconds. Idempotent — re-running on a clean cohort is essentially
+    free.
 
     Why this exists (CLAUDE.md "set_value bypasses save hooks" gotcha
     applied to Glific-mirrored PE columns):
@@ -341,12 +358,6 @@ def periodic_glific_reconcile():
       Per-batch try/except so one batch's failure doesn't stop the rest.
       Per-PE try/except is inside reconcile_batch_to_glific (already
       logs the FAILED status line).
-
-    Overlap protection:
-      If a run is still executing when the next 10-minute trigger fires,
-      Frappe's scheduler queues the next one (won't run in parallel for
-      the same scheduled-job id). A 45-PE batch finishes in seconds, so
-      this is effectively a non-issue unless Glific is timing out badly.
     """
     from tap_lms.summer_program import dev_tools
 
