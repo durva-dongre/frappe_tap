@@ -13,6 +13,7 @@ Called by Glific flows via whitelisted API endpoints.
 """
 import frappe
 import json
+import time
 from frappe import _
 from frappe.utils import (
     now_datetime, today, getdate, cint, flt,
@@ -35,6 +36,8 @@ from tap_lms.summer_program.constants import (
     BPR_ACTIVE,
     PATH_CORE,
     PATH_REMEDIAL,
+    ACTION_WEEK_ADVANCEMENT,
+    STATE_WEEK_COMPLETED,
     TIER_BY_WEEK,
     DEFAULT_TIER,
     REMEDIAL_TIER,
@@ -55,6 +58,46 @@ OPTION_LETTERS = ['A', 'B', 'C', 'D']
 # for the previous week without being blocked. Default 24 hours.
 SUBMISSION_GRACE_HOURS = 24
 DEFAULT_LANGUAGE = "English"
+WEEK_ADVANCEMENT_MAX_WAIT_SECONDS = 20
+WEEK_ADVANCEMENT_POLL_SECONDS = 4
+
+
+def _is_week_advancement_pending(pe):
+    """Return True while T13 has scheduled T14 but dispatcher has not run it."""
+    return (
+        getattr(pe, "resolved_flow_state", None) == STATE_WEEK_COMPLETED
+        and getattr(pe, "next_action_type", None) == ACTION_WEEK_ADVANCEMENT
+    )
+
+
+def _wait_for_week_advancement_if_pending(
+    pe,
+    max_wait_seconds=WEEK_ADVANCEMENT_MAX_WAIT_SECONDS,
+    poll_seconds=WEEK_ADVANCEMENT_POLL_SECONDS,
+):
+    """
+    Block briefly when feedback delivery has scheduled week advancement but
+    the per-PE dispatcher has not yet applied it.
+
+    Normal first content calls are not affected because they are not in
+    week_completed + week_advancement state.
+    """
+    if not _is_week_advancement_pending(pe):
+        return {"completed": True, "pe": pe, "waited_seconds": 0}
+
+    waited_seconds = 0
+    while waited_seconds < max_wait_seconds:
+        time.sleep(poll_seconds)
+        waited_seconds += poll_seconds
+        pe.reload()
+        if not _is_week_advancement_pending(pe):
+            return {
+                "completed": True,
+                "pe": pe,
+                "waited_seconds": waited_seconds,
+            }
+
+    return {"completed": False, "pe": pe, "waited_seconds": waited_seconds}
 
 
 # ============================================================
@@ -340,6 +383,17 @@ def get_next_content(student_id, course_level=None, **_glific_kwargs):
         if not pe:
             return {"success": False, "status": "no_active_pe",
                     "error_detail": "No active ProgramEnrollment for this student"}
+
+        wait_result = _wait_for_week_advancement_if_pending(pe)
+        pe = wait_result["pe"]
+        if not wait_result["completed"]:
+            return {
+                "success": False,
+                "status": "week_advancement_pending",
+                "error_detail": "Week advancement is still pending. Please retry shortly.",
+                "student_id": student_id,
+                "waited_seconds": wait_result["waited_seconds"],
+            }
 
         current_week = pe.current_week or _get_effective_week(student, batch, calendar_week)
         path = pe.current_path or PATH_CORE

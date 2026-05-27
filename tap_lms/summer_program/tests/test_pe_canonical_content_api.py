@@ -216,6 +216,79 @@ class TestGetWeeklyContentPECanonical(FrappeTestCase):
 class TestGetNextContentPECanonical(FrappeTestCase):
     """get_next_content reads path + tier from PE, not from _resolve_path."""
 
+    def test_week_advancement_wait_skips_normal_first_content_call(self):
+        """First content calls are not in week_completed + week_advancement,
+        so the wait helper must not sleep or reload."""
+        from tap_lms.summer_program import student_progression_sp as sp
+
+        pe = MagicMock()
+        pe.resolved_flow_state = "normal_content_delivery"
+        pe.next_action_type = ""
+
+        with patch.object(sp.time, "sleep") as mock_sleep:
+            result = sp._wait_for_week_advancement_if_pending(pe)
+
+        self.assertTrue(result["completed"])
+        self.assertEqual(result["pe"], pe)
+        self.assertEqual(result["waited_seconds"], 0)
+        mock_sleep.assert_not_called()
+        pe.reload.assert_not_called()
+
+    def test_week_advancement_wait_polls_every_four_seconds_until_complete(self):
+        """When T13 has scheduled week_advancement, get_next_content should
+        wait in 4-second intervals until the dispatcher clears the pending
+        state."""
+        from tap_lms.summer_program import student_progression_sp as sp
+        from tap_lms.summer_program.constants import (
+            ACTION_WEEK_ADVANCEMENT,
+            STATE_NORMAL_CONTENT,
+            STATE_WEEK_COMPLETED,
+        )
+
+        pe = MagicMock()
+        pe.resolved_flow_state = STATE_WEEK_COMPLETED
+        pe.next_action_type = ACTION_WEEK_ADVANCEMENT
+
+        def advance_on_reload():
+            pe.resolved_flow_state = STATE_NORMAL_CONTENT
+            pe.next_action_type = ""
+            pe.current_week = 2
+
+        pe.reload.side_effect = advance_on_reload
+
+        with patch.object(sp.time, "sleep") as mock_sleep:
+            result = sp._wait_for_week_advancement_if_pending(pe)
+
+        self.assertTrue(result["completed"])
+        self.assertEqual(result["waited_seconds"], 4)
+        mock_sleep.assert_called_once_with(4)
+        pe.reload.assert_called_once()
+
+    def test_week_advancement_wait_times_out_when_dispatcher_does_not_advance(self):
+        """A stuck dispatcher row must not hold the request indefinitely."""
+        from tap_lms.summer_program import student_progression_sp as sp
+        from tap_lms.summer_program.constants import (
+            ACTION_WEEK_ADVANCEMENT,
+            STATE_WEEK_COMPLETED,
+        )
+
+        pe = MagicMock()
+        pe.resolved_flow_state = STATE_WEEK_COMPLETED
+        pe.next_action_type = ACTION_WEEK_ADVANCEMENT
+
+        with patch.object(sp.time, "sleep") as mock_sleep:
+            result = sp._wait_for_week_advancement_if_pending(
+                pe,
+                max_wait_seconds=8,
+                poll_seconds=4,
+            )
+
+        self.assertFalse(result["completed"])
+        self.assertEqual(result["waited_seconds"], 8)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_any_call(4)
+        self.assertEqual(pe.reload.call_count, 2)
+
     def _mock_ssp_data(self, learning_unit, current_week, current_tier):
         """Build the StudentStageProgress dict the function reads after
         _get_or_create_sp_progress returns."""
