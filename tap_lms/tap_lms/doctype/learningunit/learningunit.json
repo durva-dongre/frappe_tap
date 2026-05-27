@@ -124,7 +124,7 @@
    "fieldname": "activity_type",
    "fieldtype": "Select",
    "label": "Activity Type",
-   "options": "engagement\nbaseline\nchallenge\nregular"
+   "options": "Regular\nBaseline\nEndline\nEngagement\nSNAP Model\nSummer Program\nHOL\nChallenge"
   },
   {
    "fieldname": "sdg_alignment",
@@ -158,5 +158,35 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "track_changes": 1
+ "track_changes": 1,
+ "SPECIAL_PATTERNS": [
+  [
+   "(?:baseline|pre\\\\s*test)",
+   "Baseline"
+  ],
+  [
+   "(?:endline|post\\\\s*test)",
+   "Endline"
+  ],
+  [
+   "engagement",
+   "Engagement"
+  ],
+  [
+   "snap\\\\s*model",
+   "SNAP Model"
+  ],
+  [
+   "summer\\\\s*program",
+   "Summer Program"
+  ],
+  [
+   "hol\\\\b",
+   "HOL"
+  ],
+  [
+   "(?:challenge|challege)",
+   "Challenge"
+  ]
+ ]
 }
