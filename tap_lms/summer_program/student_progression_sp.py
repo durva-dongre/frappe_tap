@@ -89,6 +89,13 @@ def _wait_for_week_advancement_if_pending(
     while waited_seconds < max_wait_seconds:
         time.sleep(poll_seconds)
         waited_seconds += poll_seconds
+        # In MariaDB/InnoDB's default repeatable-read behavior, pe.reload()
+        # inside the same request transaction can keep seeing the old snapshot.
+        # This wait happens before get_next_content mutates anything, so ending
+        # the read transaction here lets the next reload observe the dispatcher's
+        # committed T14 update. Rollback is intentional: it clears the stale
+        # read snapshot without committing any accidental earlier writes.
+        frappe.db.rollback()
         pe.reload()
         if not _is_week_advancement_pending(pe):
             return {

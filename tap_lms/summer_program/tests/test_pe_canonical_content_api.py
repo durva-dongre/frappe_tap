@@ -225,13 +225,15 @@ class TestGetNextContentPECanonical(FrappeTestCase):
         pe.resolved_flow_state = "normal_content_delivery"
         pe.next_action_type = ""
 
-        with patch.object(sp.time, "sleep") as mock_sleep:
+        with patch.object(sp.time, "sleep") as mock_sleep, \
+             patch.object(sp.frappe.db, "rollback") as mock_rollback:
             result = sp._wait_for_week_advancement_if_pending(pe)
 
         self.assertTrue(result["completed"])
         self.assertEqual(result["pe"], pe)
         self.assertEqual(result["waited_seconds"], 0)
         mock_sleep.assert_not_called()
+        mock_rollback.assert_not_called()
         pe.reload.assert_not_called()
 
     def test_week_advancement_wait_polls_every_four_seconds_until_complete(self):
@@ -256,12 +258,14 @@ class TestGetNextContentPECanonical(FrappeTestCase):
 
         pe.reload.side_effect = advance_on_reload
 
-        with patch.object(sp.time, "sleep") as mock_sleep:
+        with patch.object(sp.time, "sleep") as mock_sleep, \
+             patch.object(sp.frappe.db, "rollback") as mock_rollback:
             result = sp._wait_for_week_advancement_if_pending(pe)
 
         self.assertTrue(result["completed"])
         self.assertEqual(result["waited_seconds"], 4)
         mock_sleep.assert_called_once_with(4)
+        mock_rollback.assert_called_once()
         pe.reload.assert_called_once()
 
     def test_week_advancement_wait_times_out_when_dispatcher_does_not_advance(self):
@@ -276,7 +280,8 @@ class TestGetNextContentPECanonical(FrappeTestCase):
         pe.resolved_flow_state = STATE_WEEK_COMPLETED
         pe.next_action_type = ACTION_WEEK_ADVANCEMENT
 
-        with patch.object(sp.time, "sleep") as mock_sleep:
+        with patch.object(sp.time, "sleep") as mock_sleep, \
+             patch.object(sp.frappe.db, "rollback") as mock_rollback:
             result = sp._wait_for_week_advancement_if_pending(
                 pe,
                 max_wait_seconds=8,
@@ -287,6 +292,7 @@ class TestGetNextContentPECanonical(FrappeTestCase):
         self.assertEqual(result["waited_seconds"], 8)
         self.assertEqual(mock_sleep.call_count, 2)
         mock_sleep.assert_any_call(4)
+        self.assertEqual(mock_rollback.call_count, 2)
         self.assertEqual(pe.reload.call_count, 2)
 
     def _mock_ssp_data(self, learning_unit, current_week, current_tier):
