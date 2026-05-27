@@ -33,6 +33,10 @@ from tap_lms.summer_program.constants import (
     # so the contact has the field from day one (and the Glific gamification
     # card never renders the literal @contact.fields.bonus_quiz_points text).
     CF_BONUS_QUIZ_POINTS,
+    # Task #7 (2026-05-26): weekly_engagement_points is COMPUTED at every
+    # push site as weekly_submission_points + weekly_activity_points. Seeded
+    # at "0" here so the Glific contact has the field from day one.
+    CF_WEEKLY_ENGAGEMENT_POINTS,
     # CR-003 escalation routing (2 fields, initialized to empty/0 — no
     # escalation at enrollment time)
     CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
@@ -367,6 +371,9 @@ def _process_pe_chunk(bpr_name, batch_name, student_ids, chunk_index):
                     # so the Glific gamification card finds the field on
                     # day one and doesn't render the literal template text.
                     CF_BONUS_QUIZ_POINTS: "0",
+                    # Task #7 (2026-05-26): weekly_engagement_points seeded
+                    # at "0" — both addends are 0 at enrollment.
+                    CF_WEEKLY_ENGAGEMENT_POINTS: "0",
                     # ── 2 CR-003 escalation routing (empty at enrollment) ──
                     CF_ESCALATION_ORDER: "0",
                     CF_ESCALATION_TYPE: "",
@@ -597,6 +604,8 @@ def create_program_enrollment(student_id, batch_id, archetype=None,
             # Task #98 (2026-05-25): bonus_quiz_points seeded at 0 — see
             # _process_pe_chunk for full rationale.
             CF_BONUS_QUIZ_POINTS: "0",
+            # Task #7 (2026-05-26): weekly_engagement_points seeded at "0".
+            CF_WEEKLY_ENGAGEMENT_POINTS: "0",
             # ── 2 CR-003 escalation routing (empty at enrollment) ──
             CF_ESCALATION_ORDER: "0",
             CF_ESCALATION_TYPE: "",
@@ -829,6 +838,16 @@ def get_student_state(student_id):
     # and `escalation_order` share the same source — pe.current_escalation_step
     # — and Glific has both keys, so we return both here too).
     pe_data["escalation_order"] = pe_data.get("last_escalation_step", 0)
+
+    # Task #7 (2026-05-26): weekly_engagement_points is COMPUTED, not stored
+    # — defined as weekly_submission_points + weekly_activity_points. Returned
+    # here so flows calling get_student_state as a webhook (instead of reading
+    # @contact.fields.weekly_engagement_points) get the same value without an
+    # extra round-trip.
+    pe_data["weekly_engagement_points"] = (
+        (pe_data.get("weekly_submission_points") or 0)
+        + (pe_data.get("weekly_activity_points") or 0)
+    )
 
     # Identity fields (7) — fetch from joined Student / Batch / TAP Language
     # rows. These are CHEAP single-row lookups via db.get_value, NOT full

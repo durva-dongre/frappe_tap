@@ -44,6 +44,7 @@ from tap_lms.summer_program.constants import (
     CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
     CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE, CF_BONUS_QUIZ_POINTS,
+    CF_WEEKLY_ENGAGEMENT_POINTS,
     # CR-003 — 2 new escalation channel routing fields
     CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
     GLIFIC_SYNC_MAX_RETRIES, GLIFIC_SYNC_RETRY_LOG_TITLE, GLIFIC_SYNC_DLQ_LOG_TITLE,
@@ -147,14 +148,16 @@ def _enqueue_contact_field_sync(pe):
     doesn't need to reload the doc. This keeps the API response fast
     (~50ms) while Glific sync happens in the background (~200-500ms).
 
-    ── Field provenance — the 29 SP contact fields ────────────────────
-    This function builds the recurring 22-field STATE payload pushed on
+    ── Field provenance — the 30 SP contact fields ────────────────────
+    This function builds the recurring 23-field STATE payload pushed on
     every state-machine transition. The 7 IDENTITY fields below (immutable
     after enrollment) are pushed ONCE by `_process_pe_chunk` at PE creation
-    and never re-synced from here. Total cache size on Glific: 29 fields
-    (was 28 pre-task-#98; bonus_quiz_points added 2026-05-25).
+    and never re-synced from here. Total cache size on Glific: 30 fields
+    (was 28 pre-task-#98; bonus_quiz_points added 2026-05-25;
+    weekly_engagement_points added 2026-05-26 task #7 — COMPUTED, not
+    stored on PE).
 
-    22 STATE fields (this function — re-synced on every transition):
+    23 STATE fields (this function — re-synced on every transition):
         resolved_flow_state         pe.resolved_flow_state
         current_week                pe.current_week
         current_path                pe.current_path
@@ -185,6 +188,15 @@ def _enqueue_contact_field_sync(pe):
                                      was rendering literal template text
                                      when the field was missing, e.g. for
                                      ST00051295)
+        weekly_engagement_points    COMPUTED — weekly_submission_points
+                                    + weekly_activity_points (added
+                                    2026-05-26 task #7). NOT a PE column;
+                                    not bumped by any handler; recomputed
+                                    here every push so it always equals
+                                    the live sum of its two addends. The
+                                    Glific gamification card can render a
+                                    single "engagement" stat without doing
+                                    the sum in the flow editor.
         # CR-003 escalation routing (2):
         escalation_order            pe.current_escalation_step (re-aliased)
         escalation_type             pe.current_escalation_type (denormalized,
@@ -246,6 +258,15 @@ def _enqueue_contact_field_sync(pe):
         # and was rendering literal text when the field was missing. The earlier
         # "intentionally excluded" stance has been retired — the card needs it.
         CF_BONUS_QUIZ_POINTS: str(pe.bonus_quiz_points or 0),
+        # 2026-05-26 (task #7): weekly_engagement_points is COMPUTED, not
+        # stored. Pushed alongside the canonical weekly_* fields so the
+        # Glific flow can render a single "engagement" stat (submission +
+        # activity) without computing the sum in the flow editor. Resets
+        # to 0 naturally with the lazy reset because both addends reset.
+        CF_WEEKLY_ENGAGEMENT_POINTS: str(
+            (pe.weekly_submission_points or 0)
+            + (pe.weekly_activity_points or 0)
+        ),
         # ── CR-003: escalation_order + escalation_type are re-synced here so
         # the Glific contact cache reflects the current escalation step on
         # every transition. The dispatcher's T2/T4/T8/T10 calls now resolve

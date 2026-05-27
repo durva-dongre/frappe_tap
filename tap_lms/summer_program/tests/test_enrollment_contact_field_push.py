@@ -31,6 +31,7 @@ from tap_lms.summer_program.constants import (
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
     CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
     CF_BONUS_QUIZ_POINTS,
+    CF_WEEKLY_ENGAGEMENT_POINTS,
     CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
     STATE_NORMAL_CONTENT, PATH_CORE, PROGRAM_ACTIVE,
 )
@@ -45,15 +46,18 @@ EXPECTED_FIELDS_AT_ENROLLMENT = {
     CF_CURRENT_TIER, CF_PROGRAM_STATUS, CF_TOTAL_POINTS,
     CF_CURRENT_STREAK, CF_GRACE_WINDOW_END, CF_EXPECTED_SUBMISSION,
     CF_LAST_ESCALATION_STEP, CF_SUBMISSION_COUNT,
-    # CR-002 v2 gamification (8) + task #98 bonus_quiz_points (1) = 9
-    # bonus_quiz_points was added to the enrollment push 2026-05-25 so the
-    # Glific gamification card's @contact.fields.bonus_quiz_points resolves
-    # from day one of enrollment, not just after the first bonus event.
+    # CR-002 v2 gamification (8) + task #98 bonus_quiz_points (1)
+    # + task #7 weekly_engagement_points (1) = 10
+    # bonus_quiz_points was added 2026-05-25 so the Glific card's
+    # @contact.fields.bonus_quiz_points resolves from day one of enrollment.
+    # weekly_engagement_points added 2026-05-26 as a computed sum of
+    # weekly_submission_points + weekly_activity_points (NOT stored on PE).
     CF_TOTAL_ACTIVITY_POINTS, CF_WEEKLY_ACTIVITY_POINTS,
     CF_TOTAL_QUIZ_POINTS, CF_WEEKLY_QUIZ_POINTS,
     CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
     CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
     CF_BONUS_QUIZ_POINTS,
+    CF_WEEKLY_ENGAGEMENT_POINTS,
     # CR-003 escalation (2)
     CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
 }
@@ -177,6 +181,7 @@ class TestEnrollmentContactFieldPush(FrappeTestCase):
             CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
             CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
             CF_BONUS_QUIZ_POINTS,  # task #98 (2026-05-25)
+            CF_WEEKLY_ENGAGEMENT_POINTS,  # task #7 (2026-05-26) — computed, but seeded "0"
             CF_ESCALATION_ORDER,
         )
         for key in ZERO_INITIALIZED:

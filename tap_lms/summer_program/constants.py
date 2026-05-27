@@ -231,7 +231,8 @@ CF_SUBMISSION_COUNT = "submission_count"
 # ── CR-002 v2 gamification fields ─────────────────────────
 # 8 new contact fields pushed alongside the existing 18 (cache size 26 after
 # this CR; 28 after CR-003 also ships escalation_order + escalation_type;
-# 29 after task #98 also ships bonus_quiz_points — 2026-05-25).
+# 29 after task #98 also ships bonus_quiz_points — 2026-05-25;
+# 30 after task #7 ships weekly_engagement_points — 2026-05-26).
 # Glific gamification rendering reads these directly via @contact.<field_name>;
 # per L-008 the names are public contract — do not rename.
 CF_TOTAL_ACTIVITY_POINTS = "total_activity_points"
@@ -243,6 +244,15 @@ CF_TOTAL_SUBMISSION_POINTS = "total_submission_points"
 CF_WEEKLY_SUBMISSION_POINTS = "weekly_submission_points"
 CF_SPECIAL_GEMS = "special_gems"
 CF_WEEKLY_SUBMISSION_DONE = "weekly_submission_done"
+
+# CF_WEEKLY_ENGAGEMENT_POINTS (2026-05-26):
+# Computed (NOT stored on PE) — `weekly_submission_points + weekly_activity_points`.
+# Pushed alongside the canonical weekly_* fields so Glific flow templates can
+# render a single "engagement" stat without computing the sum in the flow.
+# Resets naturally with the source columns at the CR-008 lazy reset (first
+# VideoClass of new week) because both addends reset to 0 in the same SQL
+# UPDATE — no separate column for this handler chain to maintain.
+CF_WEEKLY_ENGAGEMENT_POINTS = "weekly_engagement_points"
 
 # IMPORTANT — multi-tenant Glific boundary (2026-05-26):
 # Legacy Glific contact fields like `streak`, `gems`, `bonus_points`,
@@ -268,7 +278,8 @@ CF_WEEKLY_SUBMISSION_DONE = "weekly_submission_done"
 # Pushed before the SP_Escalation flow trigger so Glific can branch on the
 # current step's escalation_order and escalation_type (help_note_a /
 # help_note_b / voice_note / parent_call). Cache size 26 → 28 after CR-003;
-# → 29 after task #98 (bonus_quiz_points, 2026-05-25).
+# → 29 after task #98 (bonus_quiz_points, 2026-05-25);
+# → 30 after task #7 (weekly_engagement_points, 2026-05-26).
 # Per L-008, these names are public contract — do not rename.
 CF_ESCALATION_ORDER = "escalation_order"
 CF_ESCALATION_TYPE = "escalation_type"

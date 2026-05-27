@@ -1292,6 +1292,7 @@ def reconcile_pe_to_glific(pe_name, dry_run=False, verbose=True):
         CF_TOTAL_SUBMISSION_POINTS, CF_WEEKLY_SUBMISSION_POINTS,
         CF_SPECIAL_GEMS, CF_WEEKLY_SUBMISSION_DONE,
         CF_BONUS_QUIZ_POINTS,
+        CF_WEEKLY_ENGAGEMENT_POINTS,
         CF_ESCALATION_ORDER, CF_ESCALATION_TYPE,
     )
 
@@ -1345,6 +1346,14 @@ def reconcile_pe_to_glific(pe_name, dry_run=False, verbose=True):
         # for the periodic_glific_reconcile cron to push the field on PEs
         # that were enrolled before task #98 landed.
         CF_BONUS_QUIZ_POINTS: str(pe.bonus_quiz_points or 0),
+        # Task #7 (2026-05-26): weekly_engagement_points is COMPUTED, not
+        # stored. Reconciled here so the cron / manual reconcile pushes the
+        # sum-of-source-columns value to Glific when the contact's stored
+        # value drifts (e.g. after a manual db.set_value on either addend).
+        CF_WEEKLY_ENGAGEMENT_POINTS: str(
+            (pe.weekly_submission_points or 0)
+            + (pe.weekly_activity_points or 0)
+        ),
         CF_ESCALATION_ORDER: str(pe.current_escalation_step or 0),
         CF_ESCALATION_TYPE: getattr(pe, "current_escalation_type", "") or "",
     }
@@ -1562,6 +1571,10 @@ SP_CONTACT_FIELD_DEFINITIONS = [
     ("special_gems",                     "Special Gems"),
     ("weekly_submission_done",           "Weekly Submission Done"),
     ("bonus_quiz_points",                "Bonus Quiz Points"),
+    # Task #7 (2026-05-26) — computed, not stored on PE. Sum of
+    # weekly_submission_points + weekly_activity_points. Pushed alongside
+    # the other weekly_* fields.
+    ("weekly_engagement_points",         "Weekly Engagement Points"),
     # CR-003 escalation routing (2).
     ("escalation_order",                 "Escalation Order"),
     ("escalation_type",                  "Escalation Type"),

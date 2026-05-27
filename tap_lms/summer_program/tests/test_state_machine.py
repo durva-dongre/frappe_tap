@@ -603,15 +603,20 @@ class TestSyncContactFieldsExtended(FrappeTestCase):
         # @contact.fields.bonus_quiz_points always resolves.
         self.assertIn("bonus_quiz_points", fields)
 
+        # Task #7 (2026-05-26): weekly_engagement_points pushed too. Computed
+        # (NOT stored on PE) — sum of weekly_submission_points +
+        # weekly_activity_points.
+        self.assertIn("weekly_engagement_points", fields)
+
         # Total count = 11 state-mutating + 8 CR-002 v2 gamification +
-        # 1 (task #98) bonus_quiz_points +
-        # 2 CR-003 (escalation_order + escalation_type) = 22 per-transition
+        # 1 (task #98) bonus_quiz_points + 1 (task #7) weekly_engagement_points +
+        # 2 CR-003 (escalation_order + escalation_type) = 23 per-transition
         # push fields. (The other 7 immutables live elsewhere.)
         self.assertEqual(
-            len(fields), 22,
+            len(fields), 23,
             "Per-transition sync pushes 11 existing + 8 gamification + "
-            "1 bonus_quiz_points + 2 CR-003 (escalation_order + escalation_type) "
-            "= 22 fields",
+            "1 bonus_quiz_points + 1 weekly_engagement_points + "
+            "2 CR-003 (escalation_order + escalation_type) = 23 fields",
         )
 
 
