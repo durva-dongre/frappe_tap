@@ -216,84 +216,46 @@ class TestGetWeeklyContentPECanonical(FrappeTestCase):
 class TestGetNextContentPECanonical(FrappeTestCase):
     """get_next_content reads path + tier from PE, not from _resolve_path."""
 
-    def test_week_advancement_wait_skips_normal_first_content_call(self):
-        """First content calls are not in week_completed + week_advancement,
-        so the wait helper must not sleep or reload."""
-        from tap_lms.summer_program import student_progression_sp as sp
-
-        pe = MagicMock()
-        pe.resolved_flow_state = "normal_content_delivery"
-        pe.next_action_type = ""
-
-        with patch.object(sp.time, "sleep") as mock_sleep, \
-             patch.object(sp.frappe.db, "rollback") as mock_rollback:
-            result = sp._wait_for_week_advancement_if_pending(pe)
-
-        self.assertTrue(result["completed"])
-        self.assertEqual(result["pe"], pe)
-        self.assertEqual(result["waited_seconds"], 0)
-        mock_sleep.assert_not_called()
-        mock_rollback.assert_not_called()
-        pe.reload.assert_not_called()
-
-    def test_week_advancement_wait_polls_every_four_seconds_until_complete(self):
-        """When T13 has scheduled week_advancement, get_next_content should
-        wait in 4-second intervals until the dispatcher clears the pending
-        state."""
-        from tap_lms.summer_program import student_progression_sp as sp
-        from tap_lms.summer_program.constants import (
-            ACTION_WEEK_ADVANCEMENT,
-            STATE_NORMAL_CONTENT,
-            STATE_WEEK_COMPLETED,
-        )
-
-        pe = MagicMock()
-        pe.resolved_flow_state = STATE_WEEK_COMPLETED
-        pe.next_action_type = ACTION_WEEK_ADVANCEMENT
-
-        def advance_on_reload():
-            pe.resolved_flow_state = STATE_NORMAL_CONTENT
-            pe.next_action_type = ""
-            pe.current_week = 2
-
-        pe.reload.side_effect = advance_on_reload
-
-        with patch.object(sp.time, "sleep") as mock_sleep, \
-             patch.object(sp.frappe.db, "rollback") as mock_rollback:
-            result = sp._wait_for_week_advancement_if_pending(pe)
-
-        self.assertTrue(result["completed"])
-        self.assertEqual(result["waited_seconds"], 4)
-        mock_sleep.assert_called_once_with(4)
-        mock_rollback.assert_called_once()
-        pe.reload.assert_called_once()
-
-    def test_week_advancement_wait_times_out_when_dispatcher_does_not_advance(self):
-        """A stuck dispatcher row must not hold the request indefinitely."""
+    def test_week_advancement_pending_returns_immediate_payload(self):
+        """If T13 scheduled week_advancement but T14 has not run yet, return
+        an immediate pending payload instead of serving old-week content."""
         from tap_lms.summer_program import student_progression_sp as sp
         from tap_lms.summer_program.constants import (
             ACTION_WEEK_ADVANCEMENT,
             STATE_WEEK_COMPLETED,
         )
 
-        pe = MagicMock()
-        pe.resolved_flow_state = STATE_WEEK_COMPLETED
-        pe.next_action_type = ACTION_WEEK_ADVANCEMENT
+        ctx = _patch_chain(
+            student_id="STU-CANON-PENDING",
+            pe=_fake_pe(current_week=1, current_path="Core", current_tier="Basic"),
+            calendar_week=1,
+        )
+        ctx["pe"].resolved_flow_state = STATE_WEEK_COMPLETED
+        ctx["pe"].next_action_type = ACTION_WEEK_ADVANCEMENT
 
-        with patch.object(sp.time, "sleep") as mock_sleep, \
-             patch.object(sp.frappe.db, "rollback") as mock_rollback:
-            result = sp._wait_for_week_advancement_if_pending(
-                pe,
-                max_wait_seconds=8,
-                poll_seconds=4,
+        with patch.object(sp, "_resolve_student_id", return_value="STU-CANON-PENDING"), \
+             patch.object(sp, "frappe") as mock_frappe, \
+             patch.object(sp, "_get_active_bpr_for_student",
+                          return_value=(ctx["batch_doc"], ctx["bpr_name"])), \
+             patch.object(sp, "_get_course_level_for_student",
+                          return_value="CL-001"), \
+             patch.object(sp, "_get_current_week", return_value=ctx["calendar_week"]), \
+             patch.object(sp, "get_active_pe", return_value=ctx["pe"]), \
+             patch.object(sp, "_get_learning_unit") as mock_lu_lookup:
+            mock_frappe.get_doc.return_value = ctx["student_doc"]
+            mock_frappe.log_error = MagicMock()
+
+            result = sp.get_next_content.__wrapped__(
+                "STU-CANON-PENDING",
+                course_level="CL-001",
             )
 
-        self.assertFalse(result["completed"])
-        self.assertEqual(result["waited_seconds"], 8)
-        self.assertEqual(mock_sleep.call_count, 2)
-        mock_sleep.assert_any_call(4)
-        self.assertEqual(mock_rollback.call_count, 2)
-        self.assertEqual(pe.reload.call_count, 2)
+        self.assertEqual(result, {
+            "success": False,
+            "status": "week advancement pending",
+            "current_week": 1,
+        })
+        mock_lu_lookup.assert_not_called()
 
     def _mock_ssp_data(self, learning_unit, current_week, current_tier):
         """Build the StudentStageProgress dict the function reads after
