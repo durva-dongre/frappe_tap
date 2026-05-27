@@ -311,7 +311,13 @@ FEEDBACK_PIPELINE_DLQ_LOG_TITLE = "SP Feedback Pipeline DLQ — manual replay re
 
 
 # ── Tier mapping ──────────────────────────────────────────
-TIER_BY_WEEK = {1: "Basic", 2: "Intermediate"}
+TIER_BY_WEEK = {
+    1: "Basic",
+    2: "Basic",
+    3: "Intermediate",
+    4: "Intermediate",
+    5: "Advanced",
+}
 DEFAULT_TIER = "Advanced"
 REMEDIAL_TIER = "Remedial"
 
