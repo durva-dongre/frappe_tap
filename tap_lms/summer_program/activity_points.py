@@ -181,6 +181,9 @@ def award_video_completion_points(
             },
         )
 
+    before_total_activity_points = int(pe.total_activity_points or 0)
+    before_total_points = int(pe.total_points or 0)
+
     # ── 5b. Atomic UPDATE on PE (P-002 / L-011 + CR-003 grace arm + CR-008 lazy reset + CR-011 eager totals) ──
     # COALESCE-update is race-tolerant against T19's reset of
     # weekly_activity_points (E5).
@@ -249,6 +252,33 @@ def award_video_completion_points(
         (pts, pts, grace_window_days, pts, pts, pe.name),
     )
 
+    # Reload before any audit marker is written. If this verification fails,
+    # complete_content must NOT mark the future StudentContentLog as handled,
+    # otherwise the after_insert hook would skip the only remaining chance to
+    # award the video points.
+    pe.reload()
+    update_verified = bool(pe.weekly_video_done)
+    if pts > 0:
+        update_verified = (
+            update_verified
+            and int(pe.total_activity_points or 0) >= before_total_activity_points + pts
+            and int(pe.total_points or 0) >= before_total_points + pts
+        )
+    if not update_verified:
+        frappe.log_error(
+            (
+                "activity_points: ProgramEnrollment update did not verify; "
+                f"student={student_id}, video={video_id}, pe={pe.name}, "
+                f"points={pts}, before_total_activity={before_total_activity_points}, "
+                f"after_total_activity={int(pe.total_activity_points or 0)}, "
+                f"before_total_points={before_total_points}, "
+                f"after_total_points={int(pe.total_points or 0)}, "
+                f"weekly_video_done={int(pe.weekly_video_done or 0)}"
+            ),
+            "SP Activity Points",
+        )
+        return None
+
     # Audit-field anchor for the StudentContentLog hook path. The complete_content
     # path has no SCL row yet; it passes points_awarded into the background log
     # job so that later insert is marked as already handled.
@@ -259,10 +289,8 @@ def award_video_completion_points(
         )
 
     # ── 7a. Push contact fields ────────────────────────────
-    # Reload the PE so the Glific sync reflects the post-UPDATE values
-    # (the local doc instance from get_active_pe still has the pre-UPDATE
-    # values for the bumped columns + freshly armed grace fields).
-    pe.reload()
+    # The PE was reloaded during update verification, so the Glific sync
+    # reflects the post-UPDATE values.
     if pe.glific_id:
         _enqueue_contact_field_sync(pe)
 
