@@ -855,11 +855,80 @@ def complete_content(student_id, course_level, content_type, content_id,
                     "error_detail": "No content at current position"}
 
         current_item = content_items[current_index]
+
+        # Task #18 (2026-05-28, Content R3): SCL duplicate-suppression.
+        # Webhook retries / double-taps from Glific can fire complete_content
+        # twice for the same (student, content_id). Two dedup layers:
+        #
+        #   (a) Have we already advanced past this content? If so, the prior
+        #       call's _advance_to_next_content has already updated progress
+        #       and bumped points — return idempotent success without
+        #       re-enqueueing the SCL insert or the activity_points handler.
+        #       This catches sequential retries (seconds apart).
+        #
+        #   (b) Has an SCL row for this (student, content_id, completed) been
+        #       inserted in the last 5 minutes? Catches the case where the
+        #       prior worker has inserted the SCL but progress hasn't yet
+        #       reflected the advance (cross-transaction visibility window).
+        #
+        # Neither check is bulletproof against truly simultaneous concurrent
+        # calls (both pre-checks pass on stale reads, both enqueue). A unique
+        # index on (student, content_id, action) would close that final gap;
+        # deferred per Content R3 because it requires schema migration and
+        # would also reject legitimate re-completes of optional repeatable
+        # content. The two-layer check above is the MVP-acceptable mitigation.
+
+        # Layer (a): position-passed check.
+        already_completed_ids = {
+            item["content_id"] for item in content_items[:current_index]
+        }
+        if content_id in already_completed_ids:
+            frappe.logger().info(
+                f"complete_content dedup (a): {content_id} already advanced "
+                f"past for student={student_id} "
+                f"(current_index={current_index}); idempotent return."
+            )
+            return {
+                "success": True,
+                "status": "already_completed",
+                "user_message": "Content already marked complete.",
+                "content_type": content_type,
+                "content_id": content_id,
+            }
+
         if current_item["content_id"] != content_id:
             return {
                 "success": False,
                 "status": "content_mismatch",
                 "error_detail": f"Content mismatch. Expected: {current_item['content_id']}, Got: {content_id}",
+            }
+
+        # Layer (b): recent-SCL check.
+        recent_dup = frappe.db.sql(
+            """
+            SELECT name FROM "tabStudentContentLog"
+             WHERE student = %s
+               AND content_id = %s
+               AND content_type = %s
+               AND action = 'completed'
+               AND creation > NOW() AT TIME ZONE 'UTC' - INTERVAL '5 minutes'
+             LIMIT 1
+            """,
+            (student_id, content_id, content_type),
+            as_dict=True,
+        )
+        if recent_dup:
+            frappe.logger().info(
+                f"complete_content dedup (b): recent SCL "
+                f"{recent_dup[0]['name']} for student={student_id} "
+                f"content={content_id} within 5min; idempotent return."
+            )
+            return {
+                "success": True,
+                "status": "already_completed",
+                "user_message": "Content already marked complete.",
+                "content_type": content_type,
+                "content_id": content_id,
             }
 
         # Calculate time spent
@@ -869,7 +938,7 @@ def complete_content(student_id, course_level, content_type, content_id,
 
         # Log content completion via background job
         frappe.enqueue(
-            "tap_lms.journey.background_jobs.job_log_content_completion",
+            "tap_lms.summer_program.background_jobs.job_log_content_completion",
             queue="short",
             timeout=60,
             student_id=student_id,
@@ -886,7 +955,7 @@ def complete_content(student_id, course_level, content_type, content_id,
 
         # Update statistics
         frappe.enqueue(
-            "tap_lms.journey.background_jobs.job_update_statistics",
+            "tap_lms.summer_program.background_jobs.job_update_statistics",
             queue="short",
             timeout=30,
             progress_name=progress_data["name"],
@@ -1378,7 +1447,7 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
 
     # Background jobs
     frappe.enqueue(
-        "tap_lms.journey.background_jobs.job_log_content_completion",
+        "tap_lms.summer_program.background_jobs.job_log_content_completion",
         queue="short", timeout=60,
         student_id=progress_data["student"],
         course_level=course_level,
@@ -1394,7 +1463,7 @@ def _complete_quiz_sp(attempt, quiz_doc, questions, language=None):
         learning_unit=progress_data["stage"],
     )
     frappe.enqueue(
-        "tap_lms.journey.background_jobs.job_update_statistics",
+        "tap_lms.summer_program.background_jobs.job_update_statistics",
         queue="short", timeout=30,
         progress_name=progress_data["name"],
         content_completed=1,

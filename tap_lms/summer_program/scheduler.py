@@ -421,3 +421,134 @@ def periodic_glific_reconcile():
             f"periodic_glific_reconcile DONE: pes={total_pes_checked} "
             f"mismatches={total_mismatches} pushed={total_pushed}"
         )
+
+
+# ════════════════════════════════════════════════════════════
+# Async-failure visibility watchers
+# Added 2026-05-28 (task #17 / shared Esc R1 + Content R1+R4)
+# ════════════════════════════════════════════════════════════
+#
+# Both the Glific contact-field sync pipeline and the RQ enqueue path used by
+# `complete_content`, `_enqueue_contact_field_sync`, and collection-membership
+# writes are ASYNC with retry+DLQ but NO ALERTING. A queue that's stalled or
+# a DLQ that's filling up is invisible to operators unless they go looking.
+# These two cron-driven watchers turn silent failure into an Error Log entry
+# that surfaces in the Frappe Desk Error Log list view.
+#
+# Wired in hooks.scheduler_events.cron at `0 * * * *` (hourly). Each watcher
+# is read-only — never re-enqueues, never auto-recovers — by design. Operator
+# replay remains explicit.
+
+# Threshold for the RQ queue-depth alert. Anything above this gets an Error
+# Log entry. 100 is conservative: a healthy backend processes the SP cohort
+# (~45 PEs, infrequent events) with steady-state queue depth ≈ 0; sustained
+# 100+ means a worker is wedged or upstream is firehosing.
+RQ_QUEUE_DEPTH_ALERT_THRESHOLD = 100
+
+
+def glific_sync_dlq_watcher():
+    """Hourly watcher — alerts on new entries in the SP Glific Sync DLQ.
+
+    Compares the count of Error Log rows with method='SP Glific Sync DLQ —
+    manual replay required' added in the last hour against zero. Any new
+    entries → write a single summary Error Log so the operator-on-call
+    notices.
+
+    Read-only — does NOT replay. Manual replay via
+    `dev_tools.reconcile_pe_to_glific(pe_name)` remains the recovery path.
+    """
+    from tap_lms.summer_program.constants import GLIFIC_SYNC_DLQ_LOG_TITLE
+
+    new_dlq = frappe.db.sql(
+        """
+        SELECT COUNT(*) AS n
+          FROM "tabError Log"
+         WHERE method = %s
+           AND creation > NOW() AT TIME ZONE 'UTC' - INTERVAL '1 hour'
+        """,
+        (GLIFIC_SYNC_DLQ_LOG_TITLE,),
+        as_dict=True,
+    )
+    count = new_dlq[0].n if new_dlq else 0
+
+    if count > 0:
+        frappe.log_error(
+            f"SP Glific Sync DLQ has {count} new entries in the last hour. "
+            f"Operator action required — replay manually via "
+            f"`dev_tools.reconcile_pe_to_glific(pe_name)` for each stuck PE. "
+            f"List the DLQ entries: `SELECT creation, LEFT(error::text, 400) "
+            f"FROM \"tabError Log\" WHERE method = "
+            f"'{GLIFIC_SYNC_DLQ_LOG_TITLE}' "
+            f"ORDER BY creation DESC LIMIT {count};`",
+            "SP DLQ Watcher Alert",
+        )
+    # No new DLQ entries → silent (don't fill Error Log with no-op pings).
+
+
+def rq_queue_depth_watcher():
+    """Hourly watcher — alerts on RQ queues that have backed up past threshold.
+
+    Polls Frappe's wrapper around RQ (`frappe.utils.background_jobs.get_queue`)
+    for each queue (default, short, long) and writes an Error Log entry if
+    any queue exceeds `RQ_QUEUE_DEPTH_ALERT_THRESHOLD`.
+
+    Why this matters (Content R1+R4): `complete_content` enqueues the SCL
+    insert + activity_points + Glific sync into the RQ queue. If a worker is
+    wedged or the queue is paused, the webhook returns 200 OK to Glific but
+    the work never happens — students appear stuck mid-progress with no
+    error surface anywhere.
+
+    Read-only — does NOT restart workers or flush queues. Operator action
+    is to inspect the worker log and restart the supervisor process.
+    """
+    try:
+        from rq import Queue
+        from frappe.utils.background_jobs import get_redis_conn
+    except Exception as e:
+        # If RQ isn't importable in this environment, skip silently — this
+        # watcher is best-effort, not load-bearing.
+        frappe.logger().warning(f"rq_queue_depth_watcher: rq import failed: {e}")
+        return
+
+    try:
+        conn = get_redis_conn()
+    except Exception as e:
+        frappe.log_error(
+            f"rq_queue_depth_watcher: cannot connect to Redis: {e}",
+            "SP Queue Watcher Error",
+        )
+        return
+
+    # Frappe's standard RQ queues. If the deployment uses custom queue names,
+    # add them here. Threshold applies per-queue independently.
+    queue_names = ["default", "short", "long"]
+    alerts = []
+    for name in queue_names:
+        try:
+            q = Queue(name, connection=conn)
+            depth = len(q)
+            failed_depth = q.failed_job_registry.count
+            if depth > RQ_QUEUE_DEPTH_ALERT_THRESHOLD:
+                alerts.append(
+                    f"queue={name} depth={depth} (threshold "
+                    f"{RQ_QUEUE_DEPTH_ALERT_THRESHOLD})"
+                )
+            if failed_depth > 0:
+                alerts.append(
+                    f"queue={name} failed_jobs={failed_depth} "
+                    f"(non-zero — operator should review)"
+                )
+        except Exception as e:
+            alerts.append(f"queue={name}: probe failed: {e}")
+
+    if alerts:
+        frappe.log_error(
+            "RQ queue-depth alert (operator action required):\n" +
+            "\n".join(alerts) +
+            f"\n\nDiagnostic: in bench console run `from rq import Queue; "
+            f"from frappe.utils.background_jobs import get_redis_conn; "
+            f"q = Queue('default', connection=get_redis_conn()); "
+            f"print(len(q), q.jobs[:5])` to see queued jobs.",
+            "SP Queue Watcher Alert",
+        )
+    # All queues healthy → silent.

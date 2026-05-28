@@ -148,8 +148,15 @@ def update_flow_status(student_id, flow_name, status, metadata=None,
     # Note: we pass the inbound flow `status` as `flow_status` because task #73
     # renamed the helper's outcome field to `status` (Glific Rule 6). Passing
     # `status=status` here would clobber the outcome key via **extras.
-    pe.save(ignore_permissions=True)
-    # Removed mid-handler commit per L-017 — Frappe commits at request-end.
+    #
+    # Task #16 (2026-05-28, Esc R2): replaced `pe.save(ignore_permissions=True)`
+    # with `pe.reload()`. The fallback acknowledgement doesn't mutate the PE —
+    # the in-memory doc was loaded earlier in this request and may be stale
+    # vs concurrent atomic SQL bumps from award handlers. `pe.save` would
+    # write all columns from the stale doc, clobbering those bumps (L-011
+    # violation). `pe.reload()` pulls fresh DB state so _response renders
+    # the latest values.
+    pe.reload()
     _response(pe, "acknowledged", flow_name=flow_name, flow_status=status)
 
 
@@ -199,9 +206,11 @@ def _handle_content_delivery(pe, flow_name, status, metadata):
         return _response(pe, "escalation_scheduled")
 
     # completed — content was delivered, student tapped. Flow ended normally.
-    # If submission happened within the flow, save_submission already handled state.
-    # Just confirm delivery.
-    pe.save(ignore_permissions=True)
+    # If submission happened within the flow, save_submission already handled
+    # state. Just confirm delivery.
+    # Task #16 (2026-05-28, Esc R2): pe.save → pe.reload — see fallback in
+    # update_flow_status for rationale.
+    pe.reload()
     return _response(pe, "delivery_confirmed")
 
 
@@ -214,7 +223,11 @@ def _handle_escalation(pe, flow_name, status, metadata):
     """
     # Escalation was delivered. If student hasn't submitted, the scheduler
     # will check next_action_at for the next escalation step.
-    pe.save(ignore_permissions=True)
+    # Task #16 (2026-05-28, Esc R2): pe.save → pe.reload — the dispatcher's
+    # T2/T4/T8/T10 escalation handlers already incremented
+    # current_escalation_step via SQL UPDATE; reload pulls that fresh
+    # value so the log_event + response carry the right number.
+    pe.reload()
 
     log_event(pe, "escalation_sent", trigger_source="flow_callback",
               details={"step": pe.current_escalation_step})
@@ -234,8 +247,12 @@ def _handle_feedback_delivery(pe, flow_name, status, metadata):
     Without this callback, the student gets stuck in feedback_ready.
     """
     if pe.resolved_flow_state != STATE_FEEDBACK_READY:
-        # State already moved (race condition or retry) — just acknowledge
-        pe.save(ignore_permissions=True)
+        # State already moved (race condition or retry) — just acknowledge.
+        # Task #16 (2026-05-28, Esc R2): pe.save → pe.reload — same L-011
+        # safety reasoning as the other handlers; the race itself proves
+        # pe is stale, so reload makes the response reflect what actually
+        # happened.
+        pe.reload()
         return _response(pe, "already_advanced")
 
     # T13: feedback_ready → week_completed → schedule week_advancement
@@ -255,7 +272,10 @@ def _handle_submission_flow(pe, flow_name, status, metadata):
     The actual submission was already recorded via save_submission API.
     This just confirms the flow ended.
     """
-    pe.save(ignore_permissions=True)
+    # Task #16 (2026-05-28, Esc R2): pe.save → pe.reload — save_submission
+    # ran earlier in the request OR via a separate save; either way our
+    # in-memory doc is likely stale relative to the submission state.
+    pe.reload()
     return _response(pe, "submission_flow_completed")
 
 
@@ -272,13 +292,15 @@ def _handle_submission_flow(pe, flow_name, status, metadata):
 
 def _handle_binge_info(pe, flow_name, status, metadata):
     """Handle SP_Paused_Binge completion. Informational only."""
-    pe.save(ignore_permissions=True)
+    # Task #16 (2026-05-28, Esc R2): pe.save → pe.reload — see other handlers.
+    pe.reload()
     return _response(pe, "binge_info_delivered")
 
 
 def _handle_info_flow(pe, flow_name, status, metadata):
     """Handle informational flows (Week Summary, Program Complete)."""
-    pe.save(ignore_permissions=True)
+    # Task #16 (2026-05-28, Esc R2): pe.save → pe.reload — see other handlers.
+    pe.reload()
     return _response(pe, "info_delivered")
 
 

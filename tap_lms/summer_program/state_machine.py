@@ -959,13 +959,24 @@ def t14_week_advance(pe, new_week, week_rule=None, trigger_source="scheduler"):
 
 # ── T15: Binge limit hit ────────────────────────────────
 def t15_binge_pause(pe, next_open_date=None, trigger_source="scheduler"):
-    """T15: week_completed → paused_binge."""
+    """T15: week_completed → paused_binge.
+
+    Task #14 (2026-05-28, Esc R5): also set `weekly_video_done = 0` so
+    the next first-VideoClass of a new week re-arms the CR-008 lazy reset.
+    Without this, a binge pause that spans a week boundary leaves the
+    student in next-week's calendar week with weekly_* values still
+    carrying the prior week's accumulated totals, until the next
+    activity_points handler can flip the gate (which it won't because
+    `weekly_video_done` is already 1).
+    """
     return transition(pe, STATE_PAUSED_BINGE, trigger_source, {
         "journey_label": LABEL_PAUSED,
         "program_status": PROGRAM_PAUSED,
         "pause_reason": PAUSE_BINGE_LIMIT,
         "next_action_at": next_open_date,
         "next_action_type": ACTION_PAUSE_CHECK,
+        # Arm CR-008 lazy reset on next week's first VideoClass watch.
+        "weekly_video_done": 0,
     })
 
 
@@ -1142,12 +1153,31 @@ def t24_admin_drop(pe, trigger_source="admin"):
 
 # ── T25: Delivery failure (no state change) ─────────────
 def t25_delivery_failure(pe, flow_name, trigger_source="scheduler"):
-    """T25: ANY → same state. Increment failure count."""
-    pe.delivery_failure_count = (pe.delivery_failure_count or 0) + 1
-    pe.save(ignore_permissions=True)
+    """T25: ANY → same state. Increment failure count.
+
+    Task #19 (2026-05-28, L-011): atomic COALESCE increment (P-002)
+    replaces the prior `pe.delivery_failure_count = ... + 1; pe.save()`
+    sequence. The Python-read-then-save would write every PE column from
+    a possibly-stale doc, clobbering concurrent atomic SQL bumps from
+    the activity_points / quiz_points / feedback_consumer_hook award
+    handlers. The atomic SQL UPDATE here is race-safe — concurrent
+    bumps on OTHER columns proceed independently.
+
+    Mirrors the pattern already used in `pe_dispatcher._record_delivery_failure`.
+    """
+    frappe.db.sql(
+        """
+        UPDATE "tabProgramEnrollment"
+           SET delivery_failure_count = COALESCE(delivery_failure_count, 0) + 1
+         WHERE name = %s
+        """,
+        (pe.name,),
+    )
+    pe.reload()
 
     log_event(pe, "delivery_failed", trigger_source=trigger_source,
-              details={"flow_name": flow_name, "failure_count": pe.delivery_failure_count})
+              details={"flow_name": flow_name,
+                       "failure_count": pe.delivery_failure_count})
     return True
 
 

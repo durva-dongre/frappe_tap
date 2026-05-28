@@ -99,8 +99,14 @@ scheduler_events = {
         # feedback_ready because Glific's F5 callback dropped silently.
         # LOG-only — does NOT auto-transition; operator replays manually.
         # See pre_launch.feedback_ready_watchdog for full rationale.
+        # Task #17 (2026-05-28): two more hourly watchers added at the same
+        # cadence. Both are read-only — they turn silent async failures
+        # (Glific sync DLQ, RQ queue depth) into Error Log entries operators
+        # can see in the Frappe Desk Error Log list view.
         "0 * * * *": [
             "tap_lms.summer_program.pre_launch.feedback_ready_watchdog",
+            "tap_lms.summer_program.scheduler.glific_sync_dlq_watcher",
+            "tap_lms.summer_program.scheduler.rq_queue_depth_watcher",
         ],
         # Task #97 / removed 2026-05-26 (L-027 MVP discipline):
         # `periodic_glific_reconcile` was wired here at */10 cadence as a

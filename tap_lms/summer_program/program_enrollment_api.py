@@ -839,6 +839,15 @@ def get_student_state(student_id):
     # — and Glific has both keys, so we return both here too).
     pe_data["escalation_order"] = pe_data.get("last_escalation_step", 0)
 
+    # Task #13 (2026-05-28): mirror the escalation_order pattern for
+    # `escalation_type` — the Glific contact field is `escalation_type`
+    # (not `current_escalation_type`), and bootstrap_sp_contact_fields
+    # registers it under that name. Flows that call get_student_state as a
+    # webhook and read `@results.webhook.escalation_type` previously got
+    # nothing (only `current_escalation_type` was in the response). Expose
+    # both keys for symmetry; downstream consumers can use either.
+    pe_data["escalation_type"] = pe_data.get("current_escalation_type") or ""
+
     # Task #7 (2026-05-26): weekly_engagement_points is COMPUTED, not stored
     # — defined as weekly_submission_points + weekly_activity_points. Returned
     # here so flows calling get_student_state as a webhook (instead of reading

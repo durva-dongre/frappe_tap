@@ -452,12 +452,30 @@ def handle_feedback_timeout(pe_row):
         t12_feedback_ready(pe, "feedback_timeout_fallback")
     else:
         # Retry: schedule another check in 1 hour (max 3 retries)
+        # Task #19 (2026-05-28, L-011): replaced `pe.save(ignore_permissions=True)`
+        # with targeted `frappe.db.set_value` + atomic COALESCE increment for
+        # delivery_failure_count. The previous pe.save would write every PE
+        # column from this possibly-stale doc, clobbering concurrent point-
+        # handler bumps to total_*/weekly_* that ran between the dispatch
+        # claim and this branch. The atomic increment (P-002) is race-safe.
         retry_count = pe.delivery_failure_count or 0
         if retry_count < 3:
-            pe.delivery_failure_count = retry_count + 1
-            pe.next_action_at = add_to_date(now_datetime(), hours=1)
-            pe.next_action_type = ACTION_FEEDBACK_TIMEOUT
-            pe.save(ignore_permissions=True)
+            frappe.db.sql(
+                """
+                UPDATE "tabProgramEnrollment"
+                   SET delivery_failure_count = COALESCE(delivery_failure_count, 0) + 1
+                 WHERE name = %s
+                """,
+                (pe.name,),
+            )
+            frappe.db.set_value(
+                "ProgramEnrollment", pe.name,
+                {
+                    "next_action_at": add_to_date(now_datetime(), hours=1),
+                    "next_action_type": ACTION_FEEDBACK_TIMEOUT,
+                },
+                update_modified=False,
+            )
         else:
             # Give up — alert admin, clear action
             frappe.log_error(
@@ -554,11 +572,19 @@ def handle_grace_check(pe_row):
     # Defensive: if the clock hasn't actually expired yet, re-schedule the
     # tick for the proper expiry time rather than dropping early. Should
     # match exactly under normal scheduling but absorbs minor clock skew.
+    # Task #19 (2026-05-28, L-011): targeted set_value instead of pe.save —
+    # avoids clobbering concurrent point-handler bumps that ran between the
+    # dispatcher's atomic claim and this branch.
     now = now_datetime()
     if pe.grace_window_end_at and get_datetime(pe.grace_window_end_at) > now:
-        pe.next_action_at = pe.grace_window_end_at
-        pe.next_action_type = ACTION_GRACE_CHECK
-        pe.save(ignore_permissions=True)
+        frappe.db.set_value(
+            "ProgramEnrollment", pe.name,
+            {
+                "next_action_at": pe.grace_window_end_at,
+                "next_action_type": ACTION_GRACE_CHECK,
+            },
+            update_modified=False,
+        )
         return
 
     # Clock expired AND no submission this week → drop.
@@ -595,10 +621,21 @@ def handle_pause_check(pe_row):
         # Calendar caught up — resume
         t21_binge_resume(pe, "dispatcher")
     else:
-        # Still ahead of calendar — check again next Monday
-        pe.next_action_at = add_to_date(now_datetime(), days=7)
-        pe.next_action_type = ACTION_PAUSE_CHECK
-        pe.save(ignore_permissions=True)
+        # Still ahead of calendar — check again next Monday.
+        # Task #19 (2026-05-28, L-011): targeted set_value instead of
+        # pe.save — avoids clobbering any column written by a concurrent
+        # path (the binge-paused state doesn't normally race with point
+        # bumps because award handlers gate on get_active_pe → would skip
+        # a paused student, but defensive consistency with the rest of the
+        # dispatcher matters more than the 1-line shortcut).
+        frappe.db.set_value(
+            "ProgramEnrollment", pe.name,
+            {
+                "next_action_at": add_to_date(now_datetime(), days=7),
+                "next_action_type": ACTION_PAUSE_CHECK,
+            },
+            update_modified=False,
+        )
 
 
 # ════════════════════════════════════════════════════════════

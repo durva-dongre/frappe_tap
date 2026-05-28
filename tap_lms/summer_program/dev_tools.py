@@ -1638,6 +1638,143 @@ def bootstrap_sp_contact_fields(verbose=True):
 
 
 # ════════════════════════════════════════════════════════════
+# Pre-launch sanity: CR-008 video-first invariant validator
+# Added 2026-05-28 (task #15 / Content R2)
+# ════════════════════════════════════════════════════════════
+
+def validate_video_first_invariant(batch_name=None, verbose=True):
+    """Audit every LearningUnit used by active enrollments and confirm its
+    first non-optional content item is a VideoClass.
+
+    Why this matters (CR-008 lazy reset):
+      `activity_points.handle_content_log` flips `weekly_video_done = 0→1`
+      AND zeroes weekly_*_points + grace fields ONLY on a VideoClass
+      completion. The CR-008 invariant ("every LU's first content is a
+      VideoClass") is what guarantees the gate trips at the start of each
+      week. If a LU's first content is a Quiz / NoteContent / Assignment
+      etc., a student progressing through that LU never trips the gate —
+      weekly_* values accumulate across weeks and grace clock never arms.
+      See task #6 for the runtime symptom.
+
+      Today (2026-05-28) nothing in the doctype layer enforces this. LU
+      authors can save any content order, and the bug only surfaces in
+      production when a real student hits the affected LU.
+
+    What it does:
+      Scans LearningUnits used by active ProgramEnrollments (filtered to
+      batch_name if given, all batches otherwise). For each LU, fetches
+      UnitContentItems ordered by idx and checks the first non-optional
+      item's content_type is `VideoClass`. Reports any violations with
+      enough detail to fix in the Frappe UI.
+
+    Returns:
+        Dict {"violations": [...], "checked": <int>, "ok": <int>}.
+        verbose=True (default) also prints a human-readable report.
+
+    Run pre-launch and after any content authoring session that touched
+    LU ordering. Cheap and idempotent — pure read.
+    """
+    # Scope: which course levels are in play
+    if batch_name:
+        course_level_filter_sql = """
+            SELECT DISTINCT course_level
+              FROM "tabProgramEnrollment"
+             WHERE batch = %s
+               AND program_status IN ('active', 'paused')
+               AND course_level IS NOT NULL
+        """
+        params = (batch_name,)
+    else:
+        course_level_filter_sql = """
+            SELECT DISTINCT course_level
+              FROM "tabProgramEnrollment"
+             WHERE program_status IN ('active', 'paused')
+               AND course_level IS NOT NULL
+        """
+        params = ()
+
+    course_levels = [r[0] for r in frappe.db.sql(course_level_filter_sql, params)]
+
+    if not course_levels:
+        if verbose:
+            print(f"No active course_levels found"
+                  f"{' for batch ' + batch_name if batch_name else ''}.")
+        return {"violations": [], "checked": 0, "ok": 0}
+
+    # All LearningUnits across those course levels
+    placeholders = ",".join(["%s"] * len(course_levels))
+    lus = frappe.db.sql(f"""
+        SELECT DISTINCT lul.learning_unit, lul.parent AS course_level,
+               lul.week_no, lu.unit_name, lu.difficulty_tier
+          FROM "tabLearningUnitList" lul
+          JOIN "tabLearningUnit" lu ON lu.name = lul.learning_unit
+         WHERE lul.parent IN ({placeholders})
+           AND lul.parenttype = 'Course Level'
+         ORDER BY lul.parent, lul.week_no, lu.difficulty_tier
+    """, tuple(course_levels), as_dict=True)
+
+    violations = []
+    ok_count = 0
+    for lu in lus:
+        # First NON-OPTIONAL content item (optional intros are allowed).
+        # Per CR-008 the first item the student actually has to consume
+        # must be a VideoClass — optional items at the top don't break
+        # the lazy-reset trigger because the gate only flips when the
+        # VideoClass SCL fires.
+        items = frappe.db.sql("""
+            SELECT idx, content_type, content, is_optional
+              FROM "tabUnitContentItem"
+             WHERE parent = %s AND parenttype = 'LearningUnit'
+             ORDER BY idx ASC
+        """, (lu.learning_unit,), as_dict=True)
+
+        # First non-optional item — that's what kicks the engagement gate.
+        first_required = next((i for i in items if not (i.is_optional or 0)),
+                              None)
+
+        if first_required is None:
+            violations.append({
+                "learning_unit": lu.learning_unit,
+                "unit_name": lu.unit_name,
+                "course_level": lu.course_level,
+                "week_no": lu.week_no,
+                "tier": lu.difficulty_tier,
+                "violation": "no non-optional content items",
+                "first_required_type": None,
+            })
+        elif first_required.content_type != "VideoClass":
+            violations.append({
+                "learning_unit": lu.learning_unit,
+                "unit_name": lu.unit_name,
+                "course_level": lu.course_level,
+                "week_no": lu.week_no,
+                "tier": lu.difficulty_tier,
+                "violation": "first non-optional content is not VideoClass",
+                "first_required_type": first_required.content_type,
+                "first_required_content": first_required.content,
+            })
+        else:
+            ok_count += 1
+
+    if verbose:
+        scope = f"batch={batch_name}" if batch_name else "all active batches"
+        print(f"\nvalidate_video_first_invariant ({scope}):")
+        print(f"  LearningUnits scanned: {len(lus)}")
+        print(f"  ✓ OK (first non-optional is VideoClass): {ok_count}")
+        print(f"  ✗ Violations: {len(violations)}")
+        for v in violations:
+            print(f"    LU={v['learning_unit']} ({v['unit_name']}) "
+                  f"course_level={v['course_level']}, week={v['week_no']}, "
+                  f"tier={v['tier']}")
+            print(f"      → {v['violation']}: first_required_type="
+                  f"{v.get('first_required_type')!r}")
+        if not violations:
+            print("\n  Invariant holds across all active LearningUnits.")
+
+    return {"violations": violations, "checked": len(lus), "ok": ok_count}
+
+
+# ════════════════════════════════════════════════════════════
 # Internal helpers
 # ════════════════════════════════════════════════════════════
 
