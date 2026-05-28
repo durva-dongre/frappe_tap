@@ -21,6 +21,7 @@ from tap_lms.summer_program.constants import (
     LABEL_ENROLLED,
     PATH_CORE,
     PROGRAM_ACTIVE,
+    PROGRAM_COMPLETED,
     STATE_NORMAL_CONTENT,
     STATE_NORMAL_ESCALATION,
 )
@@ -230,6 +231,35 @@ class TestResetPeToState0(FrappeTestCase):
         self.assertEqual(
             result["after"]["resolved_flow_state"], STATE_NORMAL_CONTENT
         )
+
+    @patch("tap_lms.summer_program.dev_tools._assert_dev_site")
+    @patch("tap_lms.summer_program.dev_tools.reconcile_pe_to_glific")
+    @patch("tap_lms.summer_program.dev_tools.maintain_collections")
+    def test_reset_accepts_completed_program_status(
+        self, mock_maintain, mock_reconcile, _mock_guard,
+    ):
+        student = _ensure_student("DONE")
+        pe = _make_advanced_pe(self.batch_name, student, "DONE")
+        pe.program_status = PROGRAM_COMPLETED
+        pe.save(ignore_permissions=True)
+
+        mock_reconcile.return_value = {
+            "pe": pe.name, "glific_id": pe.glific_id, "diff": [], "pushed": True,
+        }
+
+        result = reset_pe_to_state_0(
+            student,
+            delete_history=False,
+            push_to_glific=True,
+            verbose=False,
+        )
+
+        pe.reload()
+        self.assertEqual(result["before"]["program_status"], PROGRAM_COMPLETED)
+        self.assertEqual(pe.program_status, PROGRAM_ACTIVE)
+        self.assertEqual(pe.resolved_flow_state, STATE_NORMAL_CONTENT)
+        mock_maintain.assert_called_once()
+        mock_reconcile.assert_called_once()
 
 
 # ════════════════════════════════════════════════════════════

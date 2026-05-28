@@ -256,7 +256,7 @@ def reset_pe_to_state_0(
     verbose=True,
     i_know_this_is_destructive=False,
 ):
-    """Reset a student's active ProgramEnrollment to its initial state.
+    """Reset a student's latest ProgramEnrollment to its initial state.
 
     Resets:
       - PE state machine fields → state 0 (normal_content_delivery, week 1,
@@ -287,7 +287,7 @@ def reset_pe_to_state_0(
       - Batch / ArchetypeConfig / WeekRule (configuration)
 
     Args:
-        student_id: Student.name whose active/paused ProgramEnrollment is reset
+        student_id: Student.name whose latest ProgramEnrollment is reset
         dry_run: if True, print intended changes without writing
         delete_history: if True, delete journey audit rows for this student
         push_to_glific: if True, enqueue a contact-field sync job
@@ -300,7 +300,7 @@ def reset_pe_to_state_0(
     Raises:
         frappe.PermissionError if site name suggests production.
         frappe.DoesNotExistError if student_id is invalid.
-        frappe.ValidationError if student has no active/paused PE.
+        frappe.ValidationError if student has no PE.
     """
     dry_run = _coerce_bool(dry_run)
     delete_history = _coerce_bool(delete_history)
@@ -315,10 +315,10 @@ def reset_pe_to_state_0(
     if not frappe.db.exists("Student", student_id):
         frappe.throw(f"Student not found: {student_id}", frappe.DoesNotExistError)
 
-    pe = _get_active_pe_for_student(student_id)
+    pe = _get_latest_pe_for_student(student_id)
     if not pe:
         frappe.throw(
-            f"No active/paused ProgramEnrollment found for student {student_id}",
+            f"No ProgramEnrollment found for student {student_id}",
             frappe.ValidationError,
         )
 
@@ -1649,6 +1649,19 @@ def _get_active_pe_for_student(student_id):
             "student": student_id,
             "program_status": ["in", [PROGRAM_ACTIVE, PROGRAM_PAUSED]],
         },
+        "name",
+        order_by="modified desc",
+    )
+    if pe_name:
+        return frappe.get_doc("ProgramEnrollment", pe_name)
+    return None
+
+
+def _get_latest_pe_for_student(student_id):
+    """Return the most recently modified PE for a student, regardless of status."""
+    pe_name = frappe.db.get_value(
+        "ProgramEnrollment",
+        {"student": student_id},
         "name",
         order_by="modified desc",
     )
