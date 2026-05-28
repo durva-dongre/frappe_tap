@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:{name1}-{vertical}-C{####}",
+ "autoname": "format:{name1}-{vertical}-{level}",
  "creation": "2024-07-09 13:25:33.662522",
  "default_view": "List",
  "doctype": "DocType",
@@ -10,6 +10,7 @@
  "field_order": [
   "name1",
   "vertical",
+  "level",
   "stage",
   "kit_less",
   "course_description",
@@ -31,6 +32,13 @@
    "fieldtype": "Link",
    "label": "Vertical ",
    "options": "Course Verticals"
+  },
+  {
+   "default": "",
+   "fieldname": "level",
+   "fieldtype": "Select",
+   "label": "Level",
+   "options": "Level 1\nLevel 2\nLevel 2A\nLevel 3\nLevel 3A\nLevel 3K\nLevel 3AK\nLevel 4\nLevel 4K"
   },
   {
    "fieldname": "stage",

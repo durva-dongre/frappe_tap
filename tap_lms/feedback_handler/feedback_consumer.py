@@ -200,21 +200,17 @@ class FeedbackConsumer:
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
 
-            # Process the message and commit before triggering external flows.
-            # Glific may immediately call back into our public feedback API; if
-            # this transaction is still open, that API only sees the previous
-            # committed Submission.status (usually "Processing").
+            # Process the message and commit before the SP transition and
+            # external flow. Glific may immediately call back into our public
+            # APIs; if this transaction is still open, those APIs only see the
+            # previous committed Submission.status (usually "Processing").
             self.processor.update_submission(message_data)
             frappe.db.commit()
 
-            # Send Glific notification (non-critical - don't fail message if this fails)
-            try:
-                self.send_glific_notification(message_data)
-            except Exception as glific_error:
-                frappe.logger().warning(f"Glific notification failed for {submission_id}: {str(glific_error)}")
-                # Continue processing - notification failure shouldn't fail the entire message
-
-            # Summer Program: trigger T12 state transition (non-critical)
+            # Summer Program: trigger T12 state transition before starting the
+            # Glific feedback flow. That flow can immediately call
+            # get_student_state, so the PE state/points must already be
+            # committed.
             try:
                 frappe.db.begin()
                 self._update_sp_state(submission_id, message_data)
@@ -223,6 +219,13 @@ class FeedbackConsumer:
                 frappe.db.rollback()
                 frappe.logger().warning(f"SP state update failed for {submission_id}: {str(sp_error)}")
                 # Continue - pe_dispatcher's feedback_timeout handler is the safety net
+
+            # Send Glific notification (non-critical - don't fail message if this fails)
+            try:
+                self.send_glific_notification(message_data)
+            except Exception as glific_error:
+                frappe.logger().warning(f"Glific notification failed for {submission_id}: {str(glific_error)}")
+                # Continue processing - notification failure shouldn't fail the entire message
 
             # Acknowledge message only after successful processing
             ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -261,9 +264,8 @@ class FeedbackConsumer:
         This is non-critical — if it fails, pe_dispatcher's handle_feedback_timeout
         will catch it within 1-4 hours as a safety net.
 
-        The Glific notification (send_glific_notification above) already delivers
-        the feedback to the student, so this only updates the state machine to
-        unlock week advancement.
+        The Glific notification is sent after this hook commits, so callbacks
+        from the feedback flow can read the updated ProgramEnrollment state.
         """
         try:
             from tap_lms.summer_program.feedback_consumer_hook import on_feedback_ready

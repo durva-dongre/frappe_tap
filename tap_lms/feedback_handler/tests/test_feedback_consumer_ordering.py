@@ -9,12 +9,12 @@ from tap_lms.feedback_handler.feedback_consumer import FeedbackConsumer
 
 
 class TestFeedbackConsumerOrdering(unittest.TestCase):
-    def test_submission_update_commits_before_glific_flow_starts(self):
+    def test_submission_and_sp_state_commit_before_glific_flow_starts(self):
         """Glific can call the feedback API immediately after flow start.
 
-        The completed Submission row must therefore be committed before
-        send_glific_notification runs; otherwise the API can still observe
-        status="Processing" from the previous transaction.
+        The completed Submission row and SP state transition must therefore
+        commit before send_glific_notification runs; otherwise callbacks can
+        observe stale Submission/ProgramEnrollment state.
         """
         events = []
         message_data = {
@@ -61,10 +61,24 @@ class TestFeedbackConsumerOrdering(unittest.TestCase):
         )
         self.assertLess(
             events.index("commit"),
-            events.index("send_glific"),
-            "Glific flow must start only after the completed Submission is committed.",
+            events.index("update_sp_state"),
+            "SP state must update only after the completed Submission is committed.",
         )
-        self.assertLess(events.index("send_glific"), events.index("update_sp_state"))
+        self.assertLess(
+            events.index("begin"),
+            events.index("send_glific"),
+            "SP transaction must start before Glific flow.",
+        )
+        self.assertLess(
+            events.index("update_sp_state"),
+            events.index("send_glific"),
+            "Glific flow must start only after SP state has been updated.",
+        )
+        self.assertLess(
+            events.index("commit", events.index("update_sp_state")),
+            events.index("send_glific"),
+            "Glific flow must start only after SP state update is committed.",
+        )
         self.assertEqual(events[-1], "ack")
 
 

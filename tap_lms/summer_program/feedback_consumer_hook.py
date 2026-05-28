@@ -8,7 +8,7 @@ the SP state machine without duplicating Glific notification logic.
 
 ── Integration Point ──────────────────────────────────────────────
 Add this call in FeedbackConsumer.process_message() AFTER update_submission()
-and send_glific_notification() succeed:
+commits and BEFORE send_glific_notification() starts the feedback flow:
 
     from tap_lms.summer_program.feedback_consumer_hook import on_feedback_ready
     on_feedback_ready(submission_name, student_id)
@@ -19,9 +19,11 @@ Previously, pe_dispatcher.py had a `handle_feedback_notification` handler that:
   2. Triggered SP_Feedback_Delivery Glific flow
   3. Cleared next_action
 
-That was redundant because FeedbackConsumer ALREADY sends the feedback to the
-student via Glific (start_contact_flow with label="feedback"). We only need the
-state machine transition (T12 → feedback_ready), which unlocks week advancement.
+That was redundant because FeedbackConsumer sends the feedback to the student
+via Glific (start_contact_flow with label="feedback") after this hook commits.
+We only need the state machine transition (T12 → feedback_ready), which unlocks
+week advancement and makes get_student_state accurate for feedback-flow
+callbacks.
 
 ── Safety Net ─────────────────────────────────────────────────────
 If this hook fails or FeedbackConsumer crashes before calling it,
