@@ -59,6 +59,15 @@ SUBMISSION_GRACE_HOURS = 24
 DEFAULT_LANGUAGE = "English"
 
 
+def _option_fields(question_details):
+    """Return flattened option fields present in question details."""
+    return {
+        f"option_{letter.lower()}": question_details[f"option_{letter.lower()}"]
+        for letter in OPTION_LETTERS
+        if f"option_{letter.lower()}" in question_details
+    }
+
+
 def _is_week_advancement_pending(pe):
     """Return True while T13 has scheduled T14 but dispatcher has not run it."""
     return (
@@ -1086,7 +1095,7 @@ def start_quiz(student_id, course_level, quiz_id, language=None,
         # Flat shape per docs/api-standard-glific.md (Rules 2 + 3): no nested
         # question/options objects. Glific reads `question_text`, `option_a`,
         # etc. directly. Question is at index 1 (1-based).
-        return {
+        response = {
             "success": True,
             "status": "quiz_started",
             "user_message": "Quiz started! Good luck!",
@@ -1098,12 +1107,10 @@ def start_quiz(student_id, course_level, quiz_id, language=None,
             "question_id": questions[0].question,
             "question_text": first_q.get("question"),
             "question_type": first_q.get("question_type", "Multiple Choice"),
-            "option_a": first_q.get("option_a"),
-            "option_b": first_q.get("option_b"),
-            "option_c": first_q.get("option_c"),
-            "option_d": first_q.get("option_d"),
             "correct_option": first_q.get("correct_option"),
         }
+        response.update(_option_fields(first_q))
+        return response
 
     except Exception as e:
         frappe.log_error(f"start_quiz error: {str(e)}", "SP Progression API")
@@ -1139,7 +1146,7 @@ def _resume_quiz(attempt, progress_data, language=None):
     correct_so_far = sum(1 for a in attempt.answers if a.is_correct)
 
     # Flat shape per docs/api-standard-glific.md (Rules 2 + 3).
-    return {
+    response = {
         "success": True,
         "status": "quiz_resumed",
         "user_message": f"Welcome back! Continuing from question {next_index}.",
@@ -1152,12 +1159,10 @@ def _resume_quiz(attempt, progress_data, language=None):
         "question_id": q_row.question,
         "question_text": q_details.get("question"),
         "question_type": q_details.get("question_type", "Multiple Choice"),
-        "option_a": q_details.get("option_a"),
-        "option_b": q_details.get("option_b"),
-        "option_c": q_details.get("option_c"),
-        "option_d": q_details.get("option_d"),
         "correct_option": q_details.get("correct_option"),
     }
+    response.update(_option_fields(q_details))
+    return response
 
 
 # ============================================================
@@ -1290,7 +1295,7 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer,
         #   - answer_result.* → answered_question_*, was_correct, time_spent_seconds
         #   - progress.* → progress_answered, progress_total, progress_correct, progress_percentage
         #   - question.* + nested options.* → question_*, option_a..option_d
-        return {
+        response = {
             "success": True,
             "status": "next_question",
             "answered_question_index": question_index,
@@ -1306,12 +1311,10 @@ def submit_answer(student_id, quiz_attempt_id, question_index, answer,
             "question_id": next_q_row.question,
             "question_text": next_q.get("question"),
             "question_type": next_q.get("question_type", "Multiple Choice"),
-            "option_a": next_q.get("option_a"),
-            "option_b": next_q.get("option_b"),
-            "option_c": next_q.get("option_c"),
-            "option_d": next_q.get("option_d"),
             "correct_option": next_q.get("correct_option"),
         }
+        response.update(_option_fields(next_q))
+        return response
 
     except Exception as e:
         frappe.log_error(f"submit_answer error: {str(e)}", "SP Progression API")
@@ -1974,7 +1977,7 @@ def _get_question_details(question_id, language=None):
 
         question_text = strip_html_tags(question_text) if question_text else ""
 
-        options = {"option_a": "", "option_b": "", "option_c": "", "option_d": ""}
+        options = {}
         if hasattr(q, 'options') and q.options:
             for i, opt_row in enumerate(q.options[:4]):
                 letter = OPTION_LETTERS[i].lower()
@@ -1992,16 +1995,14 @@ def _get_question_details(question_id, language=None):
         correct_num = cint(q.correct_option)
         correct_letter = OPTION_LETTERS[correct_num - 1] if 1 <= correct_num <= 4 else "A"
 
-        return {
+        response = {
             "question_id": question_id,
             "question": question_text,
             "question_type": getattr(q, 'question_type', 'Multiple Choice'),
-            "option_a": options["option_a"],
-            "option_b": options["option_b"],
-            "option_c": options["option_c"],
-            "option_d": options["option_d"],
             "correct_option": correct_letter,
         }
+        response.update(options)
+        return response
     except Exception as e:
         frappe.log_error(f"_get_question_details error for {question_id}: {str(e)}")
         return {"question_id": question_id, "error": str(e)}

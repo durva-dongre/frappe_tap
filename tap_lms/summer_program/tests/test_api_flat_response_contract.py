@@ -183,7 +183,6 @@ class TestStartQuizFlatShape(unittest.TestCase):
             "option_a": "A",
             "option_b": "B",
             "option_c": "C",
-            "option_d": "D",
             "correct_option": "A",
         }
 
@@ -203,9 +202,46 @@ class TestStartQuizFlatShape(unittest.TestCase):
         self.assertEqual(resp["status"], "quiz_started")
         # Spot-check the flattened option fields
         self.assertEqual(resp["option_a"], "A")
+        self.assertNotIn("option_d", resp)
         self.assertEqual(resp["question_index"], 1)
         mock_get_language.assert_called_once_with("STU-001", "CL-1")
         mock_get_q_details.assert_called_once_with("QN001", "Hindi")
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_question_details")
+    @patch("tap_lms.summer_program.student_progression_sp._get_quiz_questions")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_resume_quiz_omits_absent_option_fields(
+        self, mock_frappe, mock_get_questions, mock_get_q_details
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        attempt = MagicMock()
+        attempt.quiz = "Q1"
+        attempt.name = "QA-1"
+        attempt.quizname = "Q1"
+        attempt.total_questions = 2
+        attempt.answers = [SimpleNamespace(question_index=1, is_correct=1)]
+
+        q1 = MagicMock()
+        q1.question = "QN001"
+        q2 = MagicMock()
+        q2.question = "QN002"
+        mock_get_questions.return_value = [q1, q2]
+        mock_get_q_details.return_value = {
+            "question": "What is next?",
+            "question_type": "Multiple Choice",
+            "option_a": "A",
+            "option_b": "B",
+            "option_c": "C",
+            "correct_option": "A",
+        }
+
+        resp = api._resume_quiz(attempt, {"name": "PROG-1"}, "Hindi")
+
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "quiz_resumed")
+        self.assertEqual(resp["option_c"], "C")
+        self.assertNotIn("option_d", resp)
 
 
 class TestQuestionDetailsTranslations(unittest.TestCase):
@@ -277,6 +313,87 @@ class TestQuestionDetailsTranslations(unittest.TestCase):
         self.assertEqual(resp["option_d"], "Hindi Movie ticket")
         self.assertEqual(resp["correct_option"], "C")
 
+    def test_question_details_omits_absent_option_fields(self):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        question = SimpleNamespace(
+            question="Pick one",
+            question_type="Multiple Choice",
+            correct_option=2,
+            question_translations=[],
+            options=[
+                SimpleNamespace(options="OPT-1"),
+                SimpleNamespace(options="OPT-2"),
+                SimpleNamespace(options="OPT-3"),
+            ],
+        )
+        option_docs = {
+            "OPT-1": SimpleNamespace(option_text="One", option_translations=[]),
+            "OPT-2": SimpleNamespace(option_text="Two", option_translations=[]),
+            "OPT-3": SimpleNamespace(option_text="Three", option_translations=[]),
+        }
+
+        def get_doc(doctype, name):
+            if doctype == "QuizQuestion":
+                return question
+            if doctype == "QuizOption":
+                return option_docs[name]
+            raise AssertionError(f"Unexpected get_doc({doctype!r}, {name!r})")
+
+        with patch.object(api, "frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = get_doc
+
+            resp = api._get_question_details("QN-1", "English")
+
+        self.assertEqual(resp["option_a"], "One")
+        self.assertEqual(resp["option_b"], "Two")
+        self.assertEqual(resp["option_c"], "Three")
+        self.assertNotIn("option_d", resp)
+        self.assertEqual(resp["correct_option"], "B")
+
+    def test_question_details_ignores_options_after_d(self):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        question = SimpleNamespace(
+            question="Pick one",
+            question_type="Multiple Choice",
+            correct_option=5,
+            question_translations=[],
+            options=[
+                SimpleNamespace(options="OPT-1"),
+                SimpleNamespace(options="OPT-2"),
+                SimpleNamespace(options="OPT-3"),
+                SimpleNamespace(options="OPT-4"),
+                SimpleNamespace(options="OPT-5"),
+            ],
+        )
+        option_docs = {
+            "OPT-1": SimpleNamespace(option_text="One", option_translations=[]),
+            "OPT-2": SimpleNamespace(option_text="Two", option_translations=[]),
+            "OPT-3": SimpleNamespace(option_text="Three", option_translations=[]),
+            "OPT-4": SimpleNamespace(option_text="Four", option_translations=[]),
+            "OPT-5": SimpleNamespace(option_text="Five", option_translations=[]),
+        }
+
+        def get_doc(doctype, name):
+            if doctype == "QuizQuestion":
+                return question
+            if doctype == "QuizOption":
+                return option_docs[name]
+            raise AssertionError(f"Unexpected get_doc({doctype!r}, {name!r})")
+
+        with patch.object(api, "frappe") as mock_frappe:
+            mock_frappe.get_doc.side_effect = get_doc
+
+            resp = api._get_question_details("QN-1", "English")
+
+        self.assertEqual(resp["option_a"], "One")
+        self.assertEqual(resp["option_b"], "Two")
+        self.assertEqual(resp["option_c"], "Three")
+        self.assertEqual(resp["option_d"], "Four")
+        self.assertNotIn("option_e", resp)
+        self.assertEqual(resp["correct_option"], "A")
+
 
 class TestSubmitAnswerFlatShape(unittest.TestCase):
     """submit_answer must produce flat responses for both 'next_question'
@@ -344,6 +461,70 @@ class TestSubmitAnswerFlatShape(unittest.TestCase):
         self.assertEqual(resp["option_b"], "X")
         mock_get_language.assert_called_once_with("STU-001", "CL-1")
         mock_get_q_details.assert_any_call("QN002", "Hindi")
+
+    @patch("tap_lms.summer_program.student_progression_sp._get_language_for_student")
+    @patch("tap_lms.summer_program.student_progression_sp._get_question_details")
+    @patch("tap_lms.summer_program.student_progression_sp._get_quiz_questions")
+    @patch("tap_lms.summer_program.student_progression_sp._resolve_student_id")
+    @patch("tap_lms.summer_program.student_progression_sp.frappe")
+    def test_next_question_omits_absent_option_fields(
+        self, mock_frappe, mock_resolve, mock_get_questions, mock_get_q_details,
+        mock_get_language
+    ):
+        from tap_lms.summer_program import student_progression_sp as api
+
+        mock_resolve.return_value = "STU-001"
+        mock_get_language.return_value = "Hindi"
+        mock_frappe.db.exists.return_value = True
+
+        attempt = MagicMock()
+        attempt.student = "STU-001"
+        attempt.course_level = "CL-1"
+        attempt.status = "in_progress"
+        attempt.total_questions = 3
+        attempt.quiz = "Q1"
+        attempt.question_started_at = None
+        attempt.started_at = None
+        attempt.answers = []
+        attempt.correct_answers = 0
+        attempt.student_progress = None
+        attempt.append = MagicMock()
+        attempt.save = MagicMock()
+
+        quiz_doc = MagicMock()
+        mock_frappe.get_doc.side_effect = [attempt, quiz_doc]
+
+        q1 = MagicMock()
+        q1.question = "QN001"
+        q2 = MagicMock()
+        q2.question = "QN002"
+        mock_get_questions.return_value = [q1, q2, MagicMock()]
+
+        mock_get_q_details.side_effect = [
+            {
+                "correct_option": "A",
+                "option_a": "A",
+                "option_b": "B",
+                "option_c": "C",
+                "question": "Q1?",
+                "question_type": "Multiple Choice",
+            },
+            {
+                "correct_option": "B",
+                "option_a": "W",
+                "option_b": "X",
+                "option_c": "Y",
+                "question": "Q2?",
+                "question_type": "Multiple Choice",
+            },
+        ]
+
+        resp = api.submit_answer.__wrapped__("STU-001", "QA-1", 1, "A", language="English")
+
+        assert_flat_response(resp)
+        self.assertEqual(resp["status"], "next_question")
+        self.assertEqual(resp["option_c"], "Y")
+        self.assertNotIn("option_d", resp)
 
 
 class TestGetContentDetailsFlatShape(unittest.TestCase):
