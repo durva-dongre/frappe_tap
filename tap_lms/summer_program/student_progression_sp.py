@@ -863,7 +863,7 @@ def complete_content(student_id, course_level, content_type, content_id,
         #   (a) Have we already advanced past this content? If so, the prior
         #       call's _advance_to_next_content has already updated progress
         #       and bumped points — return idempotent success without
-        #       re-enqueueing the SCL insert or the activity_points handler.
+        #       recreating the SCL insert or the activity_points handler.
         #       This catches sequential retries (seconds apart).
         #
         #   (b) Has an SCL row for this (student, content_id, completed) been
@@ -936,7 +936,23 @@ def complete_content(student_id, course_level, content_type, content_id,
         if progress_data.get("content_started_at"):
             time_spent = cint(_time_diff_in_seconds(now_datetime(), progress_data["content_started_at"]))
 
-        # Log content completion via background job
+        points_awarded = None
+        log_metadata = None
+        if content_type == "VideoClass":
+            # Video completion owns ProgramEnrollment activity fields here.
+            # The background log job still creates StudentContentLog, but it
+            # gets a marker so the SCL after_insert hook does not double-award.
+            from tap_lms.summer_program.activity_points import award_video_completion_points
+            points_awarded = award_video_completion_points(
+                student_id=student_id,
+                video_id=content_id,
+                trigger_source="complete_content",
+            )
+            if points_awarded is not None:
+                log_metadata = {
+                    "activity_points_awarded_by": "complete_content",
+                }
+
         frappe.enqueue(
             "tap_lms.summer_program.background_jobs.job_log_content_completion",
             queue="short",
@@ -951,6 +967,8 @@ def complete_content(student_id, course_level, content_type, content_id,
             stage_no=progress_data["current_week"],
             tier=progress_data["current_tier"],
             learning_unit=progress_data["stage"],
+            points_awarded=points_awarded,
+            metadata=log_metadata,
         )
 
         # Update statistics

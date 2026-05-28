@@ -43,6 +43,8 @@ Test plan: see app/tap_lms/summer_program/tests/test_activity_points.py
 and app/tap_lms/summer_program/tests/test_grace_logic.py.
 """
 import frappe
+import json
+from types import SimpleNamespace
 from frappe.utils import add_to_date, now_datetime
 
 from tap_lms.summer_program.constants import (
@@ -71,6 +73,8 @@ def handle_content_log(doc, method=None):
     if (doc.content_type or "") != "VideoClass":
         return
     if (doc.action or "") != "completed":
+        return
+    if _activity_points_handled_upstream(doc):
         return
 
     award_activity_points(doc)
@@ -108,23 +112,43 @@ def award_activity_points(scl):
     if (scl.points_awarded or 0) > 0:
         return
 
-    # ── 3. Resolve award ────────────────────────────────────
-    if not scl.content_id:
-        return
+    return award_video_completion_points(
+        student_id=scl.student,
+        video_id=scl.content_id,
+        audit_scl_name=scl.name,
+        trigger_source="content_log",
+    )
 
-    # CR-009 (2026-05-23): the E11 early-return on zero-point videos was
-    # removed. Per the user spec, some VideoClasses can carry points=0 but
-    # still require a submission downstream — those videos MUST trigger the
-    # full engagement pipeline (weekly_video_done flip + grace clock arm +
-    # escalation arm). Defaulting `pts` to 0 keeps the COALESCE bump on
-    # weekly_activity_points as a no-op while letting the rest of the flow
-    # proceed.
-    pts = _resolve_video_points(scl.content_id) or 0
 
-    # ── 4. Resolve active PE ────────────────────────────────
-    pe = get_active_pe(scl.student)
+def award_video_completion_points(
+    student_id,
+    video_id,
+    audit_scl_name=None,
+    trigger_source="complete_content",
+):
+    """Award VideoClass completion points directly to ProgramEnrollment.
+
+    `complete_content` calls this synchronously so weekly_activity_points,
+    total_activity_points, total_points, weekly_video_done, and grace/escalation
+    side effects are updated before the API advances progress. The legacy
+    StudentContentLog hook calls the same helper for non-API-created video logs.
+    """
+    if not video_id:
+        return 0
+
+    # CR-009 (2026-05-23): zero-point videos still trigger the engagement
+    # pipeline. The point bump is a no-op, but weekly_video_done/grace/escalation
+    # must still update.
+    pts = _resolve_video_points(video_id) or 0
+
+    pe = get_active_pe(student_id)
     if not pe:
-        return
+        frappe.log_error(
+            f"activity_points: no active ProgramEnrollment for student "
+            f"{student_id}, video {video_id}; cannot award activity points",
+            "SP Activity Points",
+        )
+        return None
 
     # ── 5a. First-VideoClass-of-week detection (CR-003 follow-up) ──
     # Pre-UPDATE Python read; the SQL CASE WHEN in step 5b is the source
@@ -144,9 +168,9 @@ def award_activity_points(scl):
         from frappe.utils import now_datetime, add_to_date
         log_event(
             pe, "grace_window_entered",
-            trigger_source="activity_points",
+            trigger_source=trigger_source,
             details={
-                "video": scl.content_id,
+                "video": video_id,
                 "grace_days": grace_window_days,
                 # Expected end timestamp the CASE WHEN should write — useful
                 # for reconstructing the timeline from logs alone if the
@@ -225,11 +249,14 @@ def award_activity_points(scl):
         (pts, pts, grace_window_days, pts, pts, pe.name),
     )
 
-    # ── 6. Audit-field anchor (written AFTER PE update so retries skip) ──
-    frappe.db.set_value(
-        "StudentContentLog", scl.name, "points_awarded", pts,
-        update_modified=False,
-    )
+    # Audit-field anchor for the StudentContentLog hook path. The complete_content
+    # path has no SCL row yet; it passes points_awarded into the background log
+    # job so that later insert is marked as already handled.
+    if audit_scl_name:
+        frappe.db.set_value(
+            "StudentContentLog", audit_scl_name, "points_awarded", pts,
+            update_modified=False,
+        )
 
     # ── 7a. Push contact fields ────────────────────────────
     # Reload the PE so the Glific sync reflects the post-UPDATE values
@@ -258,7 +285,12 @@ def award_activity_points(scl):
     # Submission transitions (T7/T9/T17/T3) clear next_action_at when a
     # submission lands, so the dispatcher won't fire the escalation step
     # once the student responds.
-    _maybe_arm_escalation(pe, scl, is_first_video_of_week)
+    scl_ref = SimpleNamespace(
+        name=audit_scl_name or f"complete_content:{student_id}:{video_id}",
+        student=student_id,
+        content_id=video_id,
+    )
+    _maybe_arm_escalation(pe, scl_ref, is_first_video_of_week)
 
     # ── 7b. ProgramEventLog ────────────────────────────────
     # Gate on pts > 0 (CR-009 follow-on 2026-05-23): with the E11 early-
@@ -271,13 +303,15 @@ def award_activity_points(scl):
         log_event(
             pe, "activity_points_awarded",
             new_value=str(pts),
-            trigger_source="content_log",
+            trigger_source=trigger_source,
             details={
-                "scl": scl.name,
-                "video": scl.content_id,
+                "scl": audit_scl_name or "",
+                "video": video_id,
                 "points": pts,
+                "source": trigger_source,
             },
         )
+    return pts
 
 
 # ════════════════════════════════════════════════════════════
@@ -302,6 +336,21 @@ def _resolve_video_points(video_id):
         )
         return 0
     return int(pts or 0)
+
+
+def _activity_points_handled_upstream(scl):
+    """Return True when complete_content already updated PE activity points."""
+    metadata = getattr(scl, "metadata", None)
+    if not metadata:
+        return False
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except Exception:
+            return False
+    if not isinstance(metadata, dict):
+        return False
+    return metadata.get("activity_points_awarded_by") == "complete_content"
 
 
 def _resolve_grace_window_days(pe):

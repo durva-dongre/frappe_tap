@@ -23,6 +23,67 @@ import frappe
 from frappe.utils import now_datetime, cint, flt
 
 
+def create_content_completion_log(
+    student_id: str,
+    course_level: str,
+    progress_name: str,
+    content_type: str,
+    content_id: str,
+    action: str,
+    time_spent_seconds: int = 0,
+    score: float = None,
+    max_score: float = None,
+    passed: bool = None,
+    quiz_attempt: str = None,
+    stage_no: int = None,
+    tier: str = None,
+    learning_unit: str = None,
+    started_at=None,
+    points_awarded=None,
+    metadata=None,
+):
+    """Insert StudentContentLog and let DocType hooks run.
+
+    This intentionally does not commit. Callers decide transaction boundaries:
+    API paths commit at request end, while background jobs commit after insert.
+    VideoClass points are awarded by complete_content before this log is
+    enqueued. For those rows, pass points_awarded + metadata so the
+    StudentContentLog.after_insert hook can skip and avoid double-awarding.
+    """
+    content_name = get_content_name(content_type, content_id)
+    attempt_number = frappe.db.count("StudentContentLog", {
+        "student": student_id,
+        "content_type": content_type,
+        "content_id": content_id,
+    }) + 1
+
+    log = frappe.get_doc({
+        "doctype": "StudentContentLog",
+        "student": student_id,
+        "course_level": course_level,
+        "student_progress": progress_name,
+        "stage_no": stage_no,
+        "tier": tier,
+        "learning_unit": learning_unit,
+        "content_type": content_type,
+        "content_id": content_id,
+        "content_name": content_name,
+        "action": action,
+        "started_at": started_at,
+        "completed_at": now_datetime(),
+        "time_spent_seconds": cint(time_spent_seconds),
+        "score": flt(score) if score is not None else None,
+        "max_score": flt(max_score) if max_score is not None else None,
+        "passed": 1 if passed else 0 if passed is not None else None,
+        "attempt_number": attempt_number,
+        "quiz_attempt": quiz_attempt,
+        "points_awarded": cint(points_awarded) if points_awarded is not None else 0,
+        "metadata": metadata,
+    })
+    log.insert(ignore_permissions=True)
+    return log
+
+
 def job_log_content_completion(
     student_id: str,
     course_level: str,
@@ -38,7 +99,9 @@ def job_log_content_completion(
     stage_no: int = None,
     tier: str = None,
     learning_unit: str = None,
-    started_at=None
+    started_at=None,
+    points_awarded=None,
+    metadata=None,
 ):
     """
     Log content completion to StudentContentLog.
@@ -61,50 +124,37 @@ def job_log_content_completion(
         tier: Difficulty tier
         learning_unit: LearningUnit document name
         started_at: When content was started
+        points_awarded: Optional pre-awarded points for audit/log rows
+        metadata: Optional JSON metadata for the StudentContentLog row
     """
     try:
-        # Get content name
-        content_name = get_content_name(content_type, content_id)
-
-        # Count previous attempts
-        attempt_number = frappe.db.count("StudentContentLog", {
-            "student": student_id,
-            "content_type": content_type,
-            "content_id": content_id
-        }) + 1
-
-        # Create log entry
-        log = frappe.get_doc({
-            "doctype": "StudentContentLog",
-            "student": student_id,
-            "course_level": course_level,
-            "student_progress": progress_name,
-            "stage_no": stage_no,
-            "tier": tier,
-            "learning_unit": learning_unit,
-            "content_type": content_type,
-            "content_id": content_id,
-            "content_name": content_name,
-            "action": action,
-            "started_at": started_at,
-            "completed_at": now_datetime(),
-            "time_spent_seconds": cint(time_spent_seconds),
-            "score": flt(score) if score is not None else None,
-            "max_score": flt(max_score) if max_score is not None else None,
-            "passed": 1 if passed else 0 if passed is not None else None,
-            "attempt_number": attempt_number,
-            "quiz_attempt": quiz_attempt
-        })
-        log.insert(ignore_permissions=True)
+        log = create_content_completion_log(
+            student_id=student_id,
+            course_level=course_level,
+            progress_name=progress_name,
+            content_type=content_type,
+            content_id=content_id,
+            action=action,
+            time_spent_seconds=time_spent_seconds,
+            score=score,
+            max_score=max_score,
+            passed=passed,
+            quiz_attempt=quiz_attempt,
+            stage_no=stage_no,
+            tier=tier,
+            learning_unit=learning_unit,
+            started_at=started_at,
+            points_awarded=points_awarded,
+            metadata=metadata,
+        )
         frappe.db.commit()
 
         frappe.logger().info(f"Content log created: {log.name} for {student_id} - {content_type}:{content_id}")
 
     except Exception as e:
         # Fail loudly: this job is the durable bridge that inserts
-        # StudentContentLog, whose after_insert hook awards VideoClass
-        # activity points. If we swallow the exception, RQ marks the job
-        # successful and the student silently loses the completion log/points.
+        # StudentContentLog. If we swallow the exception, RQ marks the job
+        # successful and the student silently loses the completion audit row.
         try:
             frappe.db.rollback()
         except Exception:
