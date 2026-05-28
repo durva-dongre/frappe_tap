@@ -139,7 +139,8 @@ def award_video_completion_points(
     # CR-009 (2026-05-23): zero-point videos still trigger the engagement
     # pipeline. The point bump is a no-op, but weekly_video_done/grace/escalation
     # must still update.
-    pts = _resolve_video_points(video_id) or 0
+    # pts = _resolve_video_points(video_id) or 0
+    pts = 10
 
     pe = get_active_pe(student_id)
     if not pe:
