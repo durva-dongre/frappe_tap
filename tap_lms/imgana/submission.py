@@ -454,5 +454,4 @@ def get_student_details(student_id):
             f"Error getting student details: {str(e)}",
             "Student Details Error"
         )
-        print(e)
         return None

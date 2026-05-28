@@ -101,11 +101,32 @@ def job_log_content_completion(
         frappe.logger().info(f"Content log created: {log.name} for {student_id} - {content_type}:{content_id}")
 
     except Exception as e:
-        frappe.log_error(
+        # Fail loudly: this job is the durable bridge that inserts
+        # StudentContentLog, whose after_insert hook awards VideoClass
+        # activity points. If we swallow the exception, RQ marks the job
+        # successful and the student silently loses the completion log/points.
+        try:
+            frappe.db.rollback()
+        except Exception:
+            pass
+
+        context = (
             f"job_log_content_completion failed: {str(e)}\n"
-            f"student: {student_id}, content: {content_type}:{content_id}",
-            "Background Job Error"
+            f"student: {student_id}\n"
+            f"course_level: {course_level}\n"
+            f"progress_name: {progress_name}\n"
+            f"content: {content_type}:{content_id}\n"
+            f"action: {action}\n"
+            f"stage_no: {stage_no}\n"
+            f"tier: {tier}\n"
+            f"learning_unit: {learning_unit}\n"
+            f"quiz_attempt: {quiz_attempt}"
         )
+        try:
+            frappe.log_error(context, "Background Job Error")
+        except Exception:
+            frappe.logger().error(context)
+        raise
 
 
 def job_update_statistics(
