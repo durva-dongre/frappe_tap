@@ -123,6 +123,7 @@ def on_feedback_ready(submission_name, student_id=None):
         # NOTE: Do NOT commit here — let the caller (FeedbackConsumer.process_message)
         # handle the commit so that submission update + state transition are atomic.
         result_status = frappe.db.get_value("Submission", submission_name, "result_status")
+        validity_status = frappe.db.get_value("Submission", submission_name, "submission_validity")
 
         # CR-007: compute & award submission points BEFORE the routing decision
         # so the contact-field sync that fires from the transition below carries
@@ -142,7 +143,7 @@ def on_feedback_ready(submission_name, student_id=None):
 
         # CR-007: gate Remedial routing on submission_validation_enabled.
         # AI validation always runs; only its routing consequence is gated.
-        if result_status in ("Failed", "Success - Flagged"):
+        if validity_status == "Invalid" or validity_status == "invalid":
             week_rule = _get_week_rule_for_pe(pe, sub_week or pe.current_week)
             validation_enabled = bool((week_rule or {}).get("submission_validation_enabled"))
             if validation_enabled:
@@ -223,7 +224,7 @@ def _compute_submission_points(pe, submission_name, result_status):
         return _escalation_points(pe, sent_count)
 
     # On-time path: look up validation gate + per-item award
-    sub_week = frappe.db.get_value("Submission", submission_name, "week") or pe.current_week
+    sub_week = pe.current_week or frappe.db.get_value("Submission", submission_name, "week")
     week_rule = _get_week_rule_for_pe(pe, sub_week)
     validation_enabled = bool((week_rule or {}).get("submission_validation_enabled"))
 
