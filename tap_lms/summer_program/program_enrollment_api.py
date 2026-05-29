@@ -824,6 +824,11 @@ def get_student_state(student_id):
         })
         return
 
+    # Public scoreboard total is the canonical stream sum. Do not trust a
+    # drifted stored total_points value here; get_student_state is the Glific
+    # fallback used specifically when cached/displayed state may be stale.
+    pe_data["total_points"] = _canonical_total_points(pe_data)
+
     # L-008 (Glific public contract): the Glific contact field + webhook
     # response key is `last_escalation_step`, despite the PE column being
     # renamed to `current_escalation_step` in this CR. Re-key the dict so
@@ -892,6 +897,16 @@ def _resolve_student(identifier):
     """Delegate to shared utility."""
     from tap_lms.summer_program.utils import resolve_student
     return resolve_student(identifier)
+
+
+def _canonical_total_points(pe_data):
+    """Return the public total score from persisted point streams."""
+    return (
+        cint(pe_data.get("total_activity_points") or 0)
+        + cint(pe_data.get("total_quiz_points") or 0)
+        + cint(pe_data.get("total_submission_points") or 0)
+        + cint(pe_data.get("bonus_quiz_points") or 0)
+    )
 
 
 def _resolve_course_level(student, batch):

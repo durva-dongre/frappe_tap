@@ -90,7 +90,7 @@ def _response(pe, status_value, **extras):
 
 
 @frappe.whitelist(allow_guest=True)
-def update_flow_status(student_id, flow_name, status, metadata=None,
+def update_flow_status(student_id, status, flow_name, metadata=None,
                        **_glific_kwargs):
     """
     API A4: update_flow_status

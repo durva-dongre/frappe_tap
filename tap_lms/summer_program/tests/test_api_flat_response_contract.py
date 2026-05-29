@@ -1123,6 +1123,7 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
         "weekly_submission_points",
         "special_gems",
         "weekly_submission_done",
+        "bonus_quiz_points",
     }
 
     @patch("tap_lms.summer_program.program_enrollment_api._resolve_student")
@@ -1152,6 +1153,7 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
             "total_quiz_points": 5, "weekly_quiz_points": 5,
             "total_submission_points": 25, "weekly_submission_points": 25,
             "special_gems": 1, "weekly_submission_done": 1,
+            "bonus_quiz_points": 0,
         }
         mock_frappe.db.get_value.return_value = pe_data
 
@@ -1211,6 +1213,7 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
             "total_quiz_points": 0, "weekly_quiz_points": 0,
             "total_submission_points": 0, "weekly_submission_points": 0,
             "special_gems": 0, "weekly_submission_done": 0,
+            "bonus_quiz_points": 0,
         }
         captured = {}
         mock_frappe.local.response = captured
@@ -1238,6 +1241,49 @@ class TestGetStudentStateCR002V2FlatShape(unittest.TestCase):
         # New field uses its natural name — that one is fresh contract surface
         self.assertIn("current_escalation_type", captured)
         self.assertEqual(captured["current_escalation_type"], "voice_note")
+
+    @patch("tap_lms.summer_program.program_enrollment_api._resolve_student")
+    @patch("tap_lms.summer_program.program_enrollment_api.frappe")
+    def test_response_total_points_includes_bonus_quiz_points(
+        self, mock_frappe, mock_resolve,
+    ):
+        """get_student_state is the Glific fallback; its public total must
+        include bonus_quiz_points even if the stored total_points column is
+        stale or was written before the bonus stream existed."""
+        from tap_lms.summer_program import program_enrollment_api as api
+
+        mock_resolve.return_value = "STU-001"
+        mock_frappe.db.get_value.side_effect = [
+            {
+                "name": "PE-1", "batch": "BATCH-1", "program_type": "Summer",
+                "archetype": "Submitter", "experiment_arm": "default",
+                "resolved_flow_state": "normal_content_delivery",
+                "journey_label": "content_delivered", "program_status": "active",
+                "current_week": 1, "current_path": "Core", "current_tier": "Basic",
+                # Stale stored total: 20 + 5 + 25, missing +10 bonus.
+                "total_points": 50, "current_streak": 0, "in_grace_window": 0,
+                "grace_window_end_at": None,
+                "current_expected_submission_type": "photo",
+                "submission_count": 0,
+                "current_escalation_step": 0,
+                "current_escalation_type": "",
+                "course_level": "CL-1", "language": None, "glific_id": "G-1",
+                "total_activity_points": 20, "weekly_activity_points": 0,
+                "total_quiz_points": 5, "weekly_quiz_points": 0,
+                "total_submission_points": 25, "weekly_submission_points": 0,
+                "special_gems": 0, "weekly_submission_done": 0,
+                "bonus_quiz_points": 10,
+            },
+            "Student One",
+            "BATCH01",
+        ]
+        captured = {}
+        mock_frappe.local.response = captured
+
+        api.get_student_state("STU-001")
+
+        self.assertEqual(captured["bonus_quiz_points"], 10)
+        self.assertEqual(captured["total_points"], 60)
 
 
 if __name__ == "__main__":
