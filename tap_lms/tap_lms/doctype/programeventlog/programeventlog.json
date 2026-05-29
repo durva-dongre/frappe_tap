@@ -78,7 +78,7 @@
    "fieldname": "trigger_source",
    "fieldtype": "Select",
    "label": "Trigger Source",
-   "options": "scheduler\nglific_flow\nflow_callback\nadmin\nmicroservice\ndispatcher\nactivity_points\ncontent_log\nfeedback_consumer\nquiz_attempt\ncomplete_content"
+   "options": "scheduler\nglific_flow\nflow_callback\nadmin\nmicroservice\ndispatcher\nactivity_points\ncontent_log\nfeedback_consumer\nquiz_attempt\ncomplete_content\nescalation_scheduled"
   },
   {
    "description": "JSONB. GIN index. {points, step, week, archetype, experiment_arm}",

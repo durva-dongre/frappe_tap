@@ -251,6 +251,7 @@ def award_video_completion_points(
         """,
         (pts, pts, grace_window_days, pts, pts, pe.name),
     )
+    frappe.db.commit()
 
     # Reload before any audit marker is written. If this verification fails,
     # complete_content must NOT mark the future StudentContentLog as handled,
@@ -318,7 +319,7 @@ def award_video_completion_points(
         student=student_id,
         content_id=video_id,
     )
-    _maybe_arm_escalation(pe, scl_ref, is_first_video_of_week)
+    _maybe_arm_escalation(pe, scl_ref, is_first_video_of_week) 
 
     # ── 7b. ProgramEventLog ────────────────────────────────
     # Gate on pts > 0 (CR-009 follow-on 2026-05-23): with the E11 early-
