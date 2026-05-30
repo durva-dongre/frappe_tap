@@ -3,6 +3,7 @@
 import frappe
 import json
 import pika
+import time
 from typing import Dict
 
 from ..glific_integration import start_contact_flow
@@ -207,25 +208,21 @@ class FeedbackConsumer:
             self.processor.update_submission(message_data)
             frappe.db.commit()
 
-            # Summer Program: trigger T12 state transition before starting the
-            # Glific feedback flow. That flow can immediately call
-            # get_student_state, so the PE state/points must already be
-            # committed.
-            try:
-                frappe.db.begin()
-                self._update_sp_state(submission_id, message_data)
-                frappe.db.commit()
-            except Exception as sp_error:
-                frappe.db.rollback()
-                frappe.logger().warning(f"SP state update failed for {submission_id}: {str(sp_error)}")
-                # Continue - pe_dispatcher's feedback_timeout handler is the safety net
+            if not self._is_feedback_requested(submission_id):
+                time.sleep(5)
 
-            # Send Glific notification (non-critical - don't fail message if this fails)
-            try:
-                self.send_glific_notification(message_data)
-            except Exception as glific_error:
-                frappe.logger().warning(f"Glific notification failed for {submission_id}: {str(glific_error)}")
-                # Continue processing - notification failure shouldn't fail the entire message
+            if self._is_feedback_requested(submission_id):
+                self.process_feedback_ready(submission_id, message_data)
+
+            if self._claim_feedback_flow(submission_id):
+                frappe.db.commit()
+                self.trigger_feedback_flow(submission_id, message_data)
+            else:
+                frappe.db.commit()
+                frappe.logger().info(
+                    f"Feedback flow not requested for submission {submission_id}; "
+                    "acknowledging without Glific notification"
+                )
 
             # Acknowledge message only after successful processing
             ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -256,6 +253,82 @@ class FeedbackConsumer:
 
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
 
+    def _is_feedback_requested(self, submission_id):
+        return (
+            frappe.db.get_value("Submission", submission_id, "send_feedback")
+            == "yes"
+        )
+
+    def _claim_feedback_flow(self, submission_id):
+        """
+        Atomically claim a pending feedback-flow request.
+
+        Both the public API and RabbitMQ consumer use this gate. Exactly one
+        caller can flip send_feedback from yes to no for a terminal submission,
+        which prevents duplicate Glific flows.
+        """
+        result = frappe.db.sql(
+            """
+            UPDATE `tabSubmission`
+            SET send_feedback = 'no',
+                feedback_flow_triggered_at = NOW()
+            WHERE name = %s
+              AND send_feedback = 'yes'
+              AND feedback_flow_triggered_at IS NULL
+              AND status IN ('Completed', 'Failed')
+            RETURNING name
+            """,
+            (submission_id,),
+        )
+        return bool(result)
+
+    def _claim_feedback_ready_processing(self, submission_id):
+        """
+        Atomically claim the internal SP feedback-ready mutation.
+
+        This is intentionally separate from _claim_feedback_flow: weekly
+        content delivery may run the PE mutation without sending the
+        student-facing Glific feedback notification.
+        """
+        result = frappe.db.sql(
+            """
+            UPDATE `tabSubmission`
+            SET feedback_ready_processed_at = NOW()
+            WHERE name = %s
+              AND feedback_ready_processed_at IS NULL
+              AND status IN ('Completed', 'Failed')
+            RETURNING name
+            """,
+            (submission_id,),
+        )
+        return bool(result)
+
+    def process_feedback_ready(self, submission_id, message_data):
+        try:
+            frappe.db.begin()
+            if not self._claim_feedback_ready_processing(submission_id):
+                frappe.db.rollback()
+                return False
+
+            result = self._update_sp_state(submission_id, message_data) or {}
+            if result.get("status") == "error":
+                raise Exception(result.get("message") or "on_feedback_ready failed")
+
+            frappe.db.commit()
+            return True
+        except Exception as sp_error:
+            frappe.db.rollback()
+            frappe.logger().warning(f"SP state update failed for {submission_id}: {str(sp_error)}")
+            raise
+
+    def trigger_feedback_flow(self, submission_id, message_data):
+        # Send Glific notification (non-critical - don't fail message if this fails)
+        try:
+            self.send_glific_notification(message_data)
+        except Exception as glific_error:
+            frappe.logger().warning(f"Glific notification failed for {submission_id}: {str(glific_error)}")
+            # Continue processing - notification failure shouldn't fail the entire message
+
     def _update_sp_state(self, submission_id, message_data):
         """
         Summer Program hook: advance PE state from submitted_awaiting_feedback
@@ -281,9 +354,10 @@ class FeedbackConsumer:
                 frappe.logger().warning(
                     f"[SP] Hook returned error for {submission_id}: {result.get('message')}"
                 )
+            return result
         except ImportError:
             # Summer Program module not installed/available — skip silently
-            pass
+            return {"status": "skipped", "reason": "import_error"}
         except Exception as e:
             frappe.logger().warning(f"[SP] State update failed for {submission_id}: {str(e)}")
             # Re-raise so process_message logs it but continues

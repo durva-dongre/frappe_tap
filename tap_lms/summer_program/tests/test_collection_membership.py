@@ -181,8 +181,9 @@ class TestWeeklyContentDeliveryTrigger(FrappeTestCase):
     """The Tuesday cron: one start_group_flow per active BPR, on main only."""
 
     @patch("tap_lms.summer_program.scheduler.start_group_flow")
+    @patch("tap_lms.summer_program.scheduler.process_pending_feedback_ready_before_weekly_content")
     @patch("tap_lms.summer_program.scheduler.frappe.db.sql")
-    def test_weekly_trigger_fires_on_main_only(self, mock_sql, mock_start_flow):
+    def test_weekly_trigger_fires_on_main_only(self, mock_sql, mock_preflight, mock_start_flow):
         """One active BPR with a populated main collection → exactly one
         start_group_flow call, against the main group, with the BPR's
         content_delivery_flow."""
@@ -203,14 +204,16 @@ class TestWeeklyContentDeliveryTrigger(FrappeTestCase):
 
         weekly_content_delivery_trigger()
 
+        mock_preflight.assert_called_once()
         mock_start_flow.assert_called_once_with(
             flow_id="flow-99",
             group_id="grp-main-99",
         )
 
     @patch("tap_lms.summer_program.scheduler.start_group_flow")
+    @patch("tap_lms.summer_program.scheduler.process_pending_feedback_ready_before_weekly_content")
     @patch("tap_lms.summer_program.scheduler.frappe.db.sql")
-    def test_weekly_trigger_skips_empty_main(self, mock_sql, mock_start_flow):
+    def test_weekly_trigger_skips_empty_main(self, mock_sql, mock_preflight, mock_start_flow):
         """BPR whose main collection has 0 members → no flow start."""
         from tap_lms.summer_program.scheduler import weekly_content_delivery_trigger
 
@@ -226,6 +229,7 @@ class TestWeeklyContentDeliveryTrigger(FrappeTestCase):
 
         weekly_content_delivery_trigger()
 
+        mock_preflight.assert_called_once()
         mock_start_flow.assert_not_called()
 
 

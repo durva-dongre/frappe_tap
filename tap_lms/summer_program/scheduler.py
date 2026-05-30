@@ -220,6 +220,67 @@ def _get_students_for_bpr(bpr):
 
 # ── CR-005 (2026-05-15): Weekly content delivery via main collection ──
 
+def process_pending_feedback_ready_before_weekly_content():
+    """
+    Run the internal feedback-ready PE mutation for completed submissions
+    that never requested the student-facing feedback flow.
+
+    This intentionally does NOT send the Glific feedback notification. It only
+    ensures ProgramEnrollment points/state/remedial routing are up to date
+    before the next weekly content flow starts.
+    """
+    pending_submissions = frappe.db.sql(
+        """
+        SELECT s.name AS submission_id,
+               s.student_id AS student_id
+          FROM "tabSubmission" s
+          JOIN "tabProgramEnrollment" pe
+            ON pe.name = s.program_enrollment
+          JOIN "tabBatchProgramRun" bpr
+            ON bpr.batch = pe.batch
+           AND bpr.status = 'active'
+           AND bpr.content_delivery_flow IS NOT NULL
+         WHERE s.is_primary = 1
+           AND s.status IN ('Completed', 'Failed')
+           AND s.feedback_ready_processed_at IS NULL
+           AND pe.program_status = 'active'
+           AND pe.resolved_flow_state = 'submitted_awaiting_feedback'
+        """,
+        as_dict=True,
+    )
+
+    if not pending_submissions:
+        return {"status": "success", "processed": 0, "failed": 0}
+
+    from tap_lms.feedback_handler.feedback_consumer import FeedbackConsumer
+
+    consumer = FeedbackConsumer.__new__(FeedbackConsumer)
+    processed = 0
+    failed = 0
+
+    for row in pending_submissions:
+        submission_id = row["submission_id"]
+        try:
+            if consumer.process_feedback_ready(
+                submission_id,
+                {
+                    "submission_id": submission_id,
+                    "student_id": row.get("student_id"),
+                    "feedback": {},
+                },
+            ):
+                processed += 1
+        except Exception as e:
+            failed += 1
+            frappe.log_error(
+                f"weekly_content_delivery_trigger feedback-ready preflight "
+                f"failed for submission {submission_id}: {e}",
+                "SP Weekly Feedback Ready Preflight",
+            )
+
+    return {"status": "success", "processed": processed, "failed": failed}
+
+
 def weekly_content_delivery_trigger():
     """CR-005: Tuesday 09:00 IST (03:30 UTC). For each active BPR, fire
     SP_Content_Delivery against the `main` Glific collection. Membership is
@@ -232,6 +293,8 @@ def weekly_content_delivery_trigger():
     is the documented mitigation. No code-level mutex per locked decision
     2026-05-15.
     """
+    process_pending_feedback_ready_before_weekly_content()
+
     active_bprs = frappe.db.sql(
         """
         SELECT name, batch, content_delivery_flow

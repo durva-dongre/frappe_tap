@@ -414,6 +414,100 @@ def get_submission_feedback(submission_id, **_glific_kwargs):
         return {"error": "An error occurred while checking submission feedback"}
 
 
+@frappe.whitelist(allow_guest=True)
+def ready_to_receive_feedback(submission_id, **_glific_kwargs):
+    """
+    Mark a submission as ready for student feedback delivery.
+
+    If AI feedback has already landed, this triggers the feedback flow
+    immediately. Otherwise the RabbitMQ feedback consumer will trigger it
+    after processing finishes.
+    """
+    try:
+        submission = frappe.get_doc("Submission", submission_id)
+        requested_at = now_datetime()
+
+        if not _mark_feedback_requested(submission_id, requested_at):
+            return {
+                "success": True,
+                "status": "success",
+                "message": "Feedback flow already triggered.",
+            }
+
+        submission.send_feedback = "yes"
+        submission.feedback_requested_at = requested_at
+
+        if submission.status not in ("Completed", "Failed"):
+            return {
+                "success": True,
+                "status": "success",
+                "message": "Feedback will be given once ready.",
+            }
+
+        from tap_lms.feedback_handler.feedback_consumer import FeedbackConsumer
+
+        consumer = FeedbackConsumer.__new__(FeedbackConsumer)
+        message_data = _build_feedback_flow_message(submission)
+
+        consumer.process_feedback_ready(submission_id, message_data)
+
+        if consumer._claim_feedback_flow(submission_id):
+            frappe.db.commit()
+            consumer.trigger_feedback_flow(submission_id, message_data)
+
+        return {
+            "success": True,
+            "status": "success",
+            "message": "Feedback flow triggered.",
+        }
+
+    except frappe.DoesNotExistError:
+        return {
+            "success": False,
+            "status": "not_found",
+            "message": "Submission not found.",
+        }
+
+    except Exception as e:
+        frappe.db.rollback()
+        frappe.log_error(
+            f"ready_to_receive_feedback failed for submission_id={submission_id}: "
+            f"{type(e).__name__}: {e}",
+            "SP Ready To Receive Feedback",
+        )
+        return {
+            "success": False,
+            "status": "internal_error",
+            "message": "Could not mark feedback as ready.",
+            "error_detail": f"{type(e).__name__}: {e}",
+        }
+
+
+def _build_feedback_flow_message(submission):
+    return {
+        "submission_id": submission.name,
+        "student_id": submission.student_id,
+        "feedback": {
+            "overall_feedback": submission.overall_feedback or "",
+        },
+    }
+
+
+def _mark_feedback_requested(submission_id, requested_at):
+    result = frappe.db.sql(
+        """
+        UPDATE `tabSubmission`
+        SET send_feedback = 'yes',
+            feedback_requested_at = COALESCE(feedback_requested_at, %s)
+        WHERE name = %s
+          AND feedback_flow_triggered_at IS NULL
+        RETURNING name
+        """,
+        (requested_at, submission_id),
+    )
+    return bool(result)
+
+
 # ════════════════════════════════════════════════════════════
 # ATOMIC PRIMARY CLAIM
 # ════════════════════════════════════════════════════════════

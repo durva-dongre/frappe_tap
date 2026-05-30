@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, call, patch
 def _import_save_submission_with_stubs():
     frappe = MagicMock()
     frappe.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+    frappe.ValidationError = type("ValidationError", (Exception,), {})
     frappe.whitelist = _frappe_whitelist
     frappe_utils = types.ModuleType("frappe.utils")
     frappe_utils.now_datetime = MagicMock(return_value="2026-05-12 10:00:00")
@@ -261,6 +262,119 @@ class TestGetSubmissionFeedback(unittest.TestCase):
             {"error": "An error occurred while checking submission feedback"},
         )
         mock_frappe.log_error.assert_called_once()
+
+
+class TestReadyToReceiveFeedback(unittest.TestCase):
+    def test_pending_submission_sets_feedback_request_without_trigger(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-READY-001"
+        submission.status = "Processing"
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.get_doc.return_value = submission
+            mock_frappe.db.sql.return_value = [("SUB-READY-001",)]
+
+            response = save_submission.ready_to_receive_feedback("SUB-READY-001")
+
+        mock_frappe.get_doc.assert_called_once_with("Submission", "SUB-READY-001")
+        self.assertEqual(
+            mock_frappe.db.sql.call_args.args[1],
+            ("2026-05-12 10:00:00", "SUB-READY-001"),
+        )
+        self.assertEqual(response, {
+            "success": True,
+            "status": "success",
+            "message": "Feedback will be given once ready.",
+        })
+
+    def test_completed_submission_claims_and_triggers_feedback_flow(self):
+        save_submission = _import_save_submission_with_stubs()
+        events = []
+
+        submission = MagicMock()
+        submission.name = "SUB-READY-002"
+        submission.status = "Completed"
+        submission.student_id = "STU-READY-002"
+        submission.overall_feedback = "Done"
+
+        fake_module = types.ModuleType("tap_lms.feedback_handler.feedback_consumer")
+
+        class FakeFeedbackConsumer:
+            def process_feedback_ready(self, submission_id, message_data):
+                events.append(("feedback_ready", submission_id, message_data))
+                return True
+
+            def _claim_feedback_flow(self, submission_id):
+                events.append(("claim", submission_id))
+                return True
+
+            def trigger_feedback_flow(self, submission_id, message_data):
+                events.append(("trigger", submission_id, message_data))
+
+        fake_module.FeedbackConsumer = FakeFeedbackConsumer
+        old_module = sys.modules.get("tap_lms.feedback_handler.feedback_consumer")
+        sys.modules["tap_lms.feedback_handler.feedback_consumer"] = fake_module
+
+        try:
+            with patch.object(save_submission, "frappe") as mock_frappe:
+                mock_frappe.get_doc.return_value = submission
+                mock_frappe.db.sql.return_value = [("SUB-READY-002",)]
+
+                response = save_submission.ready_to_receive_feedback("SUB-READY-002")
+        finally:
+            if old_module is None:
+                sys.modules.pop("tap_lms.feedback_handler.feedback_consumer", None)
+            else:
+                sys.modules["tap_lms.feedback_handler.feedback_consumer"] = old_module
+
+        self.assertEqual(events, [
+            (
+                "feedback_ready",
+                "SUB-READY-002",
+                {
+                    "submission_id": "SUB-READY-002",
+                    "student_id": "STU-READY-002",
+                    "feedback": {"overall_feedback": "Done"},
+                },
+            ),
+            ("claim", "SUB-READY-002"),
+            (
+                "trigger",
+                "SUB-READY-002",
+                {
+                    "submission_id": "SUB-READY-002",
+                    "student_id": "STU-READY-002",
+                    "feedback": {"overall_feedback": "Done"},
+                },
+            ),
+        ])
+        mock_frappe.db.commit.assert_called_once()
+        self.assertEqual(response, {
+            "success": True,
+            "status": "success",
+            "message": "Feedback flow triggered.",
+        })
+
+    def test_already_triggered_submission_does_not_retrigger(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-READY-003"
+        submission.status = "Completed"
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.get_doc.return_value = submission
+            mock_frappe.db.sql.return_value = []
+
+            response = save_submission.ready_to_receive_feedback("SUB-READY-003")
+
+        self.assertEqual(response, {
+            "success": True,
+            "status": "success",
+            "message": "Feedback flow already triggered.",
+        })
 
 
 # ════════════════════════════════════════════════════════════
@@ -562,6 +676,8 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
                 patch.object(save_submission, "apply_submission_transition", return_value=("T7", True)), \
                 patch.object(save_submission, "log_event"):
             mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type("ValidationError", (Exception,), {})
+            mock_frappe.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
             mock_frappe.utils.random_string = lambda n: "abcd1234"
 
             response = save_submission.save_submission(
