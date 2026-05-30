@@ -62,7 +62,7 @@ def _make_pe(batch_name, student_name, suffix, **kwargs):
     pe.current_path = PATH_CORE
     pe.current_week = 1
     pe.current_tier = "Basic"
-    pe.archetype = "Submitter"
+    pe.archetype = "submitter"
     pe.current_escalation_step = kwargs.get("current_escalation_step", 0)
     pe.submission_count = kwargs.get("submission_count", 0)
     pe.insert(ignore_permissions=True)
