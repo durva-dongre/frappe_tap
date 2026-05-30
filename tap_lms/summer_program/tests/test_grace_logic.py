@@ -108,7 +108,7 @@ def _make_pe(batch_name, student_name, suffix, **kwargs):
     pe.current_path = PATH_CORE
     pe.current_week = kwargs.get("current_week", 1)
     pe.current_tier = "Basic"
-    pe.archetype = "Submitter"
+    pe.archetype = "submitter"
     pe.weekly_submission_done = kwargs.get("weekly_submission_done", 0)
     pe.weekly_video_done = kwargs.get("weekly_video_done", 0)
     if "grace_window_end_at" in kwargs:
