@@ -23,6 +23,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import now_datetime
 from unittest.mock import patch
 
+from tap_lms.summer_program.tests.factories import make_batch
 from tap_lms.summer_program.constants import (
     LABEL_CONTENT_DELIVERED,
     PATH_CORE,
@@ -40,20 +41,9 @@ from tap_lms.summer_program.quiz_points import (
 # ════════════════════════════════════════════════════════════
 
 def _ensure_batch():
-    name = frappe.get_value("Batch", {"name1": "QuizPointsTestBatch"}, "name")
-    if name:
-        return name
-    batch = frappe.new_doc("Batch")
-    batch.name1 = "QuizPointsTestBatch"
-    batch.start_date = "2026-01-01"
-    batch.end_date = "2026-04-30"
-    batch.batch_id = "QPT01"
-    batch.program_type = "Summer"
-    batch.total_weeks = 12
-    batch.current_calendar_week = 1
-    batch.grace_window_days = 14
-    batch.insert(ignore_permissions=True)
-    return batch.name
+    # Delegates to the shared factory (L-037) so this fixture inherits future
+    # mandatory-field additions instead of breaking with MandatoryError.
+    return make_batch(label="QuizPointsTestBatch", batch_id="QPT01")
 
 
 def _ensure_student(suffix):

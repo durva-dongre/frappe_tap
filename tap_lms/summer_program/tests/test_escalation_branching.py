@@ -15,6 +15,8 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_to_date, now_datetime
 from unittest.mock import patch, MagicMock
 
+from tap_lms.summer_program.tests.factories import make_batch
+
 from tap_lms.summer_program.constants import (
     ACTION_ESCALATION,
     LABEL_CONTENT_DELIVERED,
@@ -30,20 +32,9 @@ from tap_lms.summer_program.constants import (
 
 
 def _ensure_batch():
-    name = frappe.get_value("Batch", {"name1": "EscBranchBatch"}, "name")
-    if name:
-        return name
-    batch = frappe.new_doc("Batch")
-    batch.name1 = "EscBranchBatch"
-    batch.start_date = "2026-01-01"
-    batch.end_date = "2026-04-30"
-    batch.batch_id = "EBR01"
-    batch.program_type = "Summer"
-    batch.total_weeks = 12
-    batch.current_calendar_week = 1
-    batch.grace_window_days = 14
-    batch.insert(ignore_permissions=True)
-    return batch.name
+    # Delegates to the shared factory (L-037) so this fixture inherits future
+    # mandatory-field additions instead of breaking with MandatoryError.
+    return make_batch(label="EscBranchBatch", batch_id="EBR01")
 
 
 def _ensure_student(suffix):
@@ -71,7 +62,7 @@ def _make_pe(batch_name, student_name, suffix, **kwargs):
     pe.current_path = PATH_CORE
     pe.current_week = 1
     pe.current_tier = "Basic"
-    pe.archetype = "Submitter"
+    pe.archetype = "submitter"
     pe.current_escalation_step = kwargs.get("current_escalation_step", 0)
     pe.submission_count = kwargs.get("submission_count", 0)
     pe.insert(ignore_permissions=True)

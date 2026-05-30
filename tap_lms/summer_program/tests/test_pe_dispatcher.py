@@ -26,6 +26,8 @@ No frappe.db.commit() in tests — the runner relies on transaction rollback
 for isolation (lesson L-017).
 """
 import frappe
+
+from tap_lms.summer_program.tests.factories import make_batch
 from datetime import timedelta
 from unittest.mock import patch
 from frappe.tests.utils import FrappeTestCase
@@ -68,22 +70,13 @@ from tap_lms.summer_program.constants import (
 
 
 def _ensure_batch():
-    """Create or fetch a test Batch the test PEs hang off."""
-    name = frappe.get_value("Batch", {"name1": "DispatcherTestBatch"}, "name")
-    if name:
-        return name
+    """Create or fetch a test Batch the test PEs hang off.
 
-    batch = frappe.new_doc("Batch")
-    batch.name1 = "DispatcherTestBatch"
-    batch.start_date = "2026-01-01"
-    batch.end_date = "2026-04-30"
-    batch.batch_id = "DSPT01"
-    batch.program_type = "Summer"
-    batch.total_weeks = 12
-    batch.current_calendar_week = 1
-    batch.grace_window_days = 14
-    batch.insert(ignore_permissions=True)
-    return batch.name
+    Delegates to the shared factory (L-037). Tests that need to advance
+    batch.current_calendar_week mutate it via frappe.db.set_value after
+    creation — that behavior is unchanged by this delegation.
+    """
+    return make_batch(label="DispatcherTestBatch", batch_id="DSPT01")
 
 
 def _ensure_student(suffix):
