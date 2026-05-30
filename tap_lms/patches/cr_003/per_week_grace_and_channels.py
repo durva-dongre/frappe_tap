@@ -66,19 +66,28 @@ def execute():
     # Map: 'help_note_a' -> 'help_note_a', 'help_note_b' -> 'help_note_b',
     # anything else -> 'help_note_a' (safe default; voice_note and parent_call
     # are new escalation types that no historical row would have used).
-    backfilled = frappe.db.sql(
-        """
-        UPDATE "tabEscalationStep"
-           SET escalation_type = CASE
-                   WHEN message_type = 'help_note_a' THEN 'help_note_a'
-                   WHEN message_type = 'help_note_b' THEN 'help_note_b'
-                   ELSE 'help_note_a'
-               END
-         WHERE escalation_type IS NULL OR escalation_type = ''
-        RETURNING name
-        """
-    )
-    escalation_backfill_count = len(backfilled or [])
+    #
+    # L-059 guard: `message_type` was DROPPED from EscalationStep JSON as part
+    # of CR-003's schema reshape. On migration deploys (servers where the
+    # pre-CR-003 schema was live) the column still exists in the DB because
+    # Frappe doesn't auto-drop columns. On fresh installs the column was
+    # never created. The has_column guard makes this patch idempotent across
+    # both deployment shapes — on fresh installs it cleanly skips Step 1.
+    escalation_backfill_count = 0
+    if frappe.db.has_column("tabEscalationStep", "message_type"):
+        backfilled = frappe.db.sql(
+            """
+            UPDATE "tabEscalationStep"
+               SET escalation_type = CASE
+                       WHEN message_type = 'help_note_a' THEN 'help_note_a'
+                       WHEN message_type = 'help_note_b' THEN 'help_note_b'
+                       ELSE 'help_note_a'
+                   END
+             WHERE escalation_type IS NULL OR escalation_type = ''
+            RETURNING name
+            """
+        )
+        escalation_backfill_count = len(backfilled or [])
 
     # ── Step 2. Delete orphaned VoiceAgentMapping rows ─────────────────────
     # The doctype JSON deletion is done out-of-band (T-03-03); this patch
