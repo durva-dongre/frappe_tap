@@ -16,6 +16,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from unittest.mock import patch
 
+from tap_lms.summer_program.tests.factories import make_batch
 from tap_lms.summer_program.activity_points import (
     handle_content_log,
     award_activity_points,
@@ -33,20 +34,9 @@ from tap_lms.summer_program.constants import (
 # ════════════════════════════════════════════════════════════
 
 def _ensure_batch():
-    name = frappe.get_value("Batch", {"name1": "ActivityPointsTestBatch"}, "name")
-    if name:
-        return name
-    batch = frappe.new_doc("Batch")
-    batch.name1 = "ActivityPointsTestBatch"
-    batch.start_date = "2026-01-01"
-    batch.end_date = "2026-04-30"
-    batch.batch_id = "APT01"
-    batch.program_type = "Summer"
-    batch.total_weeks = 12
-    batch.current_calendar_week = 1
-    batch.grace_window_days = 14
-    batch.insert(ignore_permissions=True)
-    return batch.name
+    # Delegates to the shared factory (L-037) so this fixture inherits future
+    # mandatory-field additions instead of breaking with MandatoryError.
+    return make_batch(label="ActivityPointsTestBatch", batch_id="APT01")
 
 
 def _ensure_student(suffix):
