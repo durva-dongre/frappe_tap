@@ -14,6 +14,8 @@ Two surfaces are covered:
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from tap_lms.summer_program.tests.factories import make_batch
+
 from tap_lms.summer_program.constants import (
     LABEL_CONTENT_DELIVERED,
     PATH_CORE,
@@ -27,6 +29,10 @@ from tap_lms.summer_program.validators import (
 
 
 def _ensure_batch(name, grace_days, total_weeks=12):
+    # Idempotent-update branch preserved: when the batch already exists this
+    # helper re-asserts grace_window_days/total_weeks (tests call it with
+    # varying grace values). Creation delegates to the shared factory (L-037)
+    # so the fixture inherits future mandatory-field additions.
     existing = frappe.get_value("Batch", {"name1": name}, "name")
     if existing:
         frappe.db.set_value("Batch", existing, {
@@ -34,17 +40,12 @@ def _ensure_batch(name, grace_days, total_weeks=12):
             "total_weeks": total_weeks,
         }, update_modified=False)
         return existing
-    batch = frappe.new_doc("Batch")
-    batch.name1 = name
-    batch.start_date = "2026-01-01"
-    batch.end_date = "2026-04-30"
-    batch.batch_id = name[:6].upper()
-    batch.program_type = "Summer"
-    batch.total_weeks = total_weeks
-    batch.current_calendar_week = 1
-    batch.grace_window_days = grace_days
-    batch.insert(ignore_permissions=True)
-    return batch.name
+    return make_batch(
+        label=name,
+        batch_id=name[:6].upper(),
+        total_weeks=total_weeks,
+        grace_window_days=grace_days,
+    )
 
 
 def _make_ac(batch_name, hours_list, archetype="Submitter", arm="default",
