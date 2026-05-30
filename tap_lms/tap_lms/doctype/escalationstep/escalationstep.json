@@ -30,7 +30,7 @@
   {
    "default": "24",
    "fieldname": "hours_after_previous",
-   "fieldtype": "Int",
+   "fieldtype": "Float",
    "label": "Hours After Previous"
   },
   {

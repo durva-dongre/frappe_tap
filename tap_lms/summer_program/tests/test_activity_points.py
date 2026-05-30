@@ -119,9 +119,8 @@ class TestActivityPoints(FrappeTestCase):
 
     @patch("tap_lms.summer_program.activity_points._enqueue_contact_field_sync")
     def test_video_completion_awards_activity_points(self, mock_sync):
-        """First VideoClass completion: PE.total_activity_points += 10,
-        weekly_activity_points += 10, total_points += 10, weekly_video_done = 1.
-        scl.points_awarded = 10."""
+        """First VideoClass completion bumps weekly and eager total counters,
+        flips weekly_video_done, and writes scl.points_awarded."""
         student = _ensure_student("01")
         pe_name = _make_pe(self.batch_name, student, "01")
         video_id = _make_video("01", 10)
@@ -177,8 +176,7 @@ class TestActivityPoints(FrappeTestCase):
             handle_content_log(scl)
 
         pe = frappe.get_doc("ProgramEnrollment", pe_name)
-        self.assertEqual(pe.total_activity_points, 30,
-                         "Three 10-point videos must award 30 total")
+        self.assertEqual(pe.total_activity_points, 30)
         self.assertEqual(pe.weekly_activity_points, 30)
         self.assertEqual(pe.total_points, 30)
         self.assertEqual(pe.weekly_video_done, 1,

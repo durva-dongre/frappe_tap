@@ -24,6 +24,14 @@ from frappe import _
 from frappe.utils import now_datetime, cint, flt, time_diff_in_seconds
 import json
 
+# Task #1 (2026-05-28): journey APIs deprecated pre-launch. All 8
+# whitelisted endpoints in this file return a deprecation envelope and
+# do NOT execute the legacy progression logic. The SP replacement lives
+# in summer_program/student_progression_sp.py with the same function
+# names. Old endpoint bodies are preserved as `_DEPRECATED_*_original`
+# helpers for one release cycle so the code is still readable.
+from tap_lms.journey._deprecation import journey_deprecated_response
+
 # ============================================================
 # CONSTANTS
 # ============================================================
@@ -224,10 +232,15 @@ def get_content_name(content_type: str, content_id: str) -> str:
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def get_next_content(student_id: str, course_level: str):
+def get_next_content(**_kw):
+    """[DEPRECATED 2026-05-28] Use summer_program.student_progression_sp.get_next_content."""
+    return journey_deprecated_response("get_next_content", _kw)
+
+
+def _DEPRECATED_get_next_content_original(student_id: str, course_level: str):
     """
     Get next content item for student.
-    
+
     Returns:
     - Content info if available
     - Quiz in progress status if active quiz exists
@@ -414,7 +427,12 @@ def get_next_content(student_id: str, course_level: str):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def get_content_details(content_type: str, content_id: str, language: str = None):
+def get_content_details(**_kw):
+    """[DEPRECATED 2026-05-28] Use summer_program.student_progression_sp.get_content_details."""
+    return journey_deprecated_response("get_content_details", _kw)
+
+
+def _DEPRECATED_get_content_details_original(content_type: str, content_id: str, language: str = None):
     """
     Get detailed information about a specific content item.
     Includes translations if available.
@@ -512,7 +530,12 @@ def get_content_details(content_type: str, content_id: str, language: str = None
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def complete_content(student_id: str, course_level: str, content_type: str, content_id: str):
+def complete_content(**_kw):
+    """[DEPRECATED 2026-05-28] Use summer_program.student_progression_sp.complete_content."""
+    return journey_deprecated_response("complete_content", _kw)
+
+
+def _DEPRECATED_complete_content_original(student_id: str, course_level: str, content_type: str, content_id: str):
     """
     Mark non-quiz content as complete.
     For Quiz, use start_quiz and submit_answer instead.
@@ -716,7 +739,12 @@ def advance_to_next_content(progress: dict, course_level: str) -> dict:
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def start_quiz(student_id: str, course_level: str, quiz_id: str, language: str = None):
+def start_quiz(**_kw):
+    """[DEPRECATED 2026-05-28] Use summer_program.student_progression_sp.start_quiz."""
+    return journey_deprecated_response("start_quiz", _kw)
+
+
+def _DEPRECATED_start_quiz_original(student_id: str, course_level: str, quiz_id: str, language: str = None):
     """
     Begin a quiz attempt or resume existing one.
     Returns first question (or current question if resuming).
@@ -950,7 +978,12 @@ def get_question_details(question_id: str, language: str = None) -> dict:
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def submit_answer(student_id: str, quiz_attempt_id: str, question_index: int, answer: str, language: str = None):
+def submit_answer(**_kw):
+    """[DEPRECATED 2026-05-28] Use summer_program.student_progression_sp.submit_answer."""
+    return journey_deprecated_response("submit_answer", _kw)
+
+
+def _DEPRECATED_submit_answer_original(student_id: str, quiz_attempt_id: str, question_index: int, answer: str, language: str = None):
     """
     Submit an answer for current question.
     Time tracking handled server-side.
@@ -1345,7 +1378,12 @@ def handle_quiz_failed(progress: dict, course_level: str) -> dict:
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def get_quiz_status(student_id: str, course_level: str):
+def get_quiz_status(**_kw):
+    """[DEPRECATED 2026-05-28] Quiz status surfaces in summer_program/program_enrollment_api.get_student_state (quiz fields are flattened into the PE state response)."""
+    return journey_deprecated_response("get_quiz_status", _kw)
+
+
+def _DEPRECATED_get_quiz_status_original(student_id: str, course_level: str):
     """
     Check if student has an active quiz attempt.
     Used for resume detection.
@@ -1405,7 +1443,12 @@ def get_quiz_status(student_id: str, course_level: str):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def get_student_progress_overview(student_id: str, course_level: str):
+def get_student_progress_overview(**_kw):
+    """[DEPRECATED 2026-05-28] Use summer_program/program_enrollment_api.get_student_state — flat-map response with all SP state fields."""
+    return journey_deprecated_response("get_student_progress_overview", _kw)
+
+
+def _DEPRECATED_get_student_progress_overview_original(student_id: str, course_level: str):
     """
     Get comprehensive progress overview for dashboard.
     """
@@ -1520,7 +1563,12 @@ def get_student_progress_overview(student_id: str, course_level: str):
 # ============================================================
 
 @frappe.whitelist(allow_guest=False)
-def get_student_history(student_id: str, course_level: str, limit: int = 50, offset: int = 0):
+def get_student_history(**_kw):
+    """[DEPRECATED 2026-05-28] No direct SP equivalent. If you need completion history, query StudentContentLog / ProgramEventLog directly via the Frappe REST API."""
+    return journey_deprecated_response("get_student_history", _kw)
+
+
+def _DEPRECATED_get_student_history_original(student_id: str, course_level: str, limit: int = 50, offset: int = 0):
     """
     Get detailed content completion history.
     """

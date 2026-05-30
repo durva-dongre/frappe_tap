@@ -3,12 +3,13 @@ import importlib
 import sys
 import types
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 
 def _import_save_submission_with_stubs():
     frappe = MagicMock()
     frappe.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+    frappe.ValidationError = type("ValidationError", (Exception,), {})
     frappe.whitelist = _frappe_whitelist
     frappe_utils = types.ModuleType("frappe.utils")
     frappe_utils.now_datetime = MagicMock(return_value="2026-05-12 10:00:00")
@@ -19,6 +20,7 @@ def _import_save_submission_with_stubs():
     state_machine = types.ModuleType("tap_lms.summer_program.state_machine")
     state_machine.get_active_pe = MagicMock()
     state_machine.apply_submission_transition = MagicMock(return_value=("T7", True))
+    state_machine.t22_duplicate_submission = MagicMock()
 
     event_log = types.ModuleType("tap_lms.summer_program.event_log")
     event_log.log_event = MagicMock()
@@ -42,6 +44,92 @@ def _frappe_whitelist(fn=None, **kwargs):
 
 
 class TestSaveSubmissionContentLogBridge(unittest.TestCase):
+    def test_normalizes_submission_without_inferring_kind(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch("tap_lms.imgana.media_detection.detect_url_media_type") as mock_detect:
+            payload = save_submission._normalize_submission_payload(
+                "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462?download=false"
+            )
+
+        self.assertIsNone(payload["submission_type"])
+        self.assertIsNone(payload["submission_text"])
+        self.assertIsNone(payload["submission_url"])
+        self.assertEqual(
+            payload["raw_submission"],
+            "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462?download=false",
+        )
+        mock_detect.assert_not_called()
+
+        text_payload = save_submission._normalize_submission_payload("hello world")
+        self.assertEqual(text_payload["raw_submission"], "hello world")
+        self.assertIsNone(text_payload["submission_type"])
+        self.assertIsNone(text_payload["submission_text"])
+        self.assertIsNone(text_payload["submission_url"])
+
+    def test_async_processing_detects_media_type_and_uploads_after_response(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-001"
+        submission.submission_type = None
+        submission.submission_url = "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462"
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch("tap_lms.imgana.media_detection.detect_url_media_type", return_value="audio") as mock_detect, \
+                patch("tap_lms.imgana.gcs_client.upload_to_gcs", return_value="https://storage.example/SUB-001.ogg") as mock_upload, \
+                patch.object(save_submission, "enqueue_submission") as mock_enqueue:
+            mock_frappe.get_doc.return_value = submission
+
+            save_submission.process_submission_async(
+                "SUB-001",
+                raw_submission="https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462",
+                pe_context={"program_enrollment": "PE-001"},
+            )
+
+        mock_detect.assert_called_once_with(
+            "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462",
+            default="image",
+        )
+        mock_upload.assert_called_once_with(
+            "https://filemanager.gupshup.io/wa/account/wa/media/1372345368111462",
+            "SUB-001",
+            media_type="audio",
+        )
+        self.assertEqual(submission.submission_type, "audio")
+        self.assertEqual(submission.submission_url, "https://storage.example/SUB-001.ogg")
+        self.assertEqual(submission.status, "Processing")
+        submission.save.assert_called_once_with(ignore_permissions=True)
+        mock_enqueue.assert_called_once_with("SUB-001", pe_context={"program_enrollment": "PE-001"})
+
+    def test_async_processing_classifies_text_after_response(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-001"
+        submission.submission_type = None
+        submission.submission_text = None
+        submission.submission_url = None
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch("tap_lms.imgana.media_detection.detect_url_media_type") as mock_detect, \
+                patch.object(save_submission, "enqueue_submission") as mock_enqueue:
+            mock_frappe.get_doc.return_value = submission
+
+            save_submission.process_submission_async(
+                "SUB-001",
+                raw_submission="hello world",
+                pe_context={"program_enrollment": "PE-001"},
+            )
+
+        mock_detect.assert_not_called()
+        self.assertEqual(submission.submission_type, "text")
+        self.assertEqual(submission.submission_text, "hello world")
+        self.assertIsNone(submission.submission_url)
+        self.assertEqual(submission.status, "Processing")
+        submission.save.assert_called_once_with(ignore_permissions=True)
+        mock_enqueue.assert_called_once_with("SUB-001", pe_context={"program_enrollment": "PE-001"})
+
     def test_primary_submission_writes_student_content_log(self):
         save_submission = _import_save_submission_with_stubs()
 
@@ -176,6 +264,119 @@ class TestGetSubmissionFeedback(unittest.TestCase):
         mock_frappe.log_error.assert_called_once()
 
 
+class TestReadyToReceiveFeedback(unittest.TestCase):
+    def test_pending_submission_sets_feedback_request_without_trigger(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-READY-001"
+        submission.status = "Processing"
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.get_doc.return_value = submission
+            mock_frappe.db.sql.return_value = [("SUB-READY-001",)]
+
+            response = save_submission.ready_to_receive_feedback("SUB-READY-001")
+
+        mock_frappe.get_doc.assert_called_once_with("Submission", "SUB-READY-001")
+        self.assertEqual(
+            mock_frappe.db.sql.call_args.args[1],
+            ("2026-05-12 10:00:00", "SUB-READY-001"),
+        )
+        self.assertEqual(response, {
+            "success": True,
+            "status": "success",
+            "message": "Feedback will be given once ready.",
+        })
+
+    def test_completed_submission_claims_and_triggers_feedback_flow(self):
+        save_submission = _import_save_submission_with_stubs()
+        events = []
+
+        submission = MagicMock()
+        submission.name = "SUB-READY-002"
+        submission.status = "Completed"
+        submission.student_id = "STU-READY-002"
+        submission.overall_feedback = "Done"
+
+        fake_module = types.ModuleType("tap_lms.feedback_handler.feedback_consumer")
+
+        class FakeFeedbackConsumer:
+            def process_feedback_ready(self, submission_id, message_data):
+                events.append(("feedback_ready", submission_id, message_data))
+                return True
+
+            def _claim_feedback_flow(self, submission_id):
+                events.append(("claim", submission_id))
+                return True
+
+            def trigger_feedback_flow(self, submission_id, message_data):
+                events.append(("trigger", submission_id, message_data))
+
+        fake_module.FeedbackConsumer = FakeFeedbackConsumer
+        old_module = sys.modules.get("tap_lms.feedback_handler.feedback_consumer")
+        sys.modules["tap_lms.feedback_handler.feedback_consumer"] = fake_module
+
+        try:
+            with patch.object(save_submission, "frappe") as mock_frappe:
+                mock_frappe.get_doc.return_value = submission
+                mock_frappe.db.sql.return_value = [("SUB-READY-002",)]
+
+                response = save_submission.ready_to_receive_feedback("SUB-READY-002")
+        finally:
+            if old_module is None:
+                sys.modules.pop("tap_lms.feedback_handler.feedback_consumer", None)
+            else:
+                sys.modules["tap_lms.feedback_handler.feedback_consumer"] = old_module
+
+        self.assertEqual(events, [
+            (
+                "feedback_ready",
+                "SUB-READY-002",
+                {
+                    "submission_id": "SUB-READY-002",
+                    "student_id": "STU-READY-002",
+                    "feedback": {"overall_feedback": "Done"},
+                },
+            ),
+            ("claim", "SUB-READY-002"),
+            (
+                "trigger",
+                "SUB-READY-002",
+                {
+                    "submission_id": "SUB-READY-002",
+                    "student_id": "STU-READY-002",
+                    "feedback": {"overall_feedback": "Done"},
+                },
+            ),
+        ])
+        mock_frappe.db.commit.assert_called_once()
+        self.assertEqual(response, {
+            "success": True,
+            "status": "success",
+            "message": "Feedback flow triggered.",
+        })
+
+    def test_already_triggered_submission_does_not_retrigger(self):
+        save_submission = _import_save_submission_with_stubs()
+
+        submission = MagicMock()
+        submission.name = "SUB-READY-003"
+        submission.status = "Completed"
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.get_doc.return_value = submission
+            mock_frappe.db.sql.return_value = []
+
+            response = save_submission.ready_to_receive_feedback("SUB-READY-003")
+
+        self.assertEqual(response, {
+            "success": True,
+            "status": "success",
+            "message": "Feedback flow already triggered.",
+        })
+
+
 # ════════════════════════════════════════════════════════════
 # Audit-fix tests (2026-05-15) — tasks #77/79, #78, #80, #81
 # Uses the same import-stub strategy as the bridge tests above so it can
@@ -232,7 +433,6 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
                 patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
                 patch.object(save_submission, "get_active_pe", return_value=pe), \
                 patch.object(save_submission, "_try_claim_primary", return_value=True), \
-                patch.object(save_submission, "_calculate_points", return_value=10), \
                 patch.object(save_submission, "_create_submission", return_value=submission_doc), \
                 patch.object(save_submission, "_log_student_content_submission"), \
                 patch.object(save_submission, "_update_engagement"), \
@@ -259,6 +459,53 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
             deprecation_logged,
             f"Expected deprecation log; got calls: {mock_frappe.log_error.call_args_list}",
         )
+
+    def test_duplicate_submission_gets_stock_feedback_in_student_language(self):
+        save_submission = _import_save_submission_with_stubs()
+        pe = self._build_pe(journey_label="submitted")
+        pe.language = "Hindi"
+        submission_doc = MagicMock()
+        submission_doc.name = "SUB-DUP-001"
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
+                patch.object(save_submission, "get_active_pe", return_value=pe), \
+                patch.object(save_submission, "_try_claim_primary", return_value=False), \
+                patch.object(save_submission, "_create_submission", return_value=submission_doc), \
+                patch.object(save_submission, "_update_engagement"), \
+                patch.object(save_submission, "_queue_submission_processing") as mock_queue, \
+                patch.object(save_submission, "log_event"):
+            mock_frappe.local.response = {}
+            mock_frappe.utils.random_string = lambda n: "abcd1234"
+
+            response = save_submission.save_submission(
+                student_id="STU-001",
+                assignment_id="ASN-001",
+                submission="my answer",
+            )
+
+        self.assertTrue(response.get("success"))
+        self.assertEqual(response.get("status"), "duplicate")
+        mock_queue.assert_not_called()
+
+        duplicate_update = mock_frappe.db.set_value.call_args
+        self.assertEqual(duplicate_update.args[0], "Submission")
+        self.assertEqual(duplicate_update.args[1], "SUB-DUP-001")
+        updates = duplicate_update.args[2]
+        self.assertEqual(updates["result_status"], "Success - Flagged")
+        self.assertEqual(
+            updates["overall_feedback"],
+            "Hey champ, you've already submitted this activity! Hang tight — the next one is coming soon. 🏆",
+        )
+        self.assertEqual(
+            updates["overall_feedback_translated"],
+            "अरे चैंप, तुमने इस activity को पहले ही submit कर दिया है! थोड़ा रुको — अगली activity जल्द आ रही है। 🏆",
+        )
+        self.assertEqual(
+            updates["audio_feedback_url"],
+            "https://storage.googleapis.com/tap-lms-submissions/audio_feedback/double_submission_hindi.mp3",
+        )
+        self.assertEqual(submission_doc.result_status, "Success - Flagged")
 
     def test_save_submission_missing_assignment_id_is_rejected(self):
         """Companion to the previous: with neither param the call must fail
@@ -400,6 +647,223 @@ class TestSaveSubmissionAuditFixes(unittest.TestCase):
         # Response surfaces the failure cleanly.
         self.assertEqual(mock_frappe.local.response.get("status"), "insert_failed")
         self.assertFalse(mock_frappe.local.response.get("success"))
+
+    def test_serialization_failure_during_insert_retries_whole_submission(self):
+        """Postgres concurrent-update/serialization failures must retry the
+        whole save_submission attempt, not return insert_failed from the
+        savepoint handler."""
+        save_submission = _import_save_submission_with_stubs()
+        pe = self._build_pe()
+        submission_doc = MagicMock()
+        submission_doc.name = "SUB-001"
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission.time, "sleep") as mock_sleep, \
+                patch.object(save_submission, "_resolve_student", return_value="STU-001"), \
+                patch.object(save_submission, "get_active_pe", return_value=pe), \
+                patch.object(save_submission, "_try_claim_primary", return_value=True), \
+                patch.object(
+                    save_submission,
+                    "_create_submission",
+                    side_effect=[
+                        RuntimeError("could not serialize access due to concurrent update"),
+                        submission_doc,
+                    ],
+                ) as mock_create, \
+                patch.object(save_submission, "_log_student_content_submission"), \
+                patch.object(save_submission, "_update_engagement"), \
+                patch.object(save_submission, "_queue_submission_processing"), \
+                patch.object(save_submission, "apply_submission_transition", return_value=("T7", True)), \
+                patch.object(save_submission, "log_event"):
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type("ValidationError", (Exception,), {})
+            mock_frappe.DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+            mock_frappe.utils.random_string = lambda n: "abcd1234"
+
+            response = save_submission.save_submission(
+                student_id="STU-001",
+                assignment_id="ASN-001",
+                submission="my answer",
+            )
+
+        self.assertTrue(response.get("success"))
+        self.assertEqual(response.get("status"), "accepted")
+        self.assertEqual(mock_create.call_count, 2)
+        mock_sleep.assert_called_once()
+        self.assertIn(call(save_point="sub_create_abcd1234"), mock_frappe.db.rollback.call_args_list)
+        self.assertIn(call(), mock_frappe.db.rollback.call_args_list)
+
+
+# ════════════════════════════════════════════════════════════
+# Task #93 — structured-envelope hardening (api-standard-glific Rule 7)
+# ════════════════════════════════════════════════════════════
+
+class TestSaveSubmissionStructuredErrors(unittest.TestCase):
+    """Task #93 (2026-05-25): every error path in save_submission MUST
+    return the flat envelope via frappe.local.response, never raise.
+
+    Discord report 2026-05-25: Mayank (ST00052222) hit HTTP 500 because
+    Glific sent `submission=""` for his emoji flow. The downstream
+    _normalize_submission_payload raised
+    `frappe.ValidationError("Submission is required")`; the retry loop
+    didn't catch it; Frappe's HTTP layer returned raw HTML instead of
+    the documented `{success: false, status: ...}` envelope. This
+    violates docs/api-standard-glific.md Rule 7. Same bug class as
+    Layer 2 (#89) but for in-function exceptions, not parameter binding.
+    """
+
+    def test_empty_submission_returns_structured_envelope(self):
+        """The headline regression — Mayank's exact failing payload.
+        Empty `submission=""` must short-circuit with `status='submission_empty'`,
+        not raise / surface as HTML 500."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+            mock_frappe.DoesNotExistError = type(
+                "DoesNotExistError", (Exception,), {})
+
+            result = save_submission.save_submission(
+                student_id="ST00052222",
+                submission="",                # empty — the bug trigger
+                organization_id=12,           # Glific kwarg
+                assignment_id="GetReadyForScratchJr Main-Basic",
+            )
+
+        # Function MUST return cleanly (not raise) so the HTTP layer
+        # serializes the response envelope instead of returning HTML.
+        self.assertIsNone(result, "function must use frappe.local.response, not return")
+        # Response body matches the documented structured envelope.
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "submission_empty")
+        self.assertIn("user_message", mock_frappe.local.response)
+        self.assertIn("error_detail", mock_frappe.local.response)
+
+    def test_whitespace_only_submission_treated_as_empty(self):
+        """Defensive: '   ' (whitespace) is functionally empty — same
+        structured response, no exception."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                submission="    ",            # whitespace-only
+                assignment_id="ASN-1",
+            )
+
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "submission_empty")
+
+    def test_none_submission_treated_as_empty(self):
+        """`submission=None` (not passed at all) → same structured response."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe:
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                assignment_id="ASN-1",
+                # submission not passed at all
+            )
+
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "submission_empty")
+
+    def test_validation_error_from_inner_function_returns_envelope(self):
+        """If `_save_submission_once` raises ValidationError (e.g., student
+        not enrolled, assignment not found, week out of range), the wrapper
+        must convert to structured response — NOT let it escape as HTML 500."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_save_submission_once") as inner:
+            mock_frappe.local.response = {}
+            ValidationError = type("ValidationError", (Exception,), {})
+            mock_frappe.ValidationError = ValidationError
+            mock_frappe.DoesNotExistError = type(
+                "DoesNotExistError", (Exception,), {})
+
+            inner.side_effect = ValidationError("Student not enrolled")
+
+            result = save_submission.save_submission(
+                student_id="STU-NOT-EXIST",
+                submission="real submission",
+                assignment_id="ASN-1",
+            )
+
+        self.assertIsNone(result)
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "validation_error")
+        self.assertIn("Student not enrolled",
+                      mock_frappe.local.response["error_detail"])
+
+    def test_does_not_exist_error_returns_envelope(self):
+        """`frappe.DoesNotExistError` (e.g., assignment_id refers to a
+        missing doc) → `status='not_found'` envelope, not HTML 500."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_save_submission_once") as inner:
+            mock_frappe.local.response = {}
+            DoesNotExistError = type("DoesNotExistError", (Exception,), {})
+            mock_frappe.DoesNotExistError = DoesNotExistError
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+
+            inner.side_effect = DoesNotExistError("Assignment ASN-X not found")
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                submission="real submission",
+                assignment_id="ASN-X",
+            )
+
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"], "not_found")
+
+    def test_unknown_exception_returns_internal_error_envelope(self):
+        """Even a totally unexpected exception (KeyError, TypeError in
+        a helper, etc.) must NOT escape as HTML 500. The wrapper logs
+        the error AND returns structured response."""
+        save_submission = _import_save_submission_with_stubs()
+
+        with patch.object(save_submission, "frappe") as mock_frappe, \
+                patch.object(save_submission, "_save_submission_once") as inner, \
+                patch.object(save_submission, "_is_serialization_failure",
+                             return_value=False):
+            mock_frappe.local.response = {}
+            mock_frappe.ValidationError = type(
+                "ValidationError", (Exception,), {})
+            mock_frappe.DoesNotExistError = type(
+                "DoesNotExistError", (Exception,), {})
+
+            inner.side_effect = KeyError("unexpected key 'foo'")
+
+            save_submission.save_submission(
+                student_id="STU-001",
+                submission="real submission",
+                assignment_id="ASN-1",
+            )
+
+        self.assertFalse(mock_frappe.local.response["success"])
+        self.assertEqual(mock_frappe.local.response["status"],
+                         "internal_error")
+        # log_error MUST have fired so ops can investigate root cause.
+        self.assertTrue(
+            mock_frappe.log_error.called,
+            "internal_error path must log to Error Log for ops visibility",
+        )
 
 
 if __name__ == "__main__":
