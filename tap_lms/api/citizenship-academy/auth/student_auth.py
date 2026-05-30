@@ -24,6 +24,12 @@ def get_jwt_secret():
 
 
 @frappe.whitelist(allow_guest=True)
+def check_phone(phone):
+    exists = frappe.db.exists("Student Auth", {"phone": phone})
+    return {"exists": bool(exists)}
+
+
+@frappe.whitelist(allow_guest=True)
 def login(phone, password):
     auth = frappe.db.get_value(
         "Student Auth",
@@ -58,7 +64,7 @@ def login(phone, password):
     doc.reset_lock()
 
     students = [
-        {"student_id": row.student, "name": row.student_name}
+        {"student_id": row.student, "name": row.student_name, "avatar": row.avatar or "avatar_01"}
         for row in doc.students
     ]
 
@@ -69,7 +75,7 @@ def login(phone, password):
 
 @frappe.whitelist()
 def set_password(phone, new_password):
-    if not frappe.db.exists("Student Auth", phone):
+    if not frappe.db.exists("Student Auth", {"phone": phone}):
         frappe.throw("No auth record found")
     update_password(phone, new_password, doctype="Student Auth", fieldname="password")
     return {"success": True}
@@ -91,6 +97,7 @@ def _generate_jwt(phone, student_ids):
     payload = {
         "phone": phone,
         "students": student_ids,
+        "type": "access",
         "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=JWT_EXPIRY_HOURS),
         "iat": datetime.datetime.utcnow(),
     }
@@ -104,13 +111,13 @@ def _decode_jwt(token):
         return None
 
 
-def link_student_to_phone(phone, student_id):
-    if not frappe.db.exists("Student Auth", phone):
+def link_student_to_phone(phone, student_id, avatar=None):
+    if not frappe.db.exists("Student Auth", {"phone": phone}):
         frappe.throw(f"No Student Auth record for {phone}")
     doc = frappe.get_doc("Student Auth", phone)
     existing = [row.student for row in doc.students]
     if student_id not in existing:
-        doc.append("students", {"student": student_id})
+        doc.append("students", {"student": student_id, "avatar": avatar or "avatar_01"})
         doc.save(ignore_permissions=True)
 
 
@@ -119,18 +126,19 @@ def bulk_create_auth(students_data):
         phone = entry["phone"]
         password = entry["password"]
         student_id = entry["student_id"]
+        avatar = entry.get("avatar", "avatar_01")
 
-        if not frappe.db.exists("Student Auth", phone):
+        if not frappe.db.exists("Student Auth", {"phone": phone}):
             doc = frappe.get_doc({
                 "doctype": "Student Auth",
                 "phone": phone,
                 "failed_attempts": 0,
                 "is_locked": 0,
-                "students": [{"student": student_id}],
+                "students": [{"student": student_id, "avatar": avatar}],
             })
             doc.insert(ignore_permissions=True)
             update_password(phone, password, doctype="Student Auth", fieldname="password")
         else:
-            link_student_to_phone(phone, student_id)
+            link_student_to_phone(phone, student_id, avatar)
 
     frappe.db.commit()

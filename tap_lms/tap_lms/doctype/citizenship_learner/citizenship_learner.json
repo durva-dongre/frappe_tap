@@ -1,0 +1,110 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:CL{########}",
+ "creation": "2026-05-30 00:00:00.000000",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "student",
+  "xp",
+  "level",
+  "streak",
+  "longest_streak",
+  "last_activity_date",
+  "enrollments_section",
+  "enrollments"
+ ],
+ "fields": [
+  {
+   "fieldname": "student",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Student",
+   "options": "Student",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "xp",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "XP",
+   "default": "0",
+   "read_only": 0
+  },
+  {
+   "fieldname": "level",
+   "fieldtype": "Select",
+   "label": "Level",
+   "options": "L1\nL2\nL3",
+   "default": "L1"
+  },
+  {
+   "fieldname": "streak",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Current Streak",
+   "default": "0"
+  },
+  {
+   "fieldname": "longest_streak",
+   "fieldtype": "Int",
+   "label": "Longest Streak",
+   "default": "0",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_activity_date",
+   "fieldtype": "Date",
+   "label": "Last Activity Date"
+  },
+  {
+   "fieldname": "enrollments_section",
+   "fieldtype": "Section Break",
+   "label": "Enrollments"
+  },
+  {
+   "fieldname": "enrollments",
+   "fieldtype": "Table",
+   "label": "Enrollments",
+   "options": "Citizenship Enrollment"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-05-30 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Citizenship Learner",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "read": 1,
+   "role": "Student",
+   "write": 0
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "student",
+ "track_changes": 1
+}

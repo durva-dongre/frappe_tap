@@ -1,127 +1,141 @@
 {
- "actions": [],
- "allow_rename": 1,
- "autoname": "format:{name1}-{vertical}-{level}",
- "creation": "2024-07-09 13:25:33.662522",
- "default_view": "List",
- "doctype": "DocType",
- "editable_grid": 1,
- "engine": "InnoDB",
- "field_order": [
-  "name1",
-  "program",
-  "vertical",
-  "level",
-  "stage",
-  "kit_less",
-  "course_description",
-  "course_summary",
-  "course_image",
-  "learning_units",
-  "learning_outcomes",
-  "course_objectives",
-  "prerequisite_knowledge"
- ],
- "fields": [
-  {
-   "fieldname": "name1",
-   "fieldtype": "Data",
-   "label": "Name"
-  },
-  {
-   "fieldname": "program",
-   "fieldtype": "Link",
-   "label": "Program",
-   "options": "Program",
-   "reqd": 1
-  },
-  {
-   "fieldname": "vertical",
-   "fieldtype": "Link",
-   "label": "Vertical ",
-   "options": "Course Verticals"
-  },
-  {
-   "default": "",
-   "fieldname": "level",
-   "fieldtype": "Select",
-   "label": "Level",
-   "options": "Level 1\nLevel 2\nLevel 2A\nLevel 3\nLevel 3A\nLevel 3K\nLevel 3AK\nLevel 4\nLevel 4K"
-  },
-  {
-   "fieldname": "stage",
-   "fieldtype": "Link",
-   "label": "Stage",
-   "options": "Stage Grades"
-  },
-  {
-   "default": "0",
-   "fieldname": "kit_less",
-   "fieldtype": "Check",
-   "label": "Kit Less"
-  },
-  {
-   "fieldname": "course_description",
-   "fieldtype": "Text Editor",
-   "label": "Course Description"
-  },
-  {
-   "fieldname": "course_summary",
-   "fieldtype": "Text",
-   "label": "Course Summary"
-  },
-  {
-   "fieldname": "course_image",
-   "fieldtype": "Attach Image",
-   "label": "Course Image"
-  },
-  {
-   "fieldname": "learning_outcomes",
-   "fieldtype": "Table",
-   "label": "Learning Outcomes",
-   "options": "UnitLearningObjective"
-  },
-  {
-   "fieldname": "course_objectives",
-   "fieldtype": "Text Editor",
-   "label": "Course Objectives"
-  },
-  {
-   "fieldname": "prerequisite_knowledge",
-   "fieldtype": "Text Editor",
-   "label": "Prerequisite Knowledge"
-  },
-  {
-   "fieldname": "learning_units",
-   "fieldtype": "Table",
-   "label": "Learning Units",
-   "options": "LearningUnitList"
-  }
- ],
- "index_web_pages_for_search": 1,
- "links": [],
- "modified": "2026-05-16 00:00:00.000000",
- "modified_by": "Administrator",
- "module": "Tap Lms",
- "name": "Course Level",
- "naming_rule": "Expression",
- "owner": "Administrator",
- "permissions": [
-  {
-   "create": 1,
-   "delete": 1,
-   "email": 1,
-   "export": 1,
-   "print": 1,
-   "read": 1,
-   "report": 1,
-   "role": "System Manager",
-   "share": 1,
-   "write": 1
-  }
- ],
- "sort_field": "modified",
- "sort_order": "DESC",
- "states": [],
- "track_changes": 1
+  "actions": [],
+  "allow_rename": 1,
+  "autoname": "format:{name1}-{vertical}-{level}",
+  "creation": "2024-07-09 13:25:33.662522",
+  "default_view": "List",
+  "doctype": "DocType",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "name1",
+    "program",
+    "vertical",
+    "level",
+    "stage",
+    "kit_less",
+    "icon",
+    "color_code",
+    "course_description",
+    "course_summary",
+    "course_image",
+    "learning_units",
+    "learning_outcomes",
+    "course_objectives",
+    "prerequisite_knowledge"
+  ],
+  "fields": [
+    {
+      "fieldname": "name1",
+      "fieldtype": "Data",
+      "label": "Name"
+    },
+    {
+      "fieldname": "program",
+      "fieldtype": "Link",
+      "label": "Program",
+      "options": "Program",
+      "reqd": 1
+    },
+    {
+      "fieldname": "vertical",
+      "fieldtype": "Link",
+      "label": "Vertical",
+      "options": "Course Verticals"
+    },
+    {
+      "default": "",
+      "fieldname": "level",
+      "fieldtype": "Select",
+      "label": "Level",
+      "options": "Level 1\nLevel 2\nLevel 2A\nLevel 3\nLevel 3A\nLevel 3K\nLevel 3AK\nLevel 4\nLevel 4K"
+    },
+    {
+      "fieldname": "stage",
+      "fieldtype": "Link",
+      "label": "Stage",
+      "options": "Stage Grades"
+    },
+    {
+      "default": "0",
+      "fieldname": "kit_less",
+      "fieldtype": "Check",
+      "label": "Kit Less"
+    },
+    {
+      "fieldname": "icon",
+      "fieldtype": "Data",
+      "label": "Icon",
+      "description": "Icon identifier string rendered by Flutter (e.g. palette, science, code)"
+    },
+    {
+      "fieldname": "color_code",
+      "fieldtype": "Color",
+      "label": "Color Code",
+      "description": "Hex color used as the course theme color on the frontend"
+    },
+    {
+      "fieldname": "course_description",
+      "fieldtype": "Text Editor",
+      "label": "Course Description"
+    },
+    {
+      "fieldname": "course_summary",
+      "fieldtype": "Text",
+      "label": "Course Summary"
+    },
+    {
+      "fieldname": "course_image",
+      "fieldtype": "Attach Image",
+      "label": "Course Image"
+    },
+    {
+      "fieldname": "learning_outcomes",
+      "fieldtype": "Table",
+      "label": "Learning Outcomes",
+      "options": "UnitLearningObjective"
+    },
+    {
+      "fieldname": "course_objectives",
+      "fieldtype": "Text Editor",
+      "label": "Course Objectives"
+    },
+    {
+      "fieldname": "prerequisite_knowledge",
+      "fieldtype": "Text Editor",
+      "label": "Prerequisite Knowledge"
+    },
+    {
+      "fieldname": "learning_units",
+      "fieldtype": "Table",
+      "label": "Learning Units",
+      "options": "LearningUnitList"
+    }
+  ],
+  "index_web_pages_for_search": 1,
+  "links": [],
+  "modified": "2026-05-30 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Tap Lms",
+  "name": "Course Level",
+  "naming_rule": "Expression",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "track_changes": 1
 }

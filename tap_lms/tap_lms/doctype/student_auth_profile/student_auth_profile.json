@@ -6,7 +6,8 @@
   "engine": "InnoDB",
   "field_order": [
     "student",
-    "student_name"
+    "student_name",
+    "avatars"
   ],
   "fields": [
     {
@@ -24,12 +25,19 @@
       "in_list_view": 1,
       "label": "Student Name",
       "read_only": 1
+    },
+    {
+      "fieldname": "avatars",
+      "fieldtype": "Table",
+      "in_list_view": 1,
+      "label": "Avatars",
+      "options": "Student Avatar"
     }
   ],
   "index_web_pages_for_search": 0,
   "istable": 1,
   "links": [],
-  "modified": "2026-05-21 00:00:00.000000",
+  "modified": "2026-05-30 00:00:00.000000",
   "modified_by": "Administrator",
   "module": "Tap Lms",
   "name": "Student Auth Profile",

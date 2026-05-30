@@ -1,0 +1,66 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:CE{########}",
+ "creation": "2026-05-30 00:00:00.000000",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "course",
+  "enrolled_on",
+  "status",
+  "videos_completed",
+  "quizzes_completed"
+ ],
+ "fields": [
+  {
+   "fieldname": "course",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Course",
+   "options": "Course Level",
+   "reqd": 1
+  },
+  {
+   "fieldname": "enrolled_on",
+   "fieldtype": "Date",
+   "label": "Enrolled On"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "active\ncompleted\ndropped",
+   "default": "active"
+  },
+  {
+   "fieldname": "videos_completed",
+   "fieldtype": "Int",
+   "label": "Videos Completed",
+   "default": "0"
+  },
+  {
+   "fieldname": "quizzes_completed",
+   "fieldtype": "Int",
+   "label": "Quizzes Completed",
+   "default": "0"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-05-30 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Citizenship Enrollment",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
