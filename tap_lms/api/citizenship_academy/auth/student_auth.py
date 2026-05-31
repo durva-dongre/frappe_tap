@@ -8,6 +8,26 @@ JWT_EXPIRY_HOURS = 72
 MAX_ATTEMPTS = 5
 
 
+def _save_auth_doc(doc):
+    meta = frappe.get_meta("Student Auth")
+    pwd_field = next((f for f in meta.fields if f.fieldname == "password"), None)
+    original_reqd = pwd_field.reqd if pwd_field else 0
+    if pwd_field:
+        pwd_field.reqd = 0
+    try:
+        doc.save(ignore_permissions=True)
+    finally:
+        if pwd_field:
+            pwd_field.reqd = original_reqd
+
+
+def _get_avatar_for_profile_row(row):
+    avatars = getattr(row, "avatars", None) or []
+    if avatars:
+        return avatars[0].avatar_name or "avatar_01"
+    return "avatar_01"
+
+
 def get_secret(key):
     cache = frappe.cache()
     cached = cache.get_value(f"secret::{key}")
@@ -64,12 +84,15 @@ def login(phone, password):
     doc.reset_lock()
 
     students = [
-        {"student_id": row.student, "name": row.student_name, "avatar": row.avatar or "avatar_01"}
+        {
+            "student_id": row.student,
+            "name":       row.student_name,
+            "avatar":     _get_avatar_for_profile_row(row),
+        }
         for row in doc.students
     ]
 
     token = _generate_jwt(phone, [s["student_id"] for s in students])
-
     return {"success": True, "token": token, "phone": phone, "profiles": students}
 
 
@@ -87,19 +110,19 @@ def verify_token(token):
     if not payload:
         return {"valid": False}
     return {
-        "valid": True,
-        "phone": payload.get("phone"),
+        "valid":    True,
+        "phone":    payload.get("phone"),
         "students": payload.get("students"),
     }
 
 
 def _generate_jwt(phone, student_ids):
     payload = {
-        "phone": phone,
+        "phone":    phone,
         "students": student_ids,
-        "type": "access",
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=JWT_EXPIRY_HOURS),
-        "iat": datetime.datetime.utcnow(),
+        "type":     "access",
+        "exp":      datetime.datetime.utcnow() + datetime.timedelta(hours=JWT_EXPIRY_HOURS),
+        "iat":      datetime.datetime.utcnow(),
     }
     return jwt.encode(payload, get_jwt_secret(), algorithm="HS256")
 
@@ -114,30 +137,35 @@ def _decode_jwt(token):
 def link_student_to_phone(phone, student_id, avatar=None):
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         frappe.throw(f"No Student Auth record for {phone}")
+    resolved_avatar = avatar or "avatar_01"
     doc = frappe.get_doc("Student Auth", phone)
     existing = [row.student for row in doc.students]
     if student_id not in existing:
-        doc.append("students", {"student": student_id, "avatar": avatar or "avatar_01"})
-        doc.save(ignore_permissions=True)
+        profile_row = doc.append("students", {"student": student_id})
+        profile_row.append("avatars", {"avatar_name": resolved_avatar})
+        _save_auth_doc(doc)
 
 
 def bulk_create_auth(students_data):
     for entry in students_data:
-        phone = entry["phone"]
-        password = entry["password"]
+        phone      = entry["phone"]
+        password   = entry["password"]
         student_id = entry["student_id"]
-        avatar = entry.get("avatar", "avatar_01")
+        avatar     = entry.get("avatar", "avatar_01")
 
         if not frappe.db.exists("Student Auth", {"phone": phone}):
             doc = frappe.get_doc({
-                "doctype": "Student Auth",
-                "phone": phone,
+                "doctype":         "Student Auth",
+                "phone":           phone,
                 "failed_attempts": 0,
-                "is_locked": 0,
-                "students": [{"student": student_id, "avatar": avatar}],
+                "is_locked":       0,
             })
-            doc.insert(ignore_permissions=True)
+            doc.insert(ignore_permissions=True, ignore_mandatory=True)
             update_password(phone, password, doctype="Student Auth", fieldname="password")
+            doc.reload()
+            profile_row = doc.append("students", {"student": student_id})
+            profile_row.append("avatars", {"avatar_name": avatar})
+            _save_auth_doc(doc)
         else:
             link_student_to_phone(phone, student_id, avatar)
 
