@@ -3,35 +3,20 @@ import jwt
 import datetime
 from frappe.utils.password import check_password, update_password
 
-
 JWT_EXPIRY_HOURS = 72
 MAX_ATTEMPTS = 5
 
 
-def _patch_pwd_reqd(reqd):
-    meta = frappe.get_meta("Student Auth")
-    pwd_field = next((f for f in meta.fields if f.fieldname == "password"), None)
-    if pwd_field:
-        pwd_field.reqd = reqd
-    return pwd_field
-
-
 def _save_auth_doc(doc):
-    pwd_field = _patch_pwd_reqd(0)
-    try:
-        doc.save(ignore_permissions=True)
-    finally:
-        if pwd_field:
-            _patch_pwd_reqd(1)
+    doc.flags.ignore_mandatory = True
+    doc.flags.ignore_save_passwords = True
+    doc.save(ignore_permissions=True)
 
 
 def _insert_auth_doc(doc):
-    pwd_field = _patch_pwd_reqd(0)
-    try:
-        doc.insert(ignore_permissions=True)
-    finally:
-        if pwd_field:
-            _patch_pwd_reqd(1)
+    doc.flags.ignore_mandatory = True
+    doc.flags.ignore_save_passwords = True
+    doc.insert(ignore_permissions=True)
 
 
 def _get_avatar_for_profile_row(row):
@@ -84,7 +69,7 @@ def login(phone, password):
         }
 
     try:
-        check_password(phone, password, doctype="Student Auth", fieldname="password")
+        check_password(auth.name, password, doctype="Student Auth", fieldname="password")
     except frappe.AuthenticationError:
         doc.increment_failed()
         remaining = max(0, MAX_ATTEMPTS - doc.failed_attempts)
@@ -114,6 +99,7 @@ def set_password(phone, new_password):
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         frappe.throw("No auth record found")
     update_password(phone, new_password, doctype="Student Auth", fieldname="password")
+    frappe.db.commit()
     return {"success": True}
 
 
@@ -167,14 +153,14 @@ def bulk_create_auth(students_data):
         avatar     = entry.get("avatar", "avatar_01")
 
         if not frappe.db.exists("Student Auth", {"phone": phone}):
-            doc = frappe.get_doc({
-                "doctype":         "Student Auth",
-                "phone":           phone,
-                "failed_attempts": 0,
-                "is_locked":       0,
-            })
+            doc = frappe.new_doc("Student Auth")
+            doc.phone = phone
+            doc.failed_attempts = 0
+            doc.is_locked = 0
             _insert_auth_doc(doc)
-            update_password(phone, password, doctype="Student Auth", fieldname="password")
+            frappe.db.commit()
+            update_password(doc.name, password, doctype="Student Auth", fieldname="password")
+            frappe.db.commit()
             doc.reload()
             profile_row = doc.append("students", {"student": student_id})
             profile_row.append("avatars", {"avatar_name": avatar})
