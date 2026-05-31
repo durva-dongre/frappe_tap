@@ -218,7 +218,11 @@ def register_send_otp(phone=None, password=None):
         frappe.throw("Password is required")
     if frappe.db.exists("Student Auth", {"phone": phone}):
         return {"success": False, "error": "phone_already_registered"}
-    frappe.cache().set_value(f"pending_reg_raw::{phone}", password, expires_in_sec=REGISTRATION_TOKEN_EXPIRY_MINUTES * 60)
+    frappe.cache().set_value(
+        f"pending_reg_raw::{phone}",
+        password,
+        expires_in_sec=REGISTRATION_TOKEN_EXPIRY_MINUTES * 60,
+    )
     _store_otp(phone)
     return {"success": True, "otp_sent": True}
 
@@ -236,9 +240,16 @@ def register_verify_otp(phone=None, otp=None):
         return {"success": False, "error": reason}
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         _create_student_auth(phone, raw_pass)
+    else:
+        update_password(phone, raw_pass, doctype="Student Auth", fieldname="password")
+        frappe.db.commit()
     cache.delete_value(f"otp::{phone}")
     cache.delete_value(f"pending_reg_raw::{phone}")
-    return {"success": True, "registration_token": _generate_registration_token(phone), "phone": phone}
+    return {
+        "success": True,
+        "registration_token": _generate_registration_token(phone),
+        "phone": phone,
+    }
 
 
 @frappe.whitelist(allow_guest=True)
@@ -259,14 +270,20 @@ def login_verify_otp(phone=None, otp=None):
     valid, reason = _verify_otp(phone, otp)
     if not valid:
         return {"success": False, "error": reason}
-    return {"success": True, "registration_token": _generate_registration_token(phone), "phone": phone}
+    return {
+        "success": True,
+        "registration_token": _generate_registration_token(phone),
+        "phone": phone,
+    }
 
 
 @frappe.whitelist(allow_guest=True)
 def login_with_password(phone=None, password=None):
     phone = phone or frappe.form_dict.get("phone")
     password = password or frappe.form_dict.get("password")
+
     from tap_lms.api.citizenship_academy.auth.student_auth import MAX_ATTEMPTS
+
     auth = frappe.db.get_value(
         "Student Auth",
         {"phone": phone},
@@ -275,15 +292,27 @@ def login_with_password(phone=None, password=None):
     )
     if not auth:
         return {"success": False, "error": "invalid_credentials"}
+
     doc = frappe.get_doc("Student Auth", auth.name)
+
     if doc.is_currently_locked():
-        return {"success": False, "error": "account_locked", "locked_until": str(doc.locked_until)}
+        return {
+            "success": False,
+            "error": "account_locked",
+            "locked_until": str(doc.locked_until),
+        }
+
     try:
         check_password(auth.name, password, doctype="Student Auth", fieldname="password")
     except frappe.AuthenticationError:
         doc.increment_failed()
         remaining = max(0, MAX_ATTEMPTS - doc.failed_attempts)
-        return {"success": False, "error": "invalid_credentials", "attempts_remaining": remaining}
+        return {
+            "success": False,
+            "error": "invalid_credentials",
+            "attempts_remaining": remaining,
+        }
+
     doc.reset_lock()
     profiles = _get_profiles_for_phone(phone)
     token = _generate_jwt(phone, [p["student_id"] for p in profiles])
@@ -522,12 +551,12 @@ def select_profile(phone=None, student_id=None):
     if student_id not in linked_ids:
         frappe.throw("Profile not linked to this phone", frappe.AuthenticationError)
 
-    token = _generate_jwt(phone, linked_ids)
+    new_token = _generate_jwt(phone, linked_ids)
     profiles = _get_profiles_for_phone(phone)
     current = next((p for p in profiles if p["student_id"] == student_id), None)
     return {
         "success": True,
-        "token": token,
+        "token": new_token,
         "phone": phone,
         "active_profile": current,
         "profiles": profiles,
