@@ -30,7 +30,7 @@ def _random_avatar_path():
 
 
 def _resolve_avatar(avatar):
-    if avatar in VALID_AVATARS:
+    if avatar and avatar in VALID_AVATARS:
         return _avatar_path(avatar)
     return _random_avatar_path()
 
@@ -144,12 +144,19 @@ def _verify_otp(phone, otp):
     return valid, reason
 
 
+def _save_auth_doc(auth_doc):
+    auth_doc.flags.ignore_mandatory = True
+    auth_doc.flags.ignore_save_passwords = True
+    auth_doc.save(ignore_permissions=True)
+
+
 def _create_student_auth(phone, raw_password):
     doc = frappe.new_doc("Student Auth")
     doc.phone = phone
     doc.failed_attempts = 0
     doc.is_locked = 0
     doc.flags.ignore_mandatory = True
+    doc.flags.ignore_save_passwords = True
     doc.insert(ignore_permissions=True)
     frappe.db.commit()
     update_password(doc.name, raw_password, doctype="Student Auth", fieldname="password")
@@ -423,8 +430,7 @@ def create_profile(
     existing_ids = [row.student for row in auth_doc.students]
     if student_id not in existing_ids:
         _append_student_to_auth(auth_doc, student_id, resolved_avatar_path)
-        auth_doc.flags.ignore_mandatory = True
-        auth_doc.save(ignore_permissions=True)
+        _save_auth_doc(auth_doc)
 
     frappe.db.commit()
     _sync_student_to_leaderboard(student_id, display_name, state, district, school_id)
@@ -439,8 +445,7 @@ def _migrate_student(phone, student_id, avatar_path):
     existing_ids = [row.student for row in auth_doc.students]
     if student_id not in existing_ids:
         _append_student_to_auth(auth_doc, student_id, avatar_path)
-        auth_doc.flags.ignore_mandatory = True
-        auth_doc.save(ignore_permissions=True)
+        _save_auth_doc(auth_doc)
         frappe.db.commit()
     return student_id
 
@@ -523,8 +528,7 @@ def add_profile(
     existing_ids = [row.student for row in auth_doc.students]
     if student_id not in existing_ids:
         _append_student_to_auth(auth_doc, student_id, resolved_avatar_path)
-        auth_doc.flags.ignore_mandatory = True
-        auth_doc.save(ignore_permissions=True)
+        _save_auth_doc(auth_doc)
 
     frappe.db.commit()
     _sync_student_to_leaderboard(student_id, display_name, state, district, school_id)
@@ -588,8 +592,7 @@ def update_avatar(phone=None, student_id=None, avatar=None):
     if not updated:
         frappe.throw("Profile not found on this account")
 
-    doc.flags.ignore_mandatory = True
-    doc.save(ignore_permissions=True)
+    _save_auth_doc(doc)
     frappe.db.commit()
     return {"success": True, "avatar": resolved_avatar_path}
 
