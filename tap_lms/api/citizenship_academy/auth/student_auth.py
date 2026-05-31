@@ -8,17 +8,30 @@ JWT_EXPIRY_HOURS = 72
 MAX_ATTEMPTS = 5
 
 
-def _save_auth_doc(doc):
+def _patch_pwd_reqd(reqd):
     meta = frappe.get_meta("Student Auth")
     pwd_field = next((f for f in meta.fields if f.fieldname == "password"), None)
-    original_reqd = pwd_field.reqd if pwd_field else 0
     if pwd_field:
-        pwd_field.reqd = 0
+        pwd_field.reqd = reqd
+    return pwd_field
+
+
+def _save_auth_doc(doc):
+    pwd_field = _patch_pwd_reqd(0)
     try:
         doc.save(ignore_permissions=True)
     finally:
         if pwd_field:
-            pwd_field.reqd = original_reqd
+            _patch_pwd_reqd(1)
+
+
+def _insert_auth_doc(doc):
+    pwd_field = _patch_pwd_reqd(0)
+    try:
+        doc.insert(ignore_permissions=True)
+    finally:
+        if pwd_field:
+            _patch_pwd_reqd(1)
 
 
 def _get_avatar_for_profile_row(row):
@@ -160,7 +173,7 @@ def bulk_create_auth(students_data):
                 "failed_attempts": 0,
                 "is_locked":       0,
             })
-            doc.insert(ignore_permissions=True, ignore_mandatory=True)
+            _insert_auth_doc(doc)
             update_password(phone, password, doctype="Student Auth", fieldname="password")
             doc.reload()
             profile_row = doc.append("students", {"student": student_id})
