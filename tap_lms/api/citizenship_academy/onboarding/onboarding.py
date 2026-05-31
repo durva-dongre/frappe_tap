@@ -107,15 +107,21 @@ def _store_otp(phone):
     cache.set_value(f"otp::{phone}", HARDCODED_OTP, expires_in_sec=OTP_EXPIRY_MINUTES * 60)
 
 
-def _verify_otp(phone, otp):
+def _verify_otp_peek(phone, otp):
     cache = frappe.cache()
     stored = cache.get_value(f"otp::{phone}")
     if not stored:
         return False, "otp_expired"
     if stored != otp:
         return False, "otp_invalid"
-    cache.delete_value(f"otp::{phone}")
     return True, None
+
+
+def _verify_otp(phone, otp):
+    valid, reason = _verify_otp_peek(phone, otp)
+    if valid:
+        frappe.cache().delete_value(f"otp::{phone}")
+    return valid, reason
 
 
 def _random_avatar():
@@ -181,78 +187,6 @@ def check_phone(phone):
 
 
 @frappe.whitelist(allow_guest=True)
-def send_otp(phone, password=None, is_new=False):
-    is_new = frappe.utils.cint(is_new)
-    exists = frappe.db.exists("Student Auth", phone)
-
-    if is_new and exists:
-        return {"success": False, "error": "phone_already_registered"}
-
-    if not is_new and not exists:
-        return {"success": False, "error": "phone_not_found"}
-
-    if is_new:
-        if not password:
-            frappe.throw("Password required for registration")
-        _store_otp(phone)
-        cache = frappe.cache()
-        pw_hash = hashlib.sha256(password.encode()).hexdigest()
-        cache.set_value(f"pending_reg::{phone}", pw_hash, expires_in_sec=OTP_EXPIRY_MINUTES * 60)
-    else:
-        _store_otp(phone)
-
-    return {"success": True, "otp_sent": True}
-
-
-@frappe.whitelist(allow_guest=True)
-def verify_otp(phone, otp, is_new=False):
-    is_new = frappe.utils.cint(is_new)
-    valid, reason = _verify_otp(phone, otp)
-
-    if not valid:
-        return {"success": False, "error": reason}
-
-    if is_new:
-        cache = frappe.cache()
-        pw_hash = cache.get_value(f"pending_reg::{phone}")
-        if not pw_hash:
-            return {"success": False, "error": "registration_session_expired"}
-
-        if not frappe.db.exists("Student Auth", phone):
-            doc = frappe.get_doc({
-                "doctype": "Student Auth",
-                "phone": phone,
-                "failed_attempts": 0,
-                "is_locked": 0,
-            })
-            doc.insert(ignore_permissions=True)
-
-            raw_pass = cache.get_value(f"pending_reg_raw::{phone}")
-            if raw_pass:
-                update_password(phone, raw_pass, doctype="Student Auth", fieldname="password")
-            else:
-                frappe.throw("Could not recover password for account creation")
-
-        cache.delete_value(f"pending_reg::{phone}")
-        reg_token = _generate_registration_token(phone)
-        return {"success": True, "registration_token": reg_token, "phone": phone}
-
-    else:
-        auth = frappe.db.get_value(
-            "Student Auth",
-            {"phone": phone},
-            ["name", "is_locked", "locked_until"],
-            as_dict=True,
-        )
-        doc = frappe.get_doc("Student Auth", auth.name)
-        if doc.is_currently_locked():
-            return {"success": False, "error": "account_locked", "locked_until": str(doc.locked_until)}
-
-        reg_token = _generate_registration_token(phone)
-        return {"success": True, "registration_token": reg_token, "phone": phone}
-
-
-@frappe.whitelist(allow_guest=True)
 def register_send_otp(phone, password):
     if not password:
         frappe.throw("Password is required")
@@ -273,7 +207,7 @@ def register_verify_otp(phone, otp):
     if not raw_pass:
         return {"success": False, "error": "registration_session_expired"}
 
-    valid, reason = _verify_otp(phone, otp)
+    valid, reason = _verify_otp_peek(phone, otp)
     if not valid:
         return {"success": False, "error": reason}
 
@@ -284,11 +218,13 @@ def register_verify_otp(phone, otp):
             "failed_attempts": 0,
             "is_locked": 0,
         })
-        doc.insert(ignore_permissions=True)
+        doc.insert(ignore_permissions=True, ignore_mandatory=True)
         update_password(phone, raw_pass, doctype="Student Auth", fieldname="password")
         frappe.db.commit()
 
+    cache.delete_value(f"otp::{phone}")
     cache.delete_value(f"pending_reg_raw::{phone}")
+
     reg_token = _generate_registration_token(phone)
     return {"success": True, "registration_token": reg_token, "phone": phone}
 
@@ -297,14 +233,6 @@ def register_verify_otp(phone, otp):
 def login_send_otp(phone):
     if not frappe.db.exists("Student Auth", phone):
         return {"success": False, "error": "phone_not_found"}
-
-    auth = frappe.db.get_value(
-        "Student Auth",
-        {"phone": phone},
-        ["is_locked", "locked_until"],
-        as_dict=True,
-    )
-
     _store_otp(phone)
     return {"success": True, "otp_sent": True}
 
