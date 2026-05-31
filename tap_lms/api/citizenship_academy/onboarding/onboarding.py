@@ -400,6 +400,7 @@ def create_profile(
     student = frappe.get_doc({
         "doctype": "Student",
         "name1":     display_name,
+        "phone":     phone,
         "gender":    gender,
         "grade":     grade,
         "school_id": school_id,
@@ -507,6 +508,7 @@ def add_profile(
     student = frappe.get_doc({
         "doctype": "Student",
         "name1":     display_name,
+        "phone":     phone,
         "gender":    gender,
         "grade":     grade,
         "school_id": school_id,
