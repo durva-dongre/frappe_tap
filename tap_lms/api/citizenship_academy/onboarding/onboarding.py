@@ -80,11 +80,18 @@ def _decode_access_token(token):
     return payload
 
 
+def _extract_bearer_token():
+    for header in ("X-Flutter-Authorization", "Authorization"):
+        value = frappe.get_request_header(header, "")
+        if value.startswith("Bearer "):
+            return value[7:]
+    return None
+
+
 def _require_registration_token():
-    auth_header = frappe.get_request_header("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    token = _extract_bearer_token()
+    if not token:
         frappe.throw("Missing registration token", frappe.AuthenticationError)
-    token = auth_header[7:]
     payload = _decode_registration_token(token)
     if not payload:
         frappe.throw("Invalid or expired registration token", frappe.AuthenticationError)
@@ -92,10 +99,9 @@ def _require_registration_token():
 
 
 def _require_access_token():
-    auth_header = frappe.get_request_header("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    token = _extract_bearer_token()
+    if not token:
         frappe.throw("Missing token", frappe.AuthenticationError)
-    token = auth_header[7:]
     payload = _decode_access_token(token)
     if not payload:
         frappe.throw("Invalid or expired token", frappe.AuthenticationError)
@@ -321,8 +327,7 @@ def _get_profiles_for_phone(phone):
 def get_profiles(phone=None):
     phone = phone or frappe.form_dict.get("phone")
 
-    auth_header = frappe.get_request_header("Authorization", "")
-    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    token          = _extract_bearer_token()
     reg_payload    = _decode_registration_token(token) if token else None
     access_payload = _decode_access_token(token)       if token else None
 
@@ -533,8 +538,7 @@ def select_profile(phone=None, student_id=None):
     phone      = phone      or frappe.form_dict.get("phone")
     student_id = student_id or frappe.form_dict.get("student_id")
 
-    auth_header = frappe.get_request_header("Authorization", "")
-    token = auth_header[7:] if auth_header.startswith("Bearer ") else None
+    token          = _extract_bearer_token()
     reg_payload    = _decode_registration_token(token) if token else None
     access_payload = _decode_access_token(token)       if token else None
 
