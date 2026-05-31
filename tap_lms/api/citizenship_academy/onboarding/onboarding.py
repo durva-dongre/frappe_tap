@@ -132,6 +132,19 @@ def _random_avatar():
     return random.choice(AVATAR_DEFAULTS)
 
 
+def _save_auth_doc(doc):
+    meta = frappe.get_meta("Student Auth")
+    pwd_field = next((f for f in meta.fields if f.fieldname == "password"), None)
+    original_reqd = pwd_field.reqd if pwd_field else 0
+    if pwd_field:
+        pwd_field.reqd = 0
+    try:
+        doc.save(ignore_permissions=True)
+    finally:
+        if pwd_field:
+            pwd_field.reqd = original_reqd
+
+
 def _sync_student_to_leaderboard(student_id, display_name, state, district, school_id):
     try:
         worker_url = _get_secret("cf_worker_url")
@@ -383,7 +396,7 @@ def create_profile(
             "student": student_id,
             "avatar":  resolved_avatar,
         })
-        auth_doc.save(ignore_permissions=True, ignore_mandatory=True)
+        _save_auth_doc(auth_doc)
 
     frappe.db.commit()
     _sync_student_to_leaderboard(student_id, display_name, state, district, school_id)
@@ -400,7 +413,7 @@ def _migrate_student(phone, student_id, avatar):
             "student": student_id,
             "avatar":  avatar,
         })
-        auth_doc.save(ignore_permissions=True, ignore_mandatory=True)
+        _save_auth_doc(auth_doc)
         frappe.db.commit()
     return student_id
 
@@ -484,7 +497,7 @@ def add_profile(
             "student": student_id,
             "avatar":  resolved_avatar,
         })
-        auth_doc.save(ignore_permissions=True, ignore_mandatory=True)
+        _save_auth_doc(auth_doc)
 
     frappe.db.commit()
     _sync_student_to_leaderboard(student_id, display_name, state, district, school_id)
@@ -544,7 +557,7 @@ def update_avatar(phone=None, student_id=None, avatar=None):
     if not updated:
         frappe.throw("Profile not found on this account")
 
-    doc.save(ignore_permissions=True, ignore_mandatory=True)
+    _save_auth_doc(doc)
     frappe.db.commit()
     return {"success": True, "avatar": avatar}
 
