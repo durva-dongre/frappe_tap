@@ -122,36 +122,8 @@ def _random_avatar():
     return random.choice(AVATAR_DEFAULTS)
 
 
-def _sync_student_to_leaderboard(student_id, state, district, school_id):
+def _sync_student_to_leaderboard(student_id, display_name, state, district, school_id):
     try:
-        worker_url    = _get_secret("cf_worker_url")
-        worker_secret = _get_secret("cf_worker_secret")
-
-        payload = {
-            "student_id":  student_id,
-            "state_id":    state,
-            "district_id": district,
-            "school_id":   school_id,
-        }
-
-        response = requests.post(
-            f"{worker_url}/students/register",
-            json=payload,
-            headers={
-                "Content-Type":    "application/json",
-                "X-Worker-Secret": worker_secret,
-            },
-            timeout=5,
-        )
-
-        if not response.ok:
-            frappe.log_error(
-                title="Leaderboard Sync Failed",
-                message=f"Student: {student_id} | Status: {response.status_code} | Body: {response.text}",
-            )
-
-    except Exception:
-        frappe.log_error(title="Leaderboard Sync Error", message=frappe.get_traceback())    try:
         worker_url = _get_secret("cf_worker_url")
         worker_secret = _get_secret("cf_worker_secret")
 
@@ -195,7 +167,7 @@ def _sync_student_to_leaderboard(student_id, state, district, school_id):
                 message=f"Student: {student_id} | Status: {response.status_code} | Body: {response.text}",
             )
 
-    except Exception as e:
+    except Exception:
         frappe.log_error(
             title="Leaderboard Sync Error",
             message=frappe.get_traceback(),
@@ -255,9 +227,6 @@ def verify_otp(phone, otp, is_new=False):
             })
             doc.insert(ignore_permissions=True)
 
-            from frappe.utils.password import update_password
-            from hashlib import sha256
-            import hmac
             raw_pass = cache.get_value(f"pending_reg_raw::{phone}")
             if raw_pass:
                 update_password(phone, raw_pass, doctype="Student Auth", fieldname="password")
