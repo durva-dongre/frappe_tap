@@ -128,17 +128,30 @@ def _random_avatar():
     return random.choice(AVATAR_DEFAULTS)
 
 
-def _save_auth_doc(doc):
+def _patch_pwd_reqd(reqd):
     meta = frappe.get_meta("Student Auth")
     pwd_field = next((f for f in meta.fields if f.fieldname == "password"), None)
-    original_reqd = pwd_field.reqd if pwd_field else 0
     if pwd_field:
-        pwd_field.reqd = 0
+        pwd_field.reqd = reqd
+    return pwd_field
+
+
+def _save_auth_doc(doc):
+    pwd_field = _patch_pwd_reqd(0)
     try:
         doc.save(ignore_permissions=True)
     finally:
         if pwd_field:
-            pwd_field.reqd = original_reqd
+            _patch_pwd_reqd(1)
+
+
+def _insert_auth_doc(doc):
+    pwd_field = _patch_pwd_reqd(0)
+    try:
+        doc.insert(ignore_permissions=True)
+    finally:
+        if pwd_field:
+            _patch_pwd_reqd(1)
 
 
 def _get_avatar_for_profile_row(row):
@@ -218,7 +231,7 @@ def register_verify_otp(phone=None, otp=None):
             "failed_attempts": 0,
             "is_locked":       0,
         })
-        doc.insert(ignore_permissions=True, ignore_mandatory=True)
+        _insert_auth_doc(doc)
         update_password(phone, raw_pass, doctype="Student Auth", fieldname="password")
         frappe.db.commit()
     cache.delete_value(f"otp::{phone}")
