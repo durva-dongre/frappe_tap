@@ -245,10 +245,11 @@ def register_verify_otp(phone=None, otp=None):
     valid, reason = _verify_otp_peek(phone, otp)
     if not valid:
         return {"success": False, "error": reason}
-    if not frappe.db.exists("Student Auth", {"phone": phone}):
+    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+    if not auth_name:
         _create_student_auth(phone, raw_pass)
     else:
-        update_password(phone, raw_pass, doctype="Student Auth", fieldname="password")
+        update_password(auth_name, raw_pass, doctype="Student Auth", fieldname="password")
         frappe.db.commit()
     cache.delete_value(f"otp::{phone}")
     cache.delete_value(f"pending_reg_raw::{phone}")
