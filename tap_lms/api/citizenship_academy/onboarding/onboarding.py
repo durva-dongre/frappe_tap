@@ -2,7 +2,7 @@ import frappe
 import jwt
 import datetime
 import requests
-from frappe.utils.password import update_password
+from frappe.utils.password import set_encrypted_password
 
 REGISTRATION_TOKEN_EXPIRY_MINUTES = 30
 OTP_EXPIRY_MINUTES = 10
@@ -165,7 +165,7 @@ def _create_student_auth_with_password(phone, raw_password):
     doc.flags.ignore_mandatory = True
     doc.insert(ignore_permissions=True)
     frappe.db.commit()
-    update_password(doc.name, raw_password, doctype="Student Auth", fieldname="password")
+    set_encrypted_password("Student Auth", doc.name, raw_password, fieldname="password")
     frappe.db.commit()
     return doc.name
 
@@ -374,8 +374,8 @@ def create_profile(
     phone = payload["phone"]
 
     _validate_profile_fields(gender, state, district, school_id, language)
-
     resolved_avatar_key = _resolve_avatar(avatar)
+
     cache = frappe.cache()
     raw_pass = cache.get_value(f"pending_reg_raw::{phone}")
 
@@ -427,7 +427,6 @@ def add_profile(
         frappe.throw("Token phone mismatch", frappe.AuthenticationError)
 
     _validate_profile_fields(gender, state, district, school_id, language)
-
     resolved_avatar_key = _resolve_avatar(avatar)
 
     if migrate_student_id:
@@ -485,6 +484,7 @@ def update_avatar(phone=None, student_id=None, avatar=None):
 
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
     doc = frappe.get_doc("Student Auth", auth_name)
+
     updated = False
     for row in doc.students:
         if row.student == student_id:
