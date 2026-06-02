@@ -1,47 +1,72 @@
 import frappe
 
-
 @frappe.whitelist(allow_guest=True)
-def get_quizzes(unit_id: str, language: str = None):
-    filters = {"learning_unit": unit_id}
-    if language:
-        filters["language"] = language
-    quizzes = frappe.get_all(
-        "Learning Unit Quiz",
-        filters=filters,
-        fields=["name as id", "title", "language", "total_questions"],
-        order_by="creation asc",
-    )
-    return {
-        "unit_id": unit_id,
-        "language": language,
-        "quizzes": quizzes,
-        "total": len(quizzes),
-    }
+def get_quizzes_for_unit(unit_id: str, language: str = None):
+    unit = frappe.get_doc("LearningUnit", unit_id)
+    quiz_ids = [
+        row.content for row in (unit.content_items or [])
+        if (row.content_type or "").lower() == "quiz" and row.content
+    ]
+    if not quiz_ids:
+        return {"unit_id": unit_id, "quizzes": [], "total": 0}
+
+    quizzes = []
+    for qid in quiz_ids:
+        try:
+            doc = frappe.get_doc("Quiz", qid)
+            quizzes.append({
+                "id":              doc.name,
+                "title":           getattr(doc, "quiz_name", None),
+                "passing_score":   getattr(doc, "passing_score", 60),
+                "total_questions": getattr(doc, "total_questions", 0),
+            })
+        except Exception:
+            continue
+
+    return {"unit_id": unit_id, "quizzes": quizzes, "total": len(quizzes)}
 
 
 @frappe.whitelist(allow_guest=True)
 def get_quiz(quiz_id: str):
-    doc = frappe.get_doc("Learning Unit Quiz", quiz_id)
+    doc = frappe.get_doc("Quiz", quiz_id)
+
+    labels = "ABCDEFGHIJ"
     questions = []
-    for q in (doc.questions or []):
-        options = []
-        for opt in (q.options or []):
-            options.append({
-                "id": opt.name,
-                "text": opt.option_text if hasattr(opt, "option_text") else str(opt),
-                "is_correct": opt.is_correct if hasattr(opt, "is_correct") else False,
-            })
+
+    for q_row in (doc.questions or []):
+        # q_row is QuizQuestionList — has 'question' link to QuizQuestion
+        try:
+            q = frappe.get_doc("QuizQuestion", q_row.question)
+        except Exception:
+            continue
+
+        # Build lettered options by fetching each QuizOption
+        options = {}
+        correct_letter = ""
+        correct_idx = (getattr(q, "correct_option", 0) or 0)
+
+        for idx, opt_row in enumerate(q.options or []):
+            try:
+                opt = frappe.get_doc("QuizOption", opt_row.options)
+                letter = labels[idx] if idx < len(labels) else str(idx)
+                options[letter] = getattr(opt, "option_text", "") or ""
+                if (idx + 1) == correct_idx:
+                    correct_letter = letter
+            except Exception:
+                continue
+
         questions.append({
-            "id": q.name,
-            "question": q.question if hasattr(q, "question") else str(q),
-            "options": options,
+            "id":             q.name,
+            "text":           getattr(q, "question", "") or "",
+            "options":        options,
+            "correct_option": correct_letter,
+            "explanation":    getattr(q, "explanation", None),
         })
+
     return {
-        "id": doc.name,
-        "title": doc.title if hasattr(doc, "title") else None,
-        "language": doc.language if hasattr(doc, "language") else None,
-        "learning_unit": doc.learning_unit if hasattr(doc, "learning_unit") else None,
-        "questions": questions,
+        "id":              doc.name,
+        "title":           getattr(doc, "quiz_name", None),
+        "passing_score":   getattr(doc, "passing_score", 60),
         "total_questions": len(questions),
+        "questions":       questions,
     }
