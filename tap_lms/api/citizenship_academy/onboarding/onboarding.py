@@ -148,7 +148,7 @@ def _get_avatar_path(avatar_key):
     return path or "assets/avatars/avatar_01.png"
 
 
-def _create_student_auth(phone, raw_password):
+def _create_student_auth_with_password(phone, raw_password):
     doc = frappe.new_doc("Student Auth")
     doc.phone = phone
     doc.failed_attempts = 0
@@ -164,16 +164,6 @@ def _create_student_auth(phone, raw_password):
     )
     frappe.db.commit()
     return doc.name
-
-
-def _set_password_for_auth(auth_name, raw_password):
-    update_password(
-        auth_name,
-        raw_password,
-        doctype="Student Auth",
-        fieldname="password"
-    )
-    frappe.db.commit()
 
 
 def _save_auth_doc(auth_doc):
@@ -319,12 +309,6 @@ def register_verify_otp(phone=None, otp=None):
     valid, reason = _verify_otp(phone, otp)
     if not valid:
         return {"success": False, "error": reason}
-    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
-    if not auth_name:
-        auth_name = _create_student_auth(phone, raw_pass)
-    else:
-        _set_password_for_auth(auth_name, raw_pass)
-    cache.delete_value(f"pending_reg_raw::{phone}")
     return {
         "success": True,
         "registration_token": _generate_registration_token(phone),
@@ -407,8 +391,15 @@ def create_profile(
     phone = payload["phone"]
     resolved_avatar_key = _resolve_avatar(avatar)
 
+    cache = frappe.cache()
+    raw_pass = cache.get_value(f"pending_reg_raw::{phone}")
+
     if not frappe.db.exists("Student Auth", {"phone": phone}):
-        frappe.throw("Phone not registered")
+        if not raw_pass:
+            frappe.throw("Registration session expired, please restart registration", frappe.AuthenticationError)
+        _create_student_auth_with_password(phone, raw_pass)
+        cache.delete_value(f"pending_reg_raw::{phone}")
+
     if gender not in VALID_GENDERS:
         frappe.throw("Invalid gender value")
     if not frappe.db.exists("State", state):
