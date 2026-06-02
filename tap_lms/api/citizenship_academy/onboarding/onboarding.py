@@ -9,6 +9,8 @@ JWT_EXPIRY_HOURS = 72
 REGISTRATION_TOKEN_EXPIRY_MINUTES = 30
 OTP_EXPIRY_MINUTES = 10
 HARDCODED_OTP = "000000"
+MAX_ATTEMPTS = 5
+LOCKOUT_MINUTES = 30
 
 VALID_GENDERS = {"Male", "Female", "Others", "Not Available"}
 VALID_SCHOOL_TYPES = {"APS", "GOVT", "NGO", "PPP", "PMC", "PVT", "GOVT. Aided", "ORG"}
@@ -19,6 +21,15 @@ AVATAR_ASSET_PATHS = {
 }
 VALID_AVATARS = set(AVATAR_ASSET_PATHS.keys())
 AVATAR_DEFAULTS = sorted(VALID_AVATARS)
+
+
+def _normalize_phone(phone):
+    if not phone:
+        return ""
+    digits = "".join(c for c in str(phone) if c.isdigit())
+    if len(digits) == 12 and digits.startswith("91"):
+        digits = digits[2:]
+    return digits
 
 
 def _avatar_path(key):
@@ -125,23 +136,21 @@ def _require_access_token():
 
 
 def _store_otp(phone):
-    frappe.cache().set_value(f"otp::{phone}", HARDCODED_OTP, expires_in_sec=OTP_EXPIRY_MINUTES * 60)
+    frappe.cache().set_value(
+        f"otp::{phone}",
+        HARDCODED_OTP,
+        expires_in_sec=OTP_EXPIRY_MINUTES * 60
+    )
 
 
-def _verify_otp_peek(phone, otp):
+def _verify_otp(phone, otp):
     stored = frappe.cache().get_value(f"otp::{phone}")
     if not stored:
         return False, "otp_expired"
     if stored != otp:
         return False, "otp_invalid"
+    frappe.cache().delete_value(f"otp::{phone}")
     return True, None
-
-
-def _verify_otp(phone, otp):
-    valid, reason = _verify_otp_peek(phone, otp)
-    if valid:
-        frappe.cache().delete_value(f"otp::{phone}")
-    return valid, reason
 
 
 def _save_auth_doc(auth_doc):
@@ -159,7 +168,23 @@ def _create_student_auth(phone, raw_password):
     doc.flags.ignore_save_passwords = True
     doc.insert(ignore_permissions=True)
     frappe.db.commit()
-    update_password(doc.name, raw_password, doctype="Student Auth", fieldname="password")
+    update_password(
+        doc.name,
+        raw_password,
+        doctype="Student Auth",
+        fieldname="password"
+    )
+    frappe.db.commit()
+    return doc.name
+
+
+def _set_password_for_auth(auth_name, raw_password):
+    update_password(
+        auth_name,
+        raw_password,
+        doctype="Student Auth",
+        fieldname="password"
+    )
     frappe.db.commit()
 
 
@@ -178,13 +203,41 @@ def _append_student_to_auth(auth_doc, student_id, avatar_path):
     profile_row.append("avatars", {"avatar_name": avatar_path})
 
 
+def _get_profiles_for_phone(phone):
+    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+    if not auth_name:
+        return []
+    doc = frappe.get_doc("Student Auth", auth_name)
+    profiles = []
+    for row in doc.students:
+        student_data = frappe.db.get_value(
+            "Student",
+            row.student,
+            ["name1", "gender", "grade", "school_id", "language", "status"],
+            as_dict=True,
+        )
+        profiles.append({
+            "student_id": row.student,
+            "name": student_data.name1 if student_data else row.student,
+            "avatar": _get_avatar_for_profile_row(row),
+            "gender": student_data.gender if student_data else None,
+            "grade": student_data.grade if student_data else None,
+            "status": student_data.status if student_data else None,
+        })
+    return profiles
+
+
 def _sync_student_to_leaderboard(student_id, display_name, state, district, school_id):
     try:
         worker_url = _get_secret("cf_worker_url")
         worker_secret = _get_secret("cf_worker_secret")
-        school_data = frappe.db.get_value("School", school_id, ["name1", "city", "type"], as_dict=True)
+        school_data = frappe.db.get_value(
+            "School", school_id, ["name1", "city", "type"], as_dict=True
+        )
         state_data = frappe.db.get_value("State", state, "state_name", as_dict=True)
-        district_data = frappe.db.get_value("District", district, "district_name", as_dict=True)
+        district_data = frappe.db.get_value(
+            "District", district, "district_name", as_dict=True
+        )
         payload = {
             "student_id": student_id,
             "name": display_name,
@@ -199,7 +252,10 @@ def _sync_student_to_leaderboard(student_id, display_name, state, district, scho
         response = requests.post(
             f"{worker_url}/students/register",
             json=payload,
-            headers={"Content-Type": "application/json", "X-Worker-Secret": worker_secret},
+            headers={
+                "Content-Type": "application/json",
+                "X-Worker-Secret": worker_secret,
+            },
             timeout=5,
         )
         if not response.ok:
@@ -208,23 +264,62 @@ def _sync_student_to_leaderboard(student_id, display_name, state, district, scho
                 message=f"Student: {student_id} | Status: {response.status_code} | Body: {response.text}",
             )
     except Exception:
-        frappe.log_error(title="Leaderboard Sync Error", message=frappe.get_traceback())
+        frappe.log_error(
+            title="Leaderboard Sync Error",
+            message=frappe.get_traceback()
+        )
+
+
+def _complete_profile_response(phone, student_id):
+    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+    auth_doc = frappe.get_doc("Student Auth", auth_name)
+    all_students = [row.student for row in auth_doc.students]
+    token = _generate_jwt(phone, all_students)
+    profiles = _get_profiles_for_phone(phone)
+    return {
+        "success": True,
+        "token": token,
+        "phone": phone,
+        "new_student_id": student_id,
+        "profiles": profiles,
+    }
+
+
+def _migrate_student(phone, student_id, avatar_path):
+    if not frappe.db.exists("Student", student_id):
+        frappe.throw("Student to migrate not found")
+    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+    auth_doc = frappe.get_doc("Student Auth", auth_name)
+    existing_ids = [row.student for row in auth_doc.students]
+    if student_id not in existing_ids:
+        _append_student_to_auth(auth_doc, student_id, avatar_path)
+        _save_auth_doc(auth_doc)
+        frappe.db.commit()
+    return student_id
 
 
 @frappe.whitelist(allow_guest=True)
 def check_phone(phone=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
+    if not phone:
+        frappe.throw("phone is required", frappe.ValidationError)
     return {"exists": bool(frappe.db.exists("Student Auth", {"phone": phone}))}
 
 
 @frappe.whitelist(allow_guest=True)
 def register_send_otp(phone=None, password=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     password = password or frappe.form_dict.get("password")
+
+    if not phone:
+        frappe.throw("phone is required", frappe.ValidationError)
     if not password:
-        frappe.throw("Password is required")
+        frappe.throw("Password is required", frappe.ValidationError)
+    if len(password) < 6:
+        frappe.throw("Password must be at least 6 characters", frappe.ValidationError)
     if frappe.db.exists("Student Auth", {"phone": phone}):
         return {"success": False, "error": "phone_already_registered"}
+
     frappe.cache().set_value(
         f"pending_reg_raw::{phone}",
         password,
@@ -236,23 +331,32 @@ def register_send_otp(phone=None, password=None):
 
 @frappe.whitelist(allow_guest=True)
 def register_verify_otp(phone=None, otp=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     otp = otp or frappe.form_dict.get("otp")
+
+    if not phone:
+        frappe.throw("phone is required", frappe.ValidationError)
+    if not otp:
+        frappe.throw("otp is required", frappe.ValidationError)
+
     cache = frappe.cache()
     raw_pass = cache.get_value(f"pending_reg_raw::{phone}")
+
     if not raw_pass:
         return {"success": False, "error": "registration_session_expired"}
-    valid, reason = _verify_otp_peek(phone, otp)
+
+    valid, reason = _verify_otp(phone, otp)
     if not valid:
         return {"success": False, "error": reason}
+
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
     if not auth_name:
-        _create_student_auth(phone, raw_pass)
+        auth_name = _create_student_auth(phone, raw_pass)
     else:
-        update_password(auth_name, raw_pass, doctype="Student Auth", fieldname="password")
-        frappe.db.commit()
-    cache.delete_value(f"otp::{phone}")
+        _set_password_for_auth(auth_name, raw_pass)
+
     cache.delete_value(f"pending_reg_raw::{phone}")
+
     return {
         "success": True,
         "registration_token": _generate_registration_token(phone),
@@ -262,7 +366,9 @@ def register_verify_otp(phone=None, otp=None):
 
 @frappe.whitelist(allow_guest=True)
 def login_send_otp(phone=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
+    if not phone:
+        frappe.throw("phone is required", frappe.ValidationError)
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         return {"success": False, "error": "phone_not_found"}
     _store_otp(phone)
@@ -271,13 +377,18 @@ def login_send_otp(phone=None):
 
 @frappe.whitelist(allow_guest=True)
 def login_verify_otp(phone=None, otp=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     otp = otp or frappe.form_dict.get("otp")
+
+    if not phone:
+        frappe.throw("phone is required", frappe.ValidationError)
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         return {"success": False, "error": "phone_not_found"}
+
     valid, reason = _verify_otp(phone, otp)
     if not valid:
         return {"success": False, "error": reason}
+
     return {
         "success": True,
         "registration_token": _generate_registration_token(phone),
@@ -287,10 +398,11 @@ def login_verify_otp(phone=None, otp=None):
 
 @frappe.whitelist(allow_guest=True)
 def login_with_password(phone=None, password=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     password = password or frappe.form_dict.get("password")
 
-    from tap_lms.api.citizenship_academy.auth.student_auth import MAX_ATTEMPTS
+    if not phone or not password:
+        return {"success": False, "error": "invalid_credentials"}
 
     auth = frappe.db.get_value(
         "Student Auth",
@@ -311,7 +423,12 @@ def login_with_password(phone=None, password=None):
         }
 
     try:
-        check_password(auth.name, password, doctype="Student Auth", fieldname="password")
+        check_password(
+            auth.name,
+            password,
+            doctype="Student Auth",
+            fieldname="password"
+        )
     except frappe.AuthenticationError:
         doc.increment_failed()
         remaining = max(0, MAX_ATTEMPTS - doc.failed_attempts)
@@ -324,42 +441,24 @@ def login_with_password(phone=None, password=None):
     doc.reset_lock()
     profiles = _get_profiles_for_phone(phone)
     token = _generate_jwt(phone, [p["student_id"] for p in profiles])
-    return {"success": True, "token": token, "phone": phone, "profiles": profiles}
-
-
-def _get_profiles_for_phone(phone):
-    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
-    if not auth_name:
-        return []
-    doc = frappe.get_doc("Student Auth", auth_name)
-    profiles = []
-    for row in doc.students:
-        student_data = frappe.db.get_value(
-            "Student",
-            row.student,
-            ["name1", "gender", "grade", "school_id", "language", "status"],
-            as_dict=True,
-        )
-        profiles.append({
-            "student_id": row.student,
-            "name": student_data.name1 if student_data else row.student_name,
-            "avatar": _get_avatar_for_profile_row(row),
-            "gender": student_data.gender if student_data else None,
-            "grade": student_data.grade if student_data else None,
-            "status": student_data.status if student_data else None,
-        })
-    return profiles
+    return {
+        "success": True,
+        "token": token,
+        "phone": phone,
+        "profiles": profiles,
+    }
 
 
 @frappe.whitelist(allow_guest=True)
 def get_profiles(phone=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     token = _extract_bearer_token()
     reg_payload = _decode_registration_token(token) if token else None
     access_payload = _decode_access_token(token) if token else None
-    if not reg_payload and not access_payload:
+    active_payload = reg_payload or access_payload
+    if not active_payload:
         frappe.throw("Invalid or missing token", frappe.AuthenticationError)
-    if (reg_payload or access_payload).get("phone") != phone:
+    if active_payload.get("phone") != phone:
         frappe.throw("Token phone mismatch", frappe.AuthenticationError)
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
@@ -421,7 +520,7 @@ def create_profile(
         "school_id": school_id,
         "language": language,
         "status": "active",
-        **( {"dob": dob} if dob else {}),
+        **({"dob": dob} if dob else {}),
     })
     student.insert(ignore_permissions=True)
     student_id = student.name
@@ -438,34 +537,6 @@ def create_profile(
     return _complete_profile_response(phone, student_id)
 
 
-def _migrate_student(phone, student_id, avatar_path):
-    if not frappe.db.exists("Student", student_id):
-        frappe.throw("Student to migrate not found")
-    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
-    auth_doc = frappe.get_doc("Student Auth", auth_name)
-    existing_ids = [row.student for row in auth_doc.students]
-    if student_id not in existing_ids:
-        _append_student_to_auth(auth_doc, student_id, avatar_path)
-        _save_auth_doc(auth_doc)
-        frappe.db.commit()
-    return student_id
-
-
-def _complete_profile_response(phone, student_id):
-    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
-    auth_doc = frappe.get_doc("Student Auth", auth_name)
-    all_students = [row.student for row in auth_doc.students]
-    token = _generate_jwt(phone, all_students)
-    profiles = _get_profiles_for_phone(phone)
-    return {
-        "success": True,
-        "token": token,
-        "phone": phone,
-        "new_student_id": student_id,
-        "profiles": profiles,
-    }
-
-
 @frappe.whitelist(allow_guest=True)
 def add_profile(
     phone=None,
@@ -480,7 +551,7 @@ def add_profile(
     dob=None,
     migrate_student_id=None,
 ):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     display_name = display_name or frappe.form_dict.get("display_name")
     gender = gender or frappe.form_dict.get("gender")
     grade = grade or frappe.form_dict.get("grade")
@@ -519,7 +590,7 @@ def add_profile(
         "school_id": school_id,
         "language": language,
         "status": "active",
-        **( {"dob": dob} if dob else {}),
+        **({"dob": dob} if dob else {}),
     })
     student.insert(ignore_permissions=True)
     student_id = student.name
@@ -538,16 +609,16 @@ def add_profile(
 
 @frappe.whitelist(allow_guest=True)
 def select_profile(phone=None, student_id=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     student_id = student_id or frappe.form_dict.get("student_id")
 
     token = _extract_bearer_token()
     reg_payload = _decode_registration_token(token) if token else None
     access_payload = _decode_access_token(token) if token else None
-    payload = reg_payload or access_payload
-    if not payload:
+    active_payload = reg_payload or access_payload
+    if not active_payload:
         frappe.throw("Invalid or missing token", frappe.AuthenticationError)
-    if payload.get("phone") != phone:
+    if active_payload.get("phone") != phone:
         frappe.throw("Token phone mismatch", frappe.AuthenticationError)
 
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
@@ -570,7 +641,7 @@ def select_profile(phone=None, student_id=None):
 
 @frappe.whitelist(allow_guest=True)
 def update_avatar(phone=None, student_id=None, avatar=None):
-    phone = phone or frappe.form_dict.get("phone")
+    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     student_id = student_id or frappe.form_dict.get("student_id")
     avatar = avatar or frappe.form_dict.get("avatar")
 
@@ -659,7 +730,9 @@ def create_school(name=None, district=None, type="GOVT"):
         frappe.throw("Invalid school type")
     if not frappe.db.exists("District", district):
         frappe.throw("District not found")
-    existing = frappe.db.get_value("School", {"name1": name, "district": district}, "name")
+    existing = frappe.db.get_value(
+        "School", {"name1": name, "district": district}, "name"
+    )
     if existing:
         return {"school_id": existing, "name": name, "created": False}
     doc = frappe.new_doc("School")
