@@ -2,14 +2,12 @@ import frappe
 import jwt
 import datetime
 import requests
-from frappe.utils.password import update_password, check_password
+from frappe.utils.password import update_password
 
 JWT_EXPIRY_HOURS = 72
 REGISTRATION_TOKEN_EXPIRY_MINUTES = 30
 OTP_EXPIRY_MINUTES = 10
 HARDCODED_OTP = "000000"
-MAX_ATTEMPTS = 5
-LOCKOUT_MINUTES = 30
 
 VALID_GENDERS = {"Male", "Female", "Others", "Not Available"}
 VALID_SCHOOL_TYPES = {"APS", "GOVT", "NGO", "PPP", "PMC", "PVT", "GOVT. Aided", "ORG"}
@@ -22,25 +20,6 @@ def _normalize_phone(phone):
     if len(digits) == 12 and digits.startswith("91"):
         digits = digits[2:]
     return digits
-
-
-def _resolve_avatar(avatar_key):
-    if avatar_key and frappe.db.exists("Student Avatar", avatar_key):
-        return avatar_key
-    fallback = frappe.get_all(
-        "Student Avatar",
-        fields=["avatar_key"],
-        order_by="avatar_key asc",
-        limit=1
-    )
-    return fallback[0].avatar_key if fallback else "avatar_01"
-
-
-def _get_avatar_path(avatar_key):
-    if not avatar_key:
-        return "assets/avatars/avatar_01.png"
-    path = frappe.db.get_value("Student Avatar", avatar_key, "avatar_path")
-    return path or "assets/avatars/avatar_01.png"
 
 
 def _get_secret(key):
@@ -148,6 +127,25 @@ def _verify_otp(phone, otp):
         return False, "otp_invalid"
     frappe.cache().delete_value(f"otp::{phone}")
     return True, None
+
+
+def _resolve_avatar(avatar_key):
+    if avatar_key and frappe.db.exists("Student Avatar", avatar_key):
+        return avatar_key
+    fallback = frappe.get_all(
+        "Student Avatar",
+        fields=["avatar_key"],
+        order_by="avatar_key asc",
+        limit=1
+    )
+    return fallback[0].avatar_key if fallback else "avatar_01"
+
+
+def _get_avatar_path(avatar_key):
+    if not avatar_key:
+        return "assets/avatars/avatar_01.png"
+    path = frappe.db.get_value("Student Avatar", avatar_key, "avatar_path")
+    return path or "assets/avatars/avatar_01.png"
 
 
 def _create_student_auth(phone, raw_password):
@@ -335,57 +333,33 @@ def register_verify_otp(phone=None, otp=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def check_phone(phone=None):
+def login_send_otp(phone=None):
     phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     if not phone:
         frappe.throw("phone is required", frappe.ValidationError)
-    return {"exists": bool(frappe.db.exists("Student Auth", {"phone": phone}))}
+    if not frappe.db.exists("Student Auth", {"phone": phone}):
+        return {"success": False, "error": "phone_not_registered"}
+    _store_otp(phone)
+    return {"success": True, "otp_sent": True}
 
 
 @frappe.whitelist(allow_guest=True)
-def login_with_password(phone=None, password=None):
+def login_verify_otp(phone=None, otp=None):
     phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
-    password = password or frappe.form_dict.get("password")
-    if not phone or not password:
-        return {"success": False, "error": "invalid_credentials"}
-    auth = frappe.db.get_value(
-        "Student Auth",
-        {"phone": phone},
-        ["name", "is_locked", "failed_attempts", "locked_until"],
-        as_dict=True,
-    )
-    if not auth:
-        return {"success": False, "error": "invalid_credentials"}
-    doc = frappe.get_doc("Student Auth", auth.name)
-    if doc.is_currently_locked():
-        return {
-            "success": False,
-            "error": "account_locked",
-            "locked_until": str(doc.locked_until),
-        }
-    try:
-        check_password(
-            auth.name,
-            password,
-            doctype="Student Auth",
-            fieldname="password"
-        )
-    except frappe.AuthenticationError:
-        doc.increment_failed()
-        remaining = max(0, MAX_ATTEMPTS - doc.failed_attempts)
-        return {
-            "success": False,
-            "error": "invalid_credentials",
-            "attempts_remaining": remaining,
-        }
-    doc.reset_lock()
-    profiles = _get_profiles_for_phone(phone)
-    token = _generate_jwt(phone, [p["student_id"] for p in profiles])
+    otp = otp or frappe.form_dict.get("otp")
+    if not phone:
+        frappe.throw("phone is required", frappe.ValidationError)
+    if not otp:
+        frappe.throw("otp is required", frappe.ValidationError)
+    if not frappe.db.exists("Student Auth", {"phone": phone}):
+        return {"success": False, "error": "phone_not_registered"}
+    valid, reason = _verify_otp(phone, otp)
+    if not valid:
+        return {"success": False, "error": reason}
     return {
         "success": True,
-        "token": token,
+        "registration_token": _generate_registration_token(phone),
         "phone": phone,
-        "profiles": profiles,
     }
 
 
