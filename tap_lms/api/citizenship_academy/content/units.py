@@ -140,24 +140,19 @@ def _resolve_content_id(row):
 @frappe.whitelist(allow_guest=True)
 def get_unit(unit_id: str):
     doc = frappe.get_doc("LearningUnit", unit_id)
-
-    content_items = []
-    for row in (doc.content_items or []):
-        content_id   = _resolve_content_id(row)
-        content_type = getattr(row, "content_type", None) or ""
-
-        content_items.append({
+    content_items = [
+        {
             "idx":          row.idx,
-            "content_type": content_type,
-            "content_id":   content_id,
-        })
-
+            "content_type": getattr(row, "content_type", None) or "",
+            "content_id":   getattr(row, "content", None) or "",
+            "is_optional":  bool(getattr(row, "is_optional", False)),
+        }
+        for row in (doc.content_items or [])
+    ]
     return {
         "unit_id":                   doc.name,
         "title":                     doc.unit_name,
         "unit_type":                 doc.unit_type,
-        "activity_type":             getattr(doc, "activity_type", None),
-        "difficulty_tier":           getattr(doc, "difficulty_tier", None),
         "order":                     doc.order,
         "completion_criteria":       doc.completion_criteria,
         "estimated_duration":        doc.estimated_duration,
