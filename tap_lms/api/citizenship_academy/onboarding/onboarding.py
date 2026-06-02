@@ -286,14 +286,6 @@ def _migrate_student(phone, student_id, avatar_key):
 
 
 @frappe.whitelist(allow_guest=True)
-def check_phone(phone=None):
-    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
-    if not phone:
-        frappe.throw("phone is required", frappe.ValidationError)
-    return {"exists": bool(frappe.db.exists("Student Auth", {"phone": phone}))}
-
-
-@frappe.whitelist(allow_guest=True)
 def register_send_otp(phone=None, password=None):
     phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     password = password or frappe.form_dict.get("password")
@@ -343,32 +335,11 @@ def register_verify_otp(phone=None, otp=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def login_send_otp(phone=None):
+def check_phone(phone=None):
     phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     if not phone:
         frappe.throw("phone is required", frappe.ValidationError)
-    if not frappe.db.exists("Student Auth", {"phone": phone}):
-        return {"success": False, "error": "phone_not_found"}
-    _store_otp(phone)
-    return {"success": True, "otp_sent": True}
-
-
-@frappe.whitelist(allow_guest=True)
-def login_verify_otp(phone=None, otp=None):
-    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
-    otp = otp or frappe.form_dict.get("otp")
-    if not phone:
-        frappe.throw("phone is required", frappe.ValidationError)
-    if not frappe.db.exists("Student Auth", {"phone": phone}):
-        return {"success": False, "error": "phone_not_found"}
-    valid, reason = _verify_otp(phone, otp)
-    if not valid:
-        return {"success": False, "error": reason}
-    return {
-        "success": True,
-        "registration_token": _generate_registration_token(phone),
-        "phone": phone,
-    }
+    return {"exists": bool(frappe.db.exists("Student Auth", {"phone": phone}))}
 
 
 @frappe.whitelist(allow_guest=True)
