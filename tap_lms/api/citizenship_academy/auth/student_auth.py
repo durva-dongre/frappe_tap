@@ -1,7 +1,7 @@
 import frappe
 import jwt
 import datetime
-from frappe.utils.password import update_password, check_password
+from frappe.utils.password import check_password
 
 JWT_EXPIRY_HOURS = 72
 MAX_ATTEMPTS = 5
@@ -127,24 +127,3 @@ def login_with_password(phone=None, password=None):
         "phone": phone,
         "profiles": profiles,
     }
-
-
-@frappe.whitelist(allow_guest=False)
-def set_password(phone=None, password=None):
-    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
-    password = password or frappe.form_dict.get("password")
-    if not phone:
-        frappe.throw("phone is required", frappe.ValidationError)
-    if not password or len(password) < 6:
-        frappe.throw("Password must be at least 6 characters", frappe.ValidationError)
-    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
-    if not auth_name:
-        frappe.throw("Phone not registered", frappe.DoesNotExistError)
-    update_password(
-        auth_name,
-        password,
-        doctype="Student Auth",
-        fieldname="password"
-    )
-    frappe.db.commit()
-    return {"success": True}
