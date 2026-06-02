@@ -1,5 +1,3 @@
-bash
-cat > /mnt/user-data/outputs/auth/onboarding.py << 'PYEOF'
 import frappe
 import jwt
 import datetime
@@ -606,9 +604,4 @@ def get_avatars():
         fields=["avatar_key", "avatar_path"],
         order_by="avatar_key asc",
     )
-    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]}
-PYEOF
-
-Output
-exit code 0
-Done
+    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]} 
