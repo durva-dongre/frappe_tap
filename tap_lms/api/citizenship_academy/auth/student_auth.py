@@ -21,8 +21,7 @@ def _get_secret(key):
     cached = cache.get_value(f"secret::{key}")
     if cached:
         return cached
-    secret_doc = frappe.get_doc("Secrets", key)
-    value = secret_doc.get_password("value")
+    value = frappe.get_doc("Secrets", key).get_password("value")
     cache.set_value(f"secret::{key}", value)
     return value
 
@@ -42,6 +41,14 @@ def _generate_access_token(phone, student_ids):
     return jwt.encode(payload, _get_jwt_secret(), algorithm="HS256")
 
 
+def _extract_bearer_token():
+    for header in ("X-Flutter-Authorization", "Authorization"):
+        value = frappe.get_request_header(header, "")
+        if value.startswith("Bearer "):
+            return value[7:]
+    return None
+
+
 def _decode_access_token(token):
     try:
         payload = jwt.decode(token, _get_jwt_secret(), algorithms=["HS256"])
@@ -50,14 +57,6 @@ def _decode_access_token(token):
         return payload
     except Exception:
         return None
-
-
-def _extract_bearer_token():
-    for header in ("X-Flutter-Authorization", "Authorization"):
-        value = frappe.get_request_header(header, "")
-        if value.startswith("Bearer "):
-            return value[7:]
-    return None
 
 
 def _get_avatar_path(avatar_key):
@@ -77,7 +76,7 @@ def _get_profiles_for_phone(phone):
         student_data = frappe.db.get_value(
             "Student",
             row.student,
-            ["name1", "gender", "grade", "school_id", "language", "status"],
+            ["name1", "gender", "grade", "status"],
             as_dict=True,
         )
         profiles.append({
@@ -105,6 +104,7 @@ def login_with_password(phone=None, password=None):
     password = password or frappe.form_dict.get("password")
     if not phone or not password:
         return {"success": False, "error": "invalid_credentials"}
+
     auth = frappe.db.get_value(
         "Student Auth",
         {"phone": phone},
@@ -113,32 +113,20 @@ def login_with_password(phone=None, password=None):
     )
     if not auth:
         return {"success": False, "error": "invalid_credentials"}
+
     doc = frappe.get_doc("Student Auth", auth.name)
     if doc.is_currently_locked():
         return {"success": False, "error": "account_locked", "locked_until": str(doc.locked_until)}
+
     try:
         check_password(auth.name, password, doctype="Student Auth", fieldname="password")
     except frappe.AuthenticationError:
         doc.increment_failed()
         remaining = max(0, MAX_ATTEMPTS - doc.failed_attempts)
         return {"success": False, "error": "invalid_credentials", "attempts_remaining": remaining}
+
     doc.reset_lock()
     all_students = [row.student for row in doc.students]
     token = _generate_access_token(phone, all_students)
-    return {"success": True, "token": token, "phone": phone}
-
-
-@frappe.whitelist(allow_guest=True)
-def get_profiles(phone=None):
-    phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
-    token = _extract_bearer_token()
-    if not token:
-        frappe.throw("Missing token", frappe.AuthenticationError)
-    payload = _decode_access_token(token)
-    if not payload:
-        frappe.throw("Invalid or expired token", frappe.AuthenticationError)
-    if payload.get("phone") != phone:
-        frappe.throw("Token phone mismatch", frappe.AuthenticationError)
-    if not frappe.db.exists("Student Auth", {"phone": phone}):
-        frappe.throw("Phone not registered", frappe.DoesNotExistError)
-    return {"phone": phone, "profiles": _get_profiles_for_phone(phone)} 
+    profiles = _get_profiles_for_phone(phone)
+    return {"success": True, "token": token, "phone": phone, "profiles": profiles}
