@@ -15,6 +15,13 @@ def _get_learner(student_id: str):
     return doc
 
 
+def _get_enrollment(learner, course):
+    for row in learner.enrollments:
+        if row.course == course:
+            return row
+    return None
+
+
 def _update_streak(learner):
     today = date.today()
     if not learner.last_activity_date:
@@ -35,10 +42,23 @@ def _update_streak(learner):
 
 def _learner_state(learner):
     return {
-        "xp": learner.xp,
-        "streak": learner.streak,
-        "longest_streak": learner.longest_streak,
+        "xp": learner.xp or 0,
+        "total_xp": learner.xp or 0,
+        "streak": learner.streak or 0,
+        "longest_streak": learner.longest_streak or 0,
         "level": learner.level,
+        "last_activity_date": str(learner.last_activity_date) if learner.last_activity_date else None,
+    }
+
+
+@frappe.whitelist(allow_guest=True)
+def get_streak(student_id: str):
+    learner = _get_learner(student_id)
+    return {
+        "streak": learner.streak or 0,
+        "longest_streak": learner.longest_streak or 0,
+        "total_xp": learner.xp or 0,
+        "xp": learner.xp or 0,
         "last_activity_date": str(learner.last_activity_date) if learner.last_activity_date else None,
     }
 
@@ -50,16 +70,6 @@ def update_xp(student_id: str, xp: int):
     _update_streak(learner)
     learner.save(ignore_permissions=True)
     return _learner_state(learner)
-
-
-@frappe.whitelist(allow_guest=True)
-def get_streak(student_id: str):
-    learner = _get_learner(student_id)
-    return {
-        "streak": learner.streak,
-        "longest_streak": learner.longest_streak,
-        "last_activity_date": str(learner.last_activity_date) if learner.last_activity_date else None,
-    }
 
 
 @frappe.whitelist(allow_guest=True)
@@ -100,39 +110,62 @@ def enroll_course(student_id: str, course: str):
 
 
 @frappe.whitelist(allow_guest=True)
-def update_video(student_id: str, course: str, video_index: int, xp: int = 0):
+def update_video(student_id: str, course: str, video_index: int, xp: int = 10):
     learner = _get_learner(student_id)
-    enrollment = None
-    for row in learner.enrollments:
-        if row.course == course:
-            enrollment = row
-            break
+    enrollment = _get_enrollment(learner, course)
     if not enrollment:
         frappe.throw("Not enrolled in this course")
+
     video_index = int(video_index)
-    if video_index <= (enrollment.videos_completed or 0):
-        return {"updated": False, "reason": "already_completed", **_learner_state(learner)}
-    enrollment.videos_completed = video_index
-    if int(xp) > 0:
+    current = enrollment.videos_completed or 0
+    already_done = video_index <= current
+
+    if not already_done:
+        enrollment.videos_completed = video_index
         learner.xp = (learner.xp or 0) + int(xp)
         _update_streak(learner)
-    learner.save(ignore_permissions=True)
-    return {"updated": True, "videos_completed": enrollment.videos_completed, **_learner_state(learner)}
+        learner.save(ignore_permissions=True)
+
+    return {
+        "updated": not already_done,
+        "already_completed": already_done,
+        "videos_completed": enrollment.videos_completed,
+        **_learner_state(learner),
+    }
 
 
 @frappe.whitelist(allow_guest=True)
-def update_quiz(student_id: str, course: str, xp: int = 0):
+def update_quiz(student_id: str, course: str, quiz_index: int, score: int = 0, xp: int = 15):
     learner = _get_learner(student_id)
-    enrollment = None
-    for row in learner.enrollments:
-        if row.course == course:
-            enrollment = row
-            break
+    enrollment = _get_enrollment(learner, course)
     if not enrollment:
         frappe.throw("Not enrolled in this course")
-    enrollment.quizzes_completed = (enrollment.quizzes_completed or 0) + 1
-    if int(xp) > 0:
+
+    quiz_index = int(quiz_index)
+    current = enrollment.quizzes_completed or 0
+    already_done = quiz_index <= current
+
+    if not already_done:
+        enrollment.quizzes_completed = quiz_index
         learner.xp = (learner.xp or 0) + int(xp)
         _update_streak(learner)
-    learner.save(ignore_permissions=True)
-    return {"updated": True, "quizzes_completed": enrollment.quizzes_completed, **_learner_state(learner)}
+        learner.save(ignore_permissions=True)
+
+    return {
+        "updated": not already_done,
+        "already_completed": already_done,
+        "quizzes_completed": enrollment.quizzes_completed,
+        **_learner_state(learner),
+    }
+
+
+@frappe.whitelist(allow_guest=True)
+def get_content_progress(student_id: str, course: str):
+    learner = _get_learner(student_id)
+    enrollment = _get_enrollment(learner, course)
+    return {
+        "course": course,
+        "videos_completed": enrollment.videos_completed if enrollment else 0,
+        "quizzes_completed": enrollment.quizzes_completed if enrollment else 0,
+        **_learner_state(learner),
+    } 
