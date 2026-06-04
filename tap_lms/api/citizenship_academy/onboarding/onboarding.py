@@ -2,7 +2,7 @@ import frappe
 import jwt
 import datetime
 import requests
-from frappe.utils.password import set_encrypted_password
+from frappe.utils.password import update_password
 
 REGISTRATION_TOKEN_EXPIRY_MINUTES = 30
 OTP_EXPIRY_MINUTES = 10
@@ -156,10 +156,6 @@ def _get_avatar_path(avatar_key):
 def _ensure_student_auth(phone, raw_password):
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
     if auth_name:
-        existing_pwd = frappe.db.get_value("Student Auth", auth_name, "password")
-        if not existing_pwd:
-            set_encrypted_password("Student Auth", auth_name, raw_password, fieldname="password")
-            frappe.db.commit()
         return auth_name
 
     doc = frappe.new_doc("Student Auth")
@@ -170,7 +166,7 @@ def _ensure_student_auth(phone, raw_password):
     doc.insert(ignore_permissions=True)
     frappe.db.commit()
 
-    set_encrypted_password("Student Auth", doc.name, raw_password, fieldname="password")
+    update_password(doc.name, raw_password, doctype="Student Auth", fieldname="password")
     frappe.db.commit()
     return doc.name
 
