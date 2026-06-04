@@ -153,9 +153,25 @@ def _get_avatar_path(avatar_key):
     return path or "assets/avatars/avatar_01.png"
 
 
+def _has_valid_password(auth_name):
+    result = frappe.db.sql(
+        "SELECT 1 FROM `__Auth` WHERE doctype='Student Auth' AND name=%s AND fieldname='password' AND encrypted=0",
+        auth_name,
+    )
+    return bool(result)
+
+
 def _ensure_student_auth(phone, raw_password):
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
     if auth_name:
+        if not _has_valid_password(auth_name):
+            frappe.db.sql(
+                "DELETE FROM `__Auth` WHERE doctype='Student Auth' AND name=%s AND fieldname='password'",
+                auth_name,
+            )
+            frappe.db.commit()
+            update_password(auth_name, raw_password, doctype="Student Auth", fieldname="password")
+            frappe.db.commit()
         return auth_name
 
     doc = frappe.new_doc("Student Auth")
