@@ -4,6 +4,8 @@ import datetime
 from frappe.utils.password import check_password, update_password
 
 JWT_EXPIRY_HOURS = 72
+OTP_EXPIRY_MINUTES = 10
+HARDCODED_OTP = "000000"
 
 
 def _get_jwt_secret():
@@ -31,10 +33,32 @@ def _generate_access_token(phone, student_ids):
 	)
 
 
+def _generate_reset_token(phone):
+	now = datetime.datetime.utcnow()
+	return jwt.encode(
+		{
+			"phone": phone,
+			"type": "reset",
+			"exp": now + datetime.timedelta(minutes=OTP_EXPIRY_MINUTES),
+			"iat": now,
+		},
+		_get_jwt_secret(),
+		algorithm="HS256",
+	)
+
+
 def _decode_access_token(token):
 	try:
 		payload = jwt.decode(token, _get_jwt_secret(), algorithms=["HS256"])
 		return payload if payload.get("type") == "access" else None
+	except Exception:
+		return None
+
+
+def _decode_reset_token(token):
+	try:
+		payload = jwt.decode(token, _get_jwt_secret(), algorithms=["HS256"])
+		return payload if payload.get("type") == "reset" else None
 	except Exception:
 		return None
 
@@ -102,7 +126,7 @@ def check_phone(phone=None):
 
 @frappe.whitelist(allow_guest=True)
 def login_with_password(phone=None, password=None):
-	phone = phone or frappe.form_dict.get("phone", "")
+	phone    = phone    or frappe.form_dict.get("phone", "")
 	password = password or frappe.form_dict.get("password")
 
 	if not phone or not password:
@@ -118,11 +142,8 @@ def login_with_password(phone=None, password=None):
 		return {"success": False, "error": "invalid_credentials"}
 
 	doc = frappe.get_doc("Student Auth", auth_name)
-	student_ids = [row.student for row in doc.students]
-	token = _generate_access_token(phone, student_ids)
-	profiles = _profiles_for_phone(phone)
-
-	return {"success": True, "token": token, "phone": phone, "profiles": profiles}
+	token = _generate_access_token(phone, [row.student for row in doc.students])
+	return {"success": True, "token": token, "phone": phone, "profiles": _profiles_for_phone(phone)}
 
 
 @frappe.whitelist(allow_guest=True)
@@ -144,3 +165,65 @@ def get_profiles(phone=None):
 		frappe.throw("Phone not registered", frappe.DoesNotExistError)
 
 	return {"phone": phone, "profiles": _profiles_for_phone(phone)}
+
+
+@frappe.whitelist(allow_guest=True)
+def forgot_password_send_otp(phone=None):
+	phone = phone or frappe.form_dict.get("phone", "")
+	if not phone:
+		frappe.throw("phone is required", frappe.ValidationError)
+
+	if not frappe.db.exists("Student Auth", {"phone": phone}):
+		return {"success": False, "error": "phone_not_registered"}
+
+	frappe.cache().set_value(f"reset_otp::{phone}", HARDCODED_OTP, expires_in_sec=OTP_EXPIRY_MINUTES * 60)
+	return {"success": True, "otp_sent": True}
+
+
+@frappe.whitelist(allow_guest=True)
+def forgot_password_verify_otp(phone=None, otp=None):
+	phone = phone or frappe.form_dict.get("phone", "")
+	otp   = otp   or frappe.form_dict.get("otp")
+
+	if not phone or not otp:
+		frappe.throw("phone and otp are required", frappe.ValidationError)
+
+	stored = frappe.cache().get_value(f"reset_otp::{phone}")
+	if not stored:
+		return {"success": False, "error": "otp_expired"}
+	if stored != otp:
+		return {"success": False, "error": "otp_invalid"}
+
+	frappe.cache().delete_value(f"reset_otp::{phone}")
+	return {"success": True, "reset_token": _generate_reset_token(phone), "phone": phone}
+
+
+@frappe.whitelist(allow_guest=True)
+def reset_password(phone=None, password=None):
+	phone    = phone    or frappe.form_dict.get("phone", "")
+	password = password or frappe.form_dict.get("password")
+
+	if not password or len(password) < 6:
+		frappe.throw("password must be at least 6 characters", frappe.ValidationError)
+
+	token = _bearer_token()
+	if not token:
+		frappe.throw("Missing token", frappe.AuthenticationError)
+
+	payload = _decode_reset_token(token)
+	if not payload:
+		frappe.throw("Invalid or expired reset token", frappe.AuthenticationError)
+
+	if payload.get("phone") != phone:
+		frappe.throw("Token phone mismatch", frappe.AuthenticationError)
+
+	auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+	if not auth_name:
+		frappe.throw("Phone not registered", frappe.DoesNotExistError)
+
+	update_password(auth_name, password, doctype="Student Auth", fieldname="password")
+	frappe.db.commit()
+
+	doc = frappe.get_doc("Student Auth", auth_name)
+	token = _generate_access_token(phone, [row.student for row in doc.students])
+	return {"success": True, "token": token, "phone": phone, "profiles": _profiles_for_phone(phone)}
