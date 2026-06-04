@@ -7,9 +7,6 @@
  "engine": "InnoDB",
  "field_order": [
   "phone",
-  "is_locked",
-  "failed_attempts",
-  "locked_until",
   "students"
  ],
  "fields": [
@@ -22,23 +19,6 @@
    "unique": 1
   },
   {
-   "fieldname": "is_locked",
-   "fieldtype": "Check",
-   "label": "Is Locked",
-   "default": 0
-  },
-  {
-   "fieldname": "failed_attempts",
-   "fieldtype": "Int",
-   "label": "Failed Attempts",
-   "default": 0
-  },
-  {
-   "fieldname": "locked_until",
-   "fieldtype": "Datetime",
-   "label": "Locked Until"
-  },
-  {
    "fieldname": "students",
    "fieldtype": "Table",
    "label": "Linked Students",
@@ -47,7 +27,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-05-31 00:00:00.000000",
+ "modified": "2026-06-04 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Student Auth",
@@ -71,5 +51,5 @@
  "sort_order": "DESC",
  "states": [],
  "title_field": "phone",
- "track_changes": 1
+ "track_changes": 0
 }
