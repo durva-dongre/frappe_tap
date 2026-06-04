@@ -164,11 +164,13 @@ def _ensure_student_auth(phone, raw_password):
 
     doc = frappe.new_doc("Student Auth")
     doc.phone = phone
-    doc.password = raw_password
     doc.failed_attempts = 0
     doc.is_locked = 0
     doc.flags.ignore_mandatory = True
     doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+
+    set_encrypted_password("Student Auth", doc.name, raw_password, fieldname="password")
     frappe.db.commit()
     return doc.name
 
