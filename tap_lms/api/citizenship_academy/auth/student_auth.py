@@ -5,6 +5,7 @@ from frappe.utils.password import check_password
 
 JWT_EXPIRY_HOURS = 72
 MAX_ATTEMPTS = 5
+LOCKOUT_MINUTES = 30
 
 
 def _normalize_phone(phone):
@@ -91,6 +92,41 @@ def _get_profiles_for_phone(phone):
     return profiles
 
 
+def _is_account_locked(doc):
+    if not doc.is_locked:
+        return False
+    if doc.locked_until and frappe.utils.now_datetime() > doc.locked_until:
+        doc.is_locked = 0
+        doc.failed_attempts = 0
+        doc.locked_until = None
+        doc.flags.ignore_mandatory = True
+        doc.save(ignore_permissions=True)
+        frappe.db.commit()
+        return False
+    return True
+
+
+def _increment_failed_attempts(doc):
+    doc.failed_attempts = (doc.failed_attempts or 0) + 1
+    if doc.failed_attempts >= MAX_ATTEMPTS:
+        doc.is_locked = 1
+        doc.locked_until = frappe.utils.add_to_date(
+            frappe.utils.now_datetime(), minutes=LOCKOUT_MINUTES
+        )
+    doc.flags.ignore_mandatory = True
+    doc.save(ignore_permissions=True)
+    frappe.db.commit()
+
+
+def _reset_failed_attempts(doc):
+    doc.failed_attempts = 0
+    doc.is_locked = 0
+    doc.locked_until = None
+    doc.flags.ignore_mandatory = True
+    doc.save(ignore_permissions=True)
+    frappe.db.commit()
+
+
 @frappe.whitelist(allow_guest=True)
 def check_phone(phone=None):
     phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
@@ -103,43 +139,58 @@ def check_phone(phone=None):
 def login_with_password(phone=None, password=None):
     phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
     password = password or frappe.form_dict.get("password")
+
     if not phone or not password:
         return {"success": False, "error": "invalid_credentials"}
-    auth = frappe.db.get_value(
-        "Student Auth",
-        {"phone": phone},
-        ["name", "is_locked", "failed_attempts", "locked_until"],
-        as_dict=True,
-    )
-    if not auth:
+
+    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+    if not auth_name:
         return {"success": False, "error": "invalid_credentials"}
-    doc = frappe.get_doc("Student Auth", auth.name)
-    if doc.is_currently_locked():
-        return {"success": False, "error": "account_locked", "locked_until": str(doc.locked_until)}
+
+    doc = frappe.get_doc("Student Auth", auth_name)
+
+    if _is_account_locked(doc):
+        return {
+            "success": False,
+            "error": "account_locked",
+            "locked_until": str(doc.locked_until),
+        }
+
     try:
-        check_password(auth.name, password, doctype="Student Auth", fieldname="password")
+        check_password(auth_name, password, doctype="Student Auth", fieldname="password")
     except frappe.AuthenticationError:
-        doc.increment_failed()
+        _increment_failed_attempts(doc)
         remaining = max(0, MAX_ATTEMPTS - doc.failed_attempts)
-        return {"success": False, "error": "invalid_credentials", "attempts_remaining": remaining}
-    doc.reset_lock()
+        return {
+            "success": False,
+            "error": "invalid_credentials",
+            "attempts_remaining": remaining,
+        }
+
+    _reset_failed_attempts(doc)
     all_students = [row.student for row in doc.students]
     token = _generate_access_token(phone, all_students)
     profiles = _get_profiles_for_phone(phone)
+
     return {"success": True, "token": token, "phone": phone, "profiles": profiles}
 
 
 @frappe.whitelist(allow_guest=True)
 def get_profiles(phone=None):
     phone = _normalize_phone(phone or frappe.form_dict.get("phone", ""))
+
     token = _extract_bearer_token()
     if not token:
         frappe.throw("Missing token", frappe.AuthenticationError)
+
     payload = _decode_access_token(token)
     if not payload:
         frappe.throw("Invalid or expired token", frappe.AuthenticationError)
+
     if payload.get("phone") != phone:
         frappe.throw("Token phone mismatch", frappe.AuthenticationError)
+
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
+
     return {"phone": phone, "profiles": _get_profiles_for_phone(phone)}
