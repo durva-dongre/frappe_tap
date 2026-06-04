@@ -142,4 +142,4 @@ def get_profiles(phone=None):
         frappe.throw("Token phone mismatch", frappe.AuthenticationError)
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
-    return {"phone": phone, "profiles": _get_profiles_for_phone(phone)} 
+    return {"phone": phone, "profiles": _get_profiles_for_phone(phone)}
