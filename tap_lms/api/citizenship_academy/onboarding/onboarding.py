@@ -570,4 +570,4 @@ def get_avatars():
         fields=["avatar_key", "avatar_path"],
         order_by="avatar_key asc",
     )
-    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]} 
+    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]}
