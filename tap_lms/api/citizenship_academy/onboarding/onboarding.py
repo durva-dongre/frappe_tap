@@ -2,7 +2,7 @@ import frappe
 import jwt
 import datetime
 import requests
-from frappe.utils.password import set_encrypted_password, check_password
+from frappe.utils.password import set_encrypted_password
 
 REGISTRATION_TOKEN_EXPIRY_MINUTES = 30
 OTP_EXPIRY_MINUTES = 10
@@ -153,45 +153,33 @@ def _get_avatar_path(avatar_key):
     return path or "assets/avatars/avatar_01.png"
 
 
-def _auth_has_password(auth_name):
-    try:
-        check_password(auth_name, "__probe__", doctype="Student Auth", fieldname="password")
-        return True
-    except frappe.AuthenticationError:
-        return True
-    except Exception:
-        return False
-
-
 def _ensure_student_auth(phone, raw_password):
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
-    if not auth_name:
-        doc = frappe.new_doc("Student Auth")
-        doc.phone = phone
-        doc.failed_attempts = 0
-        doc.is_locked = 0
-        doc.flags.ignore_mandatory = True
-        doc.insert(ignore_permissions=True)
-        frappe.db.commit()
-        auth_name = doc.name
-        set_encrypted_password("Student Auth", auth_name, raw_password, fieldname="password")
-        frappe.db.commit()
+    if auth_name:
+        existing_pwd = frappe.db.get_value("Student Auth", auth_name, "password")
+        if not existing_pwd:
+            set_encrypted_password("Student Auth", auth_name, raw_password, fieldname="password")
+            frappe.db.commit()
         return auth_name
 
-    if not _auth_has_password(auth_name):
-        set_encrypted_password("Student Auth", auth_name, raw_password, fieldname="password")
-        frappe.db.commit()
+    doc = frappe.new_doc("Student Auth")
+    doc.phone = phone
+    doc.password = raw_password
+    doc.failed_attempts = 0
+    doc.is_locked = 0
+    doc.flags.ignore_mandatory = True
+    doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+    return doc.name
 
-    return auth_name
+
+def _append_student_to_auth(auth_doc, student_id, avatar_key):
+    auth_doc.append("students", {"student": student_id, "avatar": avatar_key})
 
 
 def _save_auth_doc(auth_doc):
     auth_doc.flags.ignore_mandatory = True
     auth_doc.save(ignore_permissions=True)
-
-
-def _append_student_to_auth(auth_doc, student_id, avatar_key):
-    auth_doc.append("students", {"student": student_id, "avatar": avatar_key})
 
 
 def _get_profiles_for_phone(phone):
@@ -588,4 +576,4 @@ def get_avatars():
         fields=["avatar_key", "avatar_path"],
         order_by="avatar_key asc",
     )
-    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]} 
+    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]}
