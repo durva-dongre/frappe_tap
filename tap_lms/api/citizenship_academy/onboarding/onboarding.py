@@ -2,7 +2,7 @@ import frappe
 import jwt
 import datetime
 import requests
-from frappe.utils.password import set_encrypted_password
+from frappe.utils.password import set_encrypted_password, check_password
 
 REGISTRATION_TOKEN_EXPIRY_MINUTES = 30
 OTP_EXPIRY_MINUTES = 10
@@ -153,17 +153,36 @@ def _get_avatar_path(avatar_key):
     return path or "assets/avatars/avatar_01.png"
 
 
-def _create_student_auth_with_password(phone, raw_password):
-    doc = frappe.new_doc("Student Auth")
-    doc.phone = phone
-    doc.failed_attempts = 0
-    doc.is_locked = 0
-    doc.flags.ignore_mandatory = True
-    doc.insert(ignore_permissions=True)
-    frappe.db.commit()
-    set_encrypted_password("Student Auth", doc.name, raw_password, fieldname="password")
-    frappe.db.commit()
-    return doc.name
+def _auth_has_password(auth_name):
+    try:
+        check_password(auth_name, "__probe__", doctype="Student Auth", fieldname="password")
+        return True
+    except frappe.AuthenticationError:
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_student_auth(phone, raw_password):
+    auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+    if not auth_name:
+        doc = frappe.new_doc("Student Auth")
+        doc.phone = phone
+        doc.failed_attempts = 0
+        doc.is_locked = 0
+        doc.flags.ignore_mandatory = True
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+        auth_name = doc.name
+        set_encrypted_password("Student Auth", auth_name, raw_password, fieldname="password")
+        frappe.db.commit()
+        return auth_name
+
+    if not _auth_has_password(auth_name):
+        set_encrypted_password("Student Auth", auth_name, raw_password, fieldname="password")
+        frappe.db.commit()
+
+    return auth_name
 
 
 def _save_auth_doc(auth_doc):
@@ -361,8 +380,7 @@ def create_profile(
     _validate_profile_fields(gender, state, district, school_id, language)
     resolved_avatar_key = _resolve_avatar(avatar)
 
-    if not frappe.db.exists("Student Auth", {"phone": phone}):
-        _create_student_auth_with_password(phone, password)
+    _ensure_student_auth(phone, password)
 
     if migrate_student_id:
         student_id = _migrate_student(phone, migrate_student_id, resolved_avatar_key)
@@ -570,4 +588,4 @@ def get_avatars():
         fields=["avatar_key", "avatar_path"],
         order_by="avatar_key asc",
     )
-    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]}
+    return {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]} 
