@@ -3,7 +3,6 @@ import jwt
 import datetime
 from frappe.utils.password import check_password, update_password
 
-JWT_EXPIRY_HOURS = 72
 OTP_EXPIRY_MINUTES = 10
 HARDCODED_OTP = "000000"
 
@@ -25,7 +24,6 @@ def _generate_access_token(phone, student_ids):
 			"phone": phone,
 			"students": student_ids,
 			"type": "access",
-			"exp": now + datetime.timedelta(hours=JWT_EXPIRY_HOURS),
 			"iat": now,
 		},
 		_get_jwt_secret(),
