@@ -2,7 +2,7 @@ import frappe
 from frappe.model.document import Document
 
 
-class CourseLevelTranslation(Document):
+class Course_LevelTranslation(Document):
     def validate(self):
         self.validate_unique_language()
 

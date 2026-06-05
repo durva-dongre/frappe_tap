@@ -1,4 +1,4 @@
-frappe.ui.form.on("CourseLevelTranslation", {
+frappe.ui.form.on("Course_LevelTranslation", {
     language(frm, cdt, cdn) {
         const row = locals[cdt][cdn];
         if (!row.language) return;
