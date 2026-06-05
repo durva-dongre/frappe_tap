@@ -18,7 +18,8 @@
   "total_questions",
   "max_attempts",
   "estimated_duration",
-  "status"
+  "status",
+  "translations"
  ],
  "fields": [
   {
@@ -80,11 +81,17 @@
    "fieldtype": "Select",
    "label": "Difficulty Tier",
    "options": "Remedial\nBasic\nIntermediate\nAdvanced"
+  },
+  {
+   "fieldname": "translations",
+   "fieldtype": "Table",
+   "label": "Translations",
+   "options": "QuizTranslation"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-19 14:26:45.126116",
+ "modified": "2026-06-05 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "Quiz",

@@ -1,0 +1,67 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-06-05 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "language",
+  "translated_name",
+  "translated_course_description",
+  "translated_course_summary",
+  "translated_course_objectives",
+  "translated_prerequisite_knowledge"
+ ],
+ "fields": [
+  {
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Language",
+   "options": "TAP Language",
+   "reqd": 1
+  },
+  {
+   "fieldname": "translated_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Translated Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "translated_course_description",
+   "fieldtype": "Text Editor",
+   "label": "Translated Course Description"
+  },
+  {
+   "fieldname": "translated_course_summary",
+   "fieldtype": "Text",
+   "label": "Translated Course Summary"
+  },
+  {
+   "fieldname": "translated_course_objectives",
+   "fieldtype": "Text Editor",
+   "label": "Translated Course Objectives"
+  },
+  {
+   "fieldname": "translated_prerequisite_knowledge",
+   "fieldtype": "Text Editor",
+   "label": "Translated Prerequisite Knowledge"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-05 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "TAP LMS",
+ "name": "CourseLevelTranslation",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
