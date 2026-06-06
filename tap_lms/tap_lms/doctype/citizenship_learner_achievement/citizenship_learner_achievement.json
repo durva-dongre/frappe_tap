@@ -1,0 +1,53 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-06-06 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "achievement",
+  "achievement_type",
+  "level"
+ ],
+ "fields": [
+  {
+   "fieldname": "achievement",
+   "fieldtype": "Link",
+   "label": "Achievement",
+   "options": "Citizenship Achievement",
+   "reqd": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "achievement_type",
+   "fieldtype": "Data",
+   "label": "Type",
+   "fetch_from": "achievement.achievement_type",
+   "fetch_if_empty": 0,
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "level",
+   "fieldtype": "Int",
+   "label": "Level",
+   "reqd": 1,
+   "in_list_view": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-06-06 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Citizenship Learner Achievement",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

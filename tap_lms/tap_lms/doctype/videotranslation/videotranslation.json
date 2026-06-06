@@ -11,6 +11,7 @@
   "translated_name",
   "translated_description",
   "video_youtube_url",
+  "video_url",
   "video_plio_url",
   "subtitle_file",
   "video_transcript",
@@ -37,6 +38,11 @@
    "fieldname": "video_youtube_url",
    "fieldtype": "Data",
    "label": "Youtube URL"
+  },
+  {
+   "fieldname": "video_url",
+   "fieldtype": "Data",
+   "label": "Video URL"
   },
   {
    "fieldname": "video_plio_url",

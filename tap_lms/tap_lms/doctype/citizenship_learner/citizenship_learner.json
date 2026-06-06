@@ -10,12 +10,22 @@
  "field_order": [
   "student",
   "xp",
+  "xp_d0",
+  "xp_d1",
+  "xp_d2",
+  "xp_d3",
+  "xp_d4",
+  "xp_d5",
+  "xp_d6",
+  "weekly_xp",
   "level",
   "streak",
   "longest_streak",
   "last_activity_date",
   "enrollments_section",
-  "enrollments"
+  "enrollments",
+  "achievements_section",
+  "achievements"
  ],
  "fields": [
   {
@@ -31,16 +41,64 @@
    "fieldname": "xp",
    "fieldtype": "Int",
    "in_list_view": 1,
-   "label": "XP",
+   "label": "Total XP",
+   "default": "0"
+  },
+  {
+   "fieldname": "xp_d0",
+   "fieldtype": "Int",
+   "label": "XP Day 0 (Today)",
+   "default": "0"
+  },
+  {
+   "fieldname": "xp_d1",
+   "fieldtype": "Int",
+   "label": "XP Day 1",
+   "default": "0"
+  },
+  {
+   "fieldname": "xp_d2",
+   "fieldtype": "Int",
+   "label": "XP Day 2",
+   "default": "0"
+  },
+  {
+   "fieldname": "xp_d3",
+   "fieldtype": "Int",
+   "label": "XP Day 3",
+   "default": "0"
+  },
+  {
+   "fieldname": "xp_d4",
+   "fieldtype": "Int",
+   "label": "XP Day 4",
+   "default": "0"
+  },
+  {
+   "fieldname": "xp_d5",
+   "fieldtype": "Int",
+   "label": "XP Day 5",
+   "default": "0"
+  },
+  {
+   "fieldname": "xp_d6",
+   "fieldtype": "Int",
+   "label": "XP Day 6",
+   "default": "0"
+  },
+  {
+   "fieldname": "weekly_xp",
+   "fieldtype": "Int",
+   "label": "Weekly XP",
    "default": "0",
-   "read_only": 0
+   "read_only": 1
   },
   {
    "fieldname": "level",
-   "fieldtype": "Select",
+   "fieldtype": "Int",
+   "in_list_view": 1,
    "label": "Level",
-   "options": "L1\nL2\nL3",
-   "default": "L1"
+   "default": "1"
   },
   {
    "fieldname": "streak",
@@ -71,11 +129,22 @@
    "fieldtype": "Table",
    "label": "Enrollments",
    "options": "Citizenship Enrollment"
+  },
+  {
+   "fieldname": "achievements_section",
+   "fieldtype": "Section Break",
+   "label": "Achievements"
+  },
+  {
+   "fieldname": "achievements",
+   "fieldtype": "Table",
+   "label": "Achievements",
+   "options": "Citizenship Learner Achievement"
   }
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-05-30 00:00:00.000000",
+ "modified": "2026-06-07 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Citizenship Learner",

@@ -11,6 +11,7 @@
   "course_vertical",
   "video_name",
   "video_youtube_url",
+  "video_url",
   "duration",
   "difficulty_tier",
   "description",
@@ -47,6 +48,11 @@
    "fieldname": "video_youtube_url",
    "fieldtype": "Data",
    "label": "Youtube URL"
+  },
+  {
+   "fieldname": "video_url",
+   "fieldtype": "Data",
+   "label": "Video URL"
   },
   {
    "fieldname": "video_file",

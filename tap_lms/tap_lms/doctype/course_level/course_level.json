@@ -19,6 +19,10 @@
   "course_description",
   "course_summary",
   "course_image",
+  "download_url",
+  "zip_section",
+  "zip_created",
+  "zip_last_modified",
   "learning_units",
   "learning_outcomes",
   "course_objectives",
@@ -91,6 +95,29 @@
    "label": "Course Image"
   },
   {
+   "fieldname": "download_url",
+   "fieldtype": "Data",
+   "label": "Download URL",
+   "options": "URL"
+  },
+  {
+   "fieldname": "zip_section",
+   "fieldtype": "Section Break",
+   "label": "Zip"
+  },
+  {
+   "default": "0",
+   "fieldname": "zip_created",
+   "fieldtype": "Check",
+   "label": "Zip Created"
+  },
+  {
+   "fieldname": "zip_last_modified",
+   "fieldtype": "Datetime",
+   "label": "Zip Last Modified",
+   "read_only": 1
+  },
+  {
    "fieldname": "learning_outcomes",
    "fieldtype": "Table",
    "label": "Learning Outcomes",
@@ -121,7 +148,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-05 00:00:00.000000",
+ "modified": "2026-06-06 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Course Level",

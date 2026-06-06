@@ -1,5 +1,4 @@
 from . import __version__ as app_version
-from frappe import get_all
 
 
 app_name = "tap_lms"
@@ -58,12 +57,18 @@ doc_events = {
 #                    ~25 min. Hard prerequisite: partial index idx_pe_next_action
 #                    (task #24, patch cr_004_scale.idx_pe_next_action) so the
 #                    SELECT stays <50ms at scale.
+#                  — flush_xp_queue: drains the Redis XP queue and batch-writes
+#                    XP + level updates to tabCitizenship Learner. Runs every
+#                    minute so XP is never more than 60s stale in the DB.
 #   - 0 */2 * * *  — escalation_runner: 6-hour bulk escalation sweep (legacy
 #                    batcher; will eventually be replaced by escalation_batcher
 #                    in collection-mode rollout)
 #   - 0 0 * * 1    — auto_advance_batch_week: weekly Monday sweep that bumps
 #                    Batch.current_calendar_week and unblocks max_allowed_week
 #                    on each PE
+#   - 30 21 * * *  — run_leaderboard_batch: nightly 03:00 IST leaderboard job.
+#                    Flushes XP queue, rotates 7-day XP window, rebuilds and
+#                    uploads school/district/state/national JSON files to R2.
 scheduler_events = {
     "daily": [
         "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages",
@@ -73,6 +78,7 @@ scheduler_events = {
     "cron": {
         "*/1 * * * *": [
             "tap_lms.summer_program.pe_dispatcher.process_program_actions",
+            "tap_lms.ca.api.progress.learner.flush_xp_queue",
         ],
         # Retired 2026-05-21 (task #50): the legacy escalation_runner ran in
         # parallel with pe_dispatcher.handle_escalation (system A, post-CR-003)
@@ -128,6 +134,9 @@ scheduler_events = {
         # "*/10 * * * *": [
         #     "tap_lms.summer_program.scheduler.periodic_glific_reconcile",
         # ],
+        "30 21 * * *": [
+            "tap_lms.ca.jobs.leaderboard.run_leaderboard_batch",
+        ],
     },
 }
 
