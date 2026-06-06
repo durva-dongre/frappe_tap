@@ -6,7 +6,6 @@ from tap_lms.ca.api.auth.student_auth import (
     _generate_registration_token,
     _decode_token,
     _bearer_token,
-    _avatar_path,
     _profiles_for_phone,
     _password_exists,
 )
@@ -16,7 +15,6 @@ HARDCODED_OTP = "000000"
 
 VALID_GENDERS = {"Male", "Female", "Others", "Not Available"}
 VALID_SCHOOL_TYPES = {"APS", "GOVT", "NGO", "PPP", "PMC", "PVT", "GOVT. Aided", "ORG"}
-
 
 def _get_secret(key):
     cache = frappe.cache()
@@ -40,13 +38,11 @@ def _require_registration_token():
     return payload
 
 
-def _resolve_avatar(avatar_key):
-    if avatar_key and frappe.db.exists("Student Avatar", avatar_key):
-        return avatar_key
-    fallback = frappe.get_all(
-        "Student Avatar", fields=["avatar_key"], order_by="avatar_key asc", limit=1
-    )
-    return fallback[0].avatar_key if fallback else "avatar_01"
+def _resolve_avatar(avatar):
+    try:
+        return int(avatar)
+    except (TypeError, ValueError):
+        return 1
 
 
 def _validate_profile_fields(gender, state, district, school_id, language):
@@ -63,52 +59,24 @@ def _validate_profile_fields(gender, state, district, school_id, language):
 
 
 def _ensure_student_auth(phone, raw_password):
-    """
-    Get or create a Student Auth row for this phone number.
-
-    Uses INSERT … ON CONFLICT DO NOTHING to avoid the SELECT → INSERT race
-    condition. After the upsert we read back the name in a single query.
-    Only sets the password when the row was just created (no existing password).
-
-    PostgreSQL guarantees that after ON CONFLICT DO NOTHING the row exists
-    whether we inserted it or a concurrent request did, so the subsequent
-    get_value is always safe.
-    """
-    # Generate a candidate name. Frappe autonames Student Auth records; we
-    # insert via raw SQL only to avoid the race, so we need a stable name.
-    # We derive it from the phone to make it idempotent across retries.
-    # The actual autoname will be set by Frappe if we go through the ORM,
-    # but here we let the DB generate it via the ORM path first, falling back
-    # to raw SQL only on conflict.
-
-    # Attempt ORM insert first — this is the happy path for new registrations.
     try:
         doc = frappe.new_doc("Student Auth")
         doc.phone = phone
         doc.flags.ignore_mandatory = True
         doc.insert(ignore_permissions=True)
-        # Password is set separately because frappe.new_doc does not accept it.
         update_password(doc.name, raw_password, doctype="Student Auth", fieldname="password")
         frappe.db.commit()
         return doc.name
     except frappe.exceptions.DuplicateEntryError:
-        # Another request already created the row — roll back our failed attempt
-        # and read the existing record.
         frappe.db.rollback()
 
-    # Row already exists. Read it back — guaranteed to succeed because the
-    # DuplicateEntryError means the row is committed in the DB.
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
     if not auth_name:
-        # Extremely unlikely: the row was deleted between our failed insert and
-        # this read. Raise a clear error rather than looping.
         frappe.throw(
             f"Student Auth for phone {phone} disappeared after duplicate error.",
             frappe.ValidationError,
         )
 
-    # Only set the password if one has never been stored (e.g. the row was
-    # created by a concurrent migration path that skipped password setup).
     if not _password_exists(auth_name):
         update_password(auth_name, raw_password, doctype="Student Auth", fieldname="password")
         frappe.db.commit()
@@ -132,11 +100,11 @@ def _insert_student(display_name, phone, gender, grade, school_id, language, dob
     return student.name
 
 
-def _link_student(phone, student_id, avatar_key):
+def _link_student(phone, student_id, avatar_num):
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
     doc = frappe.get_doc("Student Auth", auth_name)
     if student_id not in [row.student for row in doc.students]:
-        doc.append("students", {"student": student_id, "avatar": avatar_key})
+        doc.append("students", {"student": student_id, "avatar": avatar_num})
         doc.flags.ignore_mandatory = True
         doc.save(ignore_permissions=True)
     frappe.db.commit()
@@ -188,12 +156,12 @@ def _complete_profile_response(phone, student_id):
 def _do_profile(phone, display_name, gender, grade, state, district,
                 school_id, language, avatar, dob, migrate_student_id):
     _validate_profile_fields(gender, state, district, school_id, language)
-    avatar_key = _resolve_avatar(avatar)
+    avatar_num = _resolve_avatar(avatar)
 
     if migrate_student_id:
         if not frappe.db.exists("Student", migrate_student_id):
             frappe.throw("Student to migrate not found", frappe.DoesNotExistError)
-        _link_student(phone, migrate_student_id, avatar_key)
+        _link_student(phone, migrate_student_id, avatar_num)
         frappe.enqueue(
             "tap_lms.ca.api.onboarding.registration._sync_leaderboard",
             student_id=migrate_student_id,
@@ -206,7 +174,7 @@ def _do_profile(phone, display_name, gender, grade, state, district,
         return _complete_profile_response(phone, migrate_student_id)
 
     student_id = _insert_student(display_name, phone, gender, grade, school_id, language, dob)
-    _link_student(phone, student_id, avatar_key)
+    _link_student(phone, student_id, avatar_num)
     frappe.enqueue(
         "tap_lms.ca.api.onboarding.registration._sync_leaderboard",
         student_id=student_id,

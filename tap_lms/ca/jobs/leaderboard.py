@@ -1,6 +1,5 @@
 import frappe
 import json
-import os
 import time
 import psutil
 import boto3
@@ -177,10 +176,12 @@ def _fetch_active_students_chunked(school_ids: list):
                    s.name1     AS student_name,
                    s.school_id AS school_id,
                    sc.district AS district_id,
-                   sc.state    AS state_id
+                   sc.state    AS state_id,
+                   COALESCE(sap.avatar, 1) AS avatar
               FROM "tabCitizenship Learner" cl
-              JOIN "tabStudent" s  ON s.name = cl.student
-              JOIN "tabSchool"  sc ON sc.name = s.school_id
+              JOIN "tabStudent" s   ON s.name = cl.student
+              JOIN "tabSchool"  sc  ON sc.name = s.school_id
+              LEFT JOIN "tabStudent Auth Profile" sap ON sap.student = s.name
              WHERE s.school_id IN ({school_placeholders})
                AND s.name > %s
              ORDER BY s.name
@@ -193,7 +194,7 @@ def _fetch_active_students_chunked(school_ids: list):
             break
 
         for r in rows:
-            entry = (r.student_id, r.student_name or "", r.weekly_xp or 0)
+            entry = (r.student_id, r.student_name or "", r.weekly_xp or 0, r.avatar or 1)
             if r.school_id:
                 schools.setdefault(r.school_id, []).append(entry)
             if r.district_id:
@@ -245,9 +246,11 @@ def _fetch_national_top100():
         """
         SELECT s.name    AS sid,
                s.name1   AS n,
-               cl.weekly_xp AS w
+               cl.weekly_xp AS w,
+               COALESCE(sap.avatar, 1) AS a
           FROM "tabCitizenship Learner" cl
           JOIN "tabStudent" s ON s.name = cl.student
+          LEFT JOIN "tabStudent Auth Profile" sap ON sap.student = s.name
          ORDER BY cl.weekly_xp DESC
          LIMIT 100
         """,
@@ -257,12 +260,12 @@ def _fetch_national_top100():
 
 def _build_school_file(entries: list, updated_at: str) -> dict:
     entries.sort(key=lambda x: x[2], reverse=True)
-    return {"u": [[s, n, w] for s, n, w in entries], "t": updated_at}
+    return {"u": [[s, n, w, a] for s, n, w, a in entries], "t": updated_at}
 
 
 def _build_geo_file(entries: list, updated_at: str) -> dict:
     entries.sort(key=lambda x: x[2], reverse=True)
-    return {"u": [[s, n, w] for s, n, w in entries[:100]], "t": updated_at}
+    return {"u": [[s, n, w, a] for s, n, w, a in entries[:100]], "t": updated_at}
 
 
 def _build_bucket(scores: list, total: int, updated_at: str) -> dict:
@@ -369,7 +372,7 @@ def _run_leaderboard_batch_inner():
             yield f"leaderboards/states/{stid}.json", _build_geo_file(entries, updated_at)
         yield (
             "leaderboards/national.json",
-            {"u": [[r.sid, r.n, r.w] for r in national_top], "t": updated_at},
+            {"u": [[r.sid, r.n, r.w, r.a] for r in national_top], "t": updated_at},
         )
         for did, scores in district_scores.items():
             yield f"leaderboards/buckets/district_{did}.json", _build_bucket(scores, len(scores), updated_at)

@@ -124,19 +124,3 @@ def get_languages():
     }
     frappe.cache().set_value(cache_key, frappe.as_json(result), expires_in_sec=86400)
     return result
-
-
-@frappe.whitelist(allow_guest=True)
-def get_avatars():
-    cache_key = "lookup::avatars"
-    cached = frappe.cache().get_value(cache_key)
-    if cached:
-        return frappe.parse_json(cached)
-    rows = frappe.get_all(
-        "Student Avatar",
-        fields=["avatar_key", "avatar_path"],
-        order_by="avatar_key asc",
-    )
-    result = {"avatars": [{"key": r.avatar_key, "path": r.avatar_path} for r in rows]}
-    frappe.cache().set_value(cache_key, frappe.as_json(result), expires_in_sec=86400)
-    return result

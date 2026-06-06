@@ -4,7 +4,6 @@ from tap_lms.ca.api.auth.student_auth import (
     _generate_access_token,
     _decode_token,
     _bearer_token,
-    _avatar_path,
     _profiles_for_phone,
 )
 from tap_lms.ca.api.onboarding.registration import _do_profile
@@ -78,7 +77,9 @@ def update_avatar(phone=None, student_id=None, avatar=None):
     avatar = avatar or frappe.form_dict.get("avatar")
     _require_access_token(phone)
 
-    if not frappe.db.exists("Student Avatar", avatar):
+    try:
+        avatar_num = int(avatar)
+    except (TypeError, ValueError):
         frappe.throw("Invalid avatar", frappe.ValidationError)
 
     auth_name = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
@@ -86,11 +87,11 @@ def update_avatar(phone=None, student_id=None, avatar=None):
 
     for row in doc.students:
         if row.student == student_id:
-            row.avatar = avatar
+            row.avatar = avatar_num
             doc.flags.ignore_mandatory = True
             doc.save(ignore_permissions=True)
             frappe.db.commit()
             frappe.cache().delete_value(f"profiles::{phone}")
-            return {"success": True, "avatar": _avatar_path(avatar)}
+            return {"success": True, "avatar": avatar_num}
 
     frappe.throw("Profile not found on this account", frappe.DoesNotExistError)
