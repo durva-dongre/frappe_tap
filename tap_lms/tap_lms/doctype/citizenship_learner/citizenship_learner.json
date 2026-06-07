@@ -95,7 +95,7 @@
   },
   {
    "fieldname": "level",
-   "fieldtype": "Int",
+   "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Level",
    "default": "1"
