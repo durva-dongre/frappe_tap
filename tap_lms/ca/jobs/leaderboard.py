@@ -177,11 +177,17 @@ def _fetch_active_students_chunked(school_ids: list):
                    s.school_id AS school_id,
                    sc.district AS district_id,
                    sc.state    AS state_id,
-                   COALESCE(sap.avatar, 1) AS avatar
+                   COALESCE(
+                       (
+                           SELECT sap.avatar
+                             FROM "tabStudent Auth Profile" sap
+                            WHERE sap.student = s.name
+                            LIMIT 1
+                       ), 1
+                   ) AS avatar
               FROM "tabCitizenship Learner" cl
-              JOIN "tabStudent" s   ON s.name = cl.student
-              JOIN "tabSchool"  sc  ON sc.name = s.school_id
-              LEFT JOIN "tabStudent Auth Profile" sap ON sap.student = s.name
+              JOIN "tabStudent" s  ON s.name = cl.student
+              JOIN "tabSchool"  sc ON sc.name = s.school_id
              WHERE s.school_id IN ({school_placeholders})
                AND s.name > %s
              ORDER BY s.name
@@ -244,13 +250,19 @@ def _stream_bucket_data(district_scores: dict, state_scores: dict, national_scor
 def _fetch_national_top100():
     return frappe.db.sql(
         """
-        SELECT s.name    AS sid,
-               s.name1   AS n,
+        SELECT s.name      AS sid,
+               s.name1     AS n,
                cl.weekly_xp AS w,
-               COALESCE(sap.avatar, 1) AS a
+               COALESCE(
+                   (
+                       SELECT sap.avatar
+                         FROM "tabStudent Auth Profile" sap
+                        WHERE sap.student = s.name
+                        LIMIT 1
+                   ), 1
+               ) AS a
           FROM "tabCitizenship Learner" cl
           JOIN "tabStudent" s ON s.name = cl.student
-          LEFT JOIN "tabStudent Auth Profile" sap ON sap.student = s.name
          ORDER BY cl.weekly_xp DESC
          LIMIT 100
         """,

@@ -85,7 +85,7 @@ def _profiles_for_phone(phone):
     if not doc.students:
         return []
     student_ids = [row.student for row in doc.students]
-    avatar_map = {row.student: row.avatar for row in doc.students}
+    avatar_map  = {row.student: row.avatar for row in doc.students}
     students = frappe.get_all(
         "Student",
         filters={"name": ["in", student_ids]},
@@ -95,11 +95,11 @@ def _profiles_for_phone(phone):
     return [
         {
             "student_id": sid,
-            "name": student_map[sid].name1 if sid in student_map else sid,
-            "avatar": _avatar_path(avatar_map.get(sid)),
-            "gender": student_map[sid].gender if sid in student_map else None,
-            "grade": student_map[sid].grade if sid in student_map else None,
-            "status": student_map[sid].status if sid in student_map else None,
+            "name":       student_map[sid].name1 if sid in student_map else sid,
+            "avatar":     _avatar_path(avatar_map.get(sid)),
+            "gender":     student_map[sid].gender if sid in student_map else None,
+            "grade":      student_map[sid].grade  if sid in student_map else None,
+            "status":     student_map[sid].status if sid in student_map else None,
         }
         for sid in student_ids
     ]
@@ -113,17 +113,28 @@ def _password_exists(auth_name):
     return bool(result)
 
 
+def _use_hardcoded_otp():
+    return frappe.conf.get("use_hardcoded_otp", True)
+
+
+def _make_otp():
+    return HARDCODED_OTP if _use_hardcoded_otp() else _generate_otp()
+
+
 @frappe.whitelist(allow_guest=True)
 def check_phone(phone=None):
     phone = phone or frappe.form_dict.get("phone", "")
     if not phone:
         frappe.throw("phone is required", frappe.ValidationError)
-    return {"exists": bool(frappe.db.exists("Student Auth", {"phone": phone}))}
+    auth_name    = frappe.db.get_value("Student Auth", {"phone": phone}, "name")
+    exists       = bool(auth_name)
+    has_password = _password_exists(auth_name) if auth_name else False
+    return {"exists": exists, "has_password": has_password}
 
 
 @frappe.whitelist(allow_guest=True)
 def login_with_password(phone=None, password=None):
-    phone = phone or frappe.form_dict.get("phone", "")
+    phone    = phone    or frappe.form_dict.get("phone", "")
     password = password or frappe.form_dict.get("password")
     if not phone or not password:
         return {"success": False, "error": "invalid_credentials"}
@@ -134,8 +145,8 @@ def login_with_password(phone=None, password=None):
         check_password(auth_name, password, doctype="Student Auth", fieldname="password")
     except frappe.AuthenticationError:
         return {"success": False, "error": "invalid_credentials"}
-    doc = frappe.get_doc("Student Auth", auth_name)
-    token = _generate_access_token(phone, [row.student for row in doc.students])
+    doc      = frappe.get_doc("Student Auth", auth_name)
+    token    = _generate_access_token(phone, [row.student for row in doc.students])
     profiles = _profiles_for_phone(phone)
     frappe.cache().set_value(f"profiles::{phone}", frappe.as_json(profiles), expires_in_sec=3600)
     return {"success": True, "token": token, "phone": phone, "profiles": profiles}
@@ -152,7 +163,7 @@ def get_profiles(phone=None):
         frappe.throw("Invalid or expired token", frappe.AuthenticationError)
     if payload.get("phone") != phone:
         frappe.throw("Token phone mismatch", frappe.AuthenticationError)
-    cache = frappe.cache()
+    cache  = frappe.cache()
     cached = cache.get_value(f"profiles::{phone}")
     if cached:
         return {"phone": phone, "profiles": frappe.parse_json(cached)}
@@ -170,7 +181,7 @@ def forgot_password_send_otp(phone=None):
         frappe.throw("phone is required", frappe.ValidationError)
     if not frappe.db.exists("Student Auth", {"phone": phone}):
         return {"success": False, "error": "phone_not_registered"}
-    otp = HARDCODED_OTP if frappe.conf.get("use_hardcoded_otp", True) else _generate_otp()
+    otp = _make_otp()
     frappe.cache().set_value(f"otp_reset::{phone}", otp, expires_in_sec=OTP_EXPIRY_MINUTES * 60)
     return {"success": True, "otp_sent": True}
 
@@ -178,7 +189,7 @@ def forgot_password_send_otp(phone=None):
 @frappe.whitelist(allow_guest=True)
 def forgot_password_verify_otp(phone=None, otp=None):
     phone = phone or frappe.form_dict.get("phone", "")
-    otp = otp or frappe.form_dict.get("otp")
+    otp   = otp   or frappe.form_dict.get("otp")
     if not phone or not otp:
         frappe.throw("phone and otp are required", frappe.ValidationError)
     stored = frappe.cache().get_value(f"otp_reset::{phone}")
@@ -192,7 +203,7 @@ def forgot_password_verify_otp(phone=None, otp=None):
 
 @frappe.whitelist(allow_guest=True)
 def reset_password(phone=None, password=None):
-    phone = phone or frappe.form_dict.get("phone", "")
+    phone    = phone    or frappe.form_dict.get("phone", "")
     password = password or frappe.form_dict.get("password")
     if not password or len(password) < 6:
         frappe.throw("password must be at least 6 characters", frappe.ValidationError)
@@ -209,9 +220,9 @@ def reset_password(phone=None, password=None):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
     update_password(auth_name, password, doctype="Student Auth", fieldname="password")
     frappe.db.commit()
-    doc = frappe.get_doc("Student Auth", auth_name)
+    doc          = frappe.get_doc("Student Auth", auth_name)
     access_token = _generate_access_token(phone, [row.student for row in doc.students])
-    profiles = _profiles_for_phone(phone)
+    profiles     = _profiles_for_phone(phone)
     frappe.cache().set_value(f"profiles::{phone}", frappe.as_json(profiles), expires_in_sec=3600)
     return {"success": True, "token": access_token, "phone": phone, "profiles": profiles}
 
@@ -223,7 +234,7 @@ def send_register_otp(phone=None):
         frappe.throw("phone is required", frappe.ValidationError)
     if frappe.db.exists("Student Auth", {"phone": phone}):
         return {"success": False, "error": "phone_already_registered"}
-    otp = HARDCODED_OTP if frappe.conf.get("use_hardcoded_otp", True) else _generate_otp()
+    otp = _make_otp()
     frappe.cache().set_value(f"otp_register::{phone}", otp, expires_in_sec=OTP_EXPIRY_MINUTES * 60)
     return {"success": True, "otp_sent": True}
 
@@ -231,7 +242,7 @@ def send_register_otp(phone=None):
 @frappe.whitelist(allow_guest=True)
 def verify_register_otp(phone=None, otp=None):
     phone = phone or frappe.form_dict.get("phone", "")
-    otp = otp or frappe.form_dict.get("otp")
+    otp   = otp   or frappe.form_dict.get("otp")
     if not phone or not otp:
         frappe.throw("phone and otp are required", frappe.ValidationError)
     stored = frappe.cache().get_value(f"otp_register::{phone}")

@@ -50,16 +50,21 @@ def _get_or_create_learner(student_id: str) -> str:
         return _get_learner_name(student_id)
 
 
-def _learner_xp_state(student_id: str) -> dict:
+def _learner_xp_state(student_id: str, include_daily: bool = False) -> dict:
+    base_fields = ["xp", "weekly_xp", "streak", "longest_streak", "level", "last_activity_date"]
+    daily_fields = ["xp_d0", "xp_d1", "xp_d2", "xp_d3", "xp_d4", "xp_d5", "xp_d6"]
+    fetch_fields = base_fields + daily_fields if include_daily else base_fields
+
     row = frappe.db.get_value(
         "Citizenship Learner",
         {"student": student_id},
-        ["xp", "weekly_xp", "streak", "longest_streak", "level", "last_activity_date"],
+        fetch_fields,
         as_dict=True,
     )
     if not row:
         return {}
-    return {
+
+    result = {
         "xp": row.xp or 0,
         "weekly_xp": row.weekly_xp or 0,
         "streak": row.streak or 0,
@@ -67,6 +72,16 @@ def _learner_xp_state(student_id: str) -> dict:
         "level": row.level or 1,
         "last_activity_date": str(row.last_activity_date) if row.last_activity_date else None,
     }
+
+    if include_daily:
+        daily = [row.xp_d0 or 0, row.xp_d1 or 0, row.xp_d2 or 0,
+                 row.xp_d3 or 0, row.xp_d4 or 0, row.xp_d5 or 0, row.xp_d6 or 0]
+        result["xp_daily"] = daily
+        result["xp_today"] = daily[0]
+        result["xp_peak_day"] = max(daily)
+        result["active_days"] = sum(1 for v in daily if v > 0)
+
+    return result
 
 
 def _update_streak(learner_name: str) -> bool:
@@ -174,57 +189,78 @@ def flush_xp_queue():
 
 
 @frappe.whitelist(allow_guest=True)
-def get_learner_state(student_id=None, lang=None):
-    student_id = student_id or frappe.form_dict.get("student_id")
-    lang = lang or frappe.form_dict.get("lang")
+def get_learner_state(student_id=None, lang=None, fields=None):
+    fd = frappe.form_dict
+    student_id = student_id or fd.get("student_id")
+    lang       = lang       or fd.get("lang")
+    fields     = fields     or fd.get("fields")
+
     if not student_id:
         frappe.throw("student_id is required", frappe.ValidationError)
 
+    optional = _parse_optional(fields)
+    want_all = optional is None
+
+    def _want(f):
+        return want_all or f in optional
+
     learner_name = _get_or_create_learner(student_id)
+    result = {}
 
-    rows = frappe.get_all(
-        "Citizenship Enrollment",
-        filters={"parent": learner_name},
-        fields=["course", "status", "videos_completed", "quizzes_completed", "enrolled_on"],
-        order_by="enrolled_on desc",
-    )
+    want_daily = _want("xp_daily")
+    if _want("xp") or want_daily:
+        result.update(_learner_xp_state(student_id, include_daily=want_daily))
 
-    xp_state = _learner_xp_state(student_id)
+    if _want("enrollments"):
+        rows = frappe.get_all(
+            "Citizenship Enrollment",
+            filters={"parent": learner_name},
+            fields=["course", "status", "videos_completed", "quizzes_completed", "enrolled_on"],
+            order_by="enrolled_on desc",
+        )
+        course_ids   = [r.course for r in rows if r.course]
+        course_meta  = _bulk_course_meta(course_ids)
+        course_trans = _bulk_course_translations(course_ids, lang)
 
-    course_ids = [r.course for r in rows if r.course]
-    course_meta = _bulk_course_meta(course_ids)
-    course_trans = _bulk_course_translations(course_ids, lang)
+        enrollments = []
+        for row in rows:
+            meta     = course_meta.get(row.course)
+            eng_name = (meta.name1 if meta else None) or row.course
+            title    = course_trans.get(row.course) or eng_name
+            enrollments.append({
+                "course":            row.course,
+                "course_title":      title,
+                "eng_name":          eng_name,
+                "course_level":      meta.level    if meta else None,
+                "course_stage":      meta.stage    if meta else None,
+                "vertical":          meta.vertical if meta else None,
+                "color_code":        meta.color_code if meta else None,
+                "icon":              meta.icon     if meta else None,
+                "status":            row.status,
+                "videos_completed":  row.videos_completed  or 0,
+                "quizzes_completed": row.quizzes_completed or 0,
+                "enrolled_on":       str(row.enrolled_on) if row.enrolled_on else None,
+            })
+        result["enrollments"] = enrollments
 
-    enrollments = []
-    for row in rows:
-        meta = course_meta.get(row.course)
-        eng_name = (meta.name1 if meta else None) or row.course
-        title = course_trans.get(row.course) or eng_name
-        enrollments.append({
-            "course": row.course,
-            "course_title": title,
-            "eng_name": eng_name,
-            "course_level": meta.level if meta else None,
-            "course_stage": meta.stage if meta else None,
-            "vertical": meta.vertical if meta else None,
-            "color_code": meta.color_code if meta else None,
-            "icon": meta.icon if meta else None,
-            "status": row.status,
-            "videos_completed": row.videos_completed or 0,
-            "quizzes_completed": row.quizzes_completed or 0,
-            "enrolled_on": str(row.enrolled_on) if row.enrolled_on else None,
-        })
+    if not result:
+        result.update(_learner_xp_state(student_id, include_daily=False))
 
-    return {
-        **xp_state,
-        "enrollments": enrollments,
-    }
+    return result
+
+
+def _parse_optional(fields_param):
+    if not fields_param:
+        return None
+    return {f.strip().lower() for f in fields_param.split(",") if f.strip()}
 
 
 @frappe.whitelist(allow_guest=True)
 def add_xp_and_streak(student_id=None, xp=None):
-    student_id = student_id or frappe.form_dict.get("student_id")
-    xp = xp if xp is not None else frappe.form_dict.get("xp")
+    fd = frappe.form_dict
+    student_id = student_id or fd.get("student_id")
+    xp         = xp if xp is not None else fd.get("xp")
+
     if not student_id:
         frappe.throw("student_id is required", frappe.ValidationError)
 
@@ -232,7 +268,7 @@ def add_xp_and_streak(student_id=None, xp=None):
     if xp <= 0:
         frappe.throw("xp must be positive", frappe.ValidationError)
 
-    learner_name = _get_or_create_learner(student_id)
+    learner_name   = _get_or_create_learner(student_id)
     streak_updated = _update_streak(learner_name)
     _queue_xp(student_id, xp)
 
@@ -240,14 +276,24 @@ def add_xp_and_streak(student_id=None, xp=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def enroll_course(student_id=None, course=None):
-    student_id = student_id or frappe.form_dict.get("student_id")
-    course = course or frappe.form_dict.get("course")
+def enroll_course(student_id=None, course=None, lang=None, fields=None):
+    fd = frappe.form_dict
+    student_id = student_id or fd.get("student_id")
+    course     = course     or fd.get("course")
+    lang       = lang       or fd.get("lang")
+    fields     = fields     or fd.get("fields")
+
     if not student_id or not course:
         frappe.throw("student_id and course are required", frappe.ValidationError)
 
     if not frappe.db.exists("Course Level", course):
         frappe.throw("Course not found", frappe.DoesNotExistError)
+
+    optional = _parse_optional(fields)
+    want_all = optional is None
+
+    def _want(f):
+        return want_all or f in optional
 
     learner_name = _get_or_create_learner(student_id)
 
@@ -261,7 +307,10 @@ def enroll_course(student_id=None, course=None):
         as_dict=True,
     )
     if existing:
-        return {"enrolled": False, "reason": "already_enrolled", "course": course}
+        result = {"enrolled": False, "reason": "already_enrolled", "course": course}
+        if _want("xp"):
+            result.update(_learner_xp_state(student_id))
+        return result
 
     try:
         frappe.db.sql(
@@ -283,7 +332,10 @@ def enroll_course(student_id=None, course=None):
         frappe.db.commit()
     except Exception:
         frappe.db.rollback()
-        return {"enrolled": False, "reason": "already_enrolled", "course": course}
+        result = {"enrolled": False, "reason": "already_enrolled", "course": course}
+        if _want("xp"):
+            result.update(_learner_xp_state(student_id))
+        return result
 
     inserted = frappe.db.sql(
         'SELECT name FROM "tabCitizenship Enrollment" WHERE parent=%s AND course=%s LIMIT 1',
@@ -291,44 +343,54 @@ def enroll_course(student_id=None, course=None):
         as_dict=True,
     )
     if not inserted:
-        return {"enrolled": False, "reason": "already_enrolled", "course": course}
+        result = {"enrolled": False, "reason": "already_enrolled", "course": course}
+        if _want("xp"):
+            result.update(_learner_xp_state(student_id))
+        return result
 
-    return {"enrolled": True, "course": course}
+    result = {"enrolled": True, "course": course}
+
+    if _want("xp"):
+        result.update(_learner_xp_state(student_id))
+
+    if _want("enrollments"):
+        rows = frappe.get_all(
+            "Citizenship Enrollment",
+            filters={"parent": learner_name},
+            fields=["course", "status", "videos_completed", "quizzes_completed", "enrolled_on"],
+            order_by="enrolled_on desc",
+        )
+        course_ids   = [r.course for r in rows if r.course]
+        course_meta  = _bulk_course_meta(course_ids)
+        course_trans = _bulk_course_translations(course_ids, lang)
+
+        enrollments = []
+        for row in rows:
+            meta     = course_meta.get(row.course)
+            eng_name = (meta.name1 if meta else None) or row.course
+            title    = course_trans.get(row.course) or eng_name
+            enrollments.append({
+                "course":            row.course,
+                "course_title":      title,
+                "eng_name":          eng_name,
+                "status":            row.status,
+                "videos_completed":  row.videos_completed  or 0,
+                "quizzes_completed": row.quizzes_completed or 0,
+                "enrolled_on":       str(row.enrolled_on) if row.enrolled_on else None,
+            })
+        result["enrollments"] = enrollments
+
+    return result
 
 
 @frappe.whitelist(allow_guest=True)
-def get_enrollments(student_id=None, lang=None):
-    student_id = student_id or frappe.form_dict.get("student_id")
-    lang = lang or frappe.form_dict.get("lang")
+def get_enrollments(student_id=None, lang=None, fields=None):
+    fd = frappe.form_dict
+    student_id = student_id or fd.get("student_id")
+    lang       = lang       or fd.get("lang")
+    fields     = fields     or fd.get("fields")
+
     if not student_id:
         frappe.throw("student_id is required", frappe.ValidationError)
 
-    learner_name = _get_or_create_learner(student_id)
-
-    rows = frappe.get_all(
-        "Citizenship Enrollment",
-        filters={"parent": learner_name},
-        fields=["course", "status", "videos_completed", "quizzes_completed", "enrolled_on"],
-        order_by="enrolled_on desc",
-    )
-
-    course_ids = [r.course for r in rows if r.course]
-    course_meta = _bulk_course_meta(course_ids)
-    course_trans = _bulk_course_translations(course_ids, lang)
-
-    enrollments = []
-    for r in rows:
-        meta = course_meta.get(r.course)
-        eng_name = (meta.name1 if meta else None) or r.course
-        title = course_trans.get(r.course) or eng_name
-        enrollments.append({
-            "course": r.course,
-            "course_title": title,
-            "eng_name": eng_name,
-            "status": r.status,
-            "videos_completed": r.videos_completed or 0,
-            "quizzes_completed": r.quizzes_completed or 0,
-            "enrolled_on": str(r.enrolled_on) if r.enrolled_on else None,
-        })
-
-    return {"student_id": student_id, "enrollments": enrollments}
+    return get_learner_state(student_id=student_id, lang=lang, fields="enrollments")
