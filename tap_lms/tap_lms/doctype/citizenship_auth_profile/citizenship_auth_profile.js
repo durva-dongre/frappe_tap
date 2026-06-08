@@ -1,7 +1,7 @@
-frappe.ui.form.on("Student Auth Profile", {
-    student(frm, cdt, cdn) {
+frappe.ui.form.on("Citizenship Auth Profile", {
+    citizenship_learner(frm, cdt, cdn) {
         const row = locals[cdt][cdn];
-        if (!row.student) {
+        if (!row.citizenship_learner) {
             row.student_name = "";
             frm.refresh_field("students");
         }

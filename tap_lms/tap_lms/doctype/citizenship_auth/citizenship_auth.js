@@ -1,6 +1,6 @@
-frappe.ui.form.on("Student Auth", {
+frappe.ui.form.on("Citizenship Auth", {
     refresh(frm) {
-        frm.set_query("student", "students", function () {
+        frm.set_query("citizenship_learner", "students", function () {
             return {
                 filters: {
                     status: "active"

@@ -1,7 +1,7 @@
 import frappe
 from frappe.model.document import Document
 
-class StudentAuthProfile(Document):
+class CitizenshipAuthProfile(Document):
     def validate(self):
         if self.avatar:
             val = str(self.avatar).strip()

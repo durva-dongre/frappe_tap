@@ -14,14 +14,11 @@
   "level",
   "stage",
   "kit_less",
-  "icon",
-  "color_code",
   "course_description",
   "course_summary",
   "course_image",
   "download_url",
   "zip_section",
-  "zip_created",
   "zip_last_modified",
   "learning_units",
   "learning_outcomes",
@@ -68,18 +65,6 @@
    "label": "Kit Less"
   },
   {
-   "fieldname": "icon",
-   "fieldtype": "Data",
-   "label": "Icon",
-   "description": "Icon identifier string rendered by Flutter (e.g. palette, science, code)"
-  },
-  {
-   "fieldname": "color_code",
-   "fieldtype": "Color",
-   "label": "Color Code",
-   "description": "Hex color used as the course theme color on the frontend"
-  },
-  {
    "fieldname": "course_description",
    "fieldtype": "Text Editor",
    "label": "Course Description"
@@ -104,12 +89,6 @@
    "fieldname": "zip_section",
    "fieldtype": "Section Break",
    "label": "Zip"
-  },
-  {
-   "default": "0",
-   "fieldname": "zip_created",
-   "fieldtype": "Check",
-   "label": "Zip Created"
   },
   {
    "fieldname": "zip_last_modified",
