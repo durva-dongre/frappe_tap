@@ -32,12 +32,9 @@
     {
       "fieldname": "roll_number",
       "fieldtype": "Data",
-      "fetch_from": "citizenship_learner.student.roll_number",
-      "fetch_if_empty": 0,
       "in_list_view": 1,
-      "label": "Roll Number",
-      "read_only": 1
-    },
+      "label": "Roll Number"
+},
     {
       "fieldname": "grade",
       "fieldtype": "Select",
