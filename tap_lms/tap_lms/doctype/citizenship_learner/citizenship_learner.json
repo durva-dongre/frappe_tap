@@ -121,11 +121,12 @@
    "read_only": 1
   },
   {
+   "default": "",
    "fieldname": "level",
-   "fieldtype": "Data",
+   "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Level",
-   "default": "1"
+   "options": "Level 1\nLevel 2\nLevel 2A\nLevel 3\nLevel 3A\nLevel 3K\nLevel 3AK\nLevel 4\nLevel 4K"
   },
   {
    "fieldname": "streak",
