@@ -7,6 +7,7 @@
   "field_order": [
     "citizenship_learner",
     "student_name",
+    "roll_number",
     "grade",
     "avatar",
     "student"
@@ -26,6 +27,15 @@
       "fetch_from": "citizenship_learner.student.name1",
       "in_list_view": 1,
       "label": "Student Name",
+      "read_only": 1
+    },
+    {
+      "fieldname": "roll_number",
+      "fieldtype": "Data",
+      "fetch_from": "citizenship_learner.student.roll_number",
+      "fetch_if_empty": 0,
+      "in_list_view": 1,
+      "label": "Roll Number",
       "read_only": 1
     },
     {
