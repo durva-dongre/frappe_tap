@@ -35,12 +35,12 @@ def _free_mb() -> int:
 
 
 def _dynamic_batch(min_size: int, max_size: int) -> int:
-    free = _free_mb()
+    free  = _free_mb()
     if free <= _MEM_FLOOR_MB:
         return min_size
     total = psutil.virtual_memory().total // (1024 * 1024)
     ratio = min(free / total, 1.0)
-    size = int(min_size + (max_size - min_size) * ratio * _MEM_TARGET_PCT / 0.35)
+    size  = int(min_size + (max_size - min_size) * ratio * _MEM_TARGET_PCT / 0.35)
     return max(min_size, min(size, max_size))
 
 
@@ -59,9 +59,7 @@ def _dynamic_lock_ttl() -> int:
         )[0].n or 0
     except Exception:
         total_learners = 0
-    base = 600
-    per_million = 900
-    return int(base + (total_learners / 1_000_000) * per_million)
+    return int(600 + (total_learners / 1_000_000) * 900)
 
 
 def _get_r2_client():
@@ -70,7 +68,7 @@ def _get_r2_client():
     r2_secret_key = frappe.get_doc("Secrets", "r2_secret_key").get_password("value")
     r2_bucket     = frappe.get_doc("Secrets", "r2_bucket").get_password("value")
     workers = _dynamic_upload_workers()
-    client = boto3.client(
+    client  = boto3.client(
         "s3",
         endpoint_url=f"https://{r2_account_id}.r2.cloudflarestorage.com",
         aws_access_key_id=r2_access_key,
@@ -114,7 +112,7 @@ def _rotate_xp_window():
         )
         if not rows:
             break
-        names = [r.name for r in rows]
+        names     = [r.name for r in rows]
         last_name = names[-1]
         placeholders = ",".join(["%s"] * len(names))
         frappe.db.sql(
@@ -140,12 +138,11 @@ def _get_active_scope():
     rows = frappe.db.sql(
         """
         SELECT DISTINCT
-               sc.name     AS school_id,
+               cl.school   AS school_id,
                sc.district AS district_id,
                sc.state    AS state_id
           FROM "tabCitizenship Learner" cl
-          JOIN "tabStudent" s  ON s.name = cl.student
-          JOIN "tabSchool"  sc ON sc.name = s.school_id
+          JOIN "tabSchool" sc ON sc.name = cl.school
          WHERE cl.modified >= NOW() - INTERVAL '1 DAY'
         """,
         as_dict=True,
@@ -165,42 +162,41 @@ def _fetch_active_students_chunked(school_ids: list):
     states: dict    = {}
 
     school_placeholders = ",".join(["%s"] * len(school_ids))
-    last_student = ""
+    last_name = ""
 
     while True:
         chunk_size = _dynamic_batch(_STUDENT_CHUNK_MIN, _STUDENT_CHUNK_MAX)
         rows = frappe.db.sql(
             f"""
-            SELECT cl.weekly_xp,
-                   s.name      AS student_id,
-                   s.name1     AS student_name,
-                   s.school_id AS school_id,
-                   sc.district AS district_id,
-                   sc.state    AS state_id,
-                   COALESCE(
-                       (
-                           SELECT sap.avatar
-                             FROM "tabStudent Auth Profile" sap
-                            WHERE sap.student = s.name
-                            LIMIT 1
-                       ), 1
-                   ) AS avatar
+            SELECT cl.name         AS learner_id,
+                   cl.student_name,
+                   cl.weekly_xp,
+                   cl.school       AS school_id,
+                   sc.district     AS district_id,
+                   sc.state        AS state_id,
+                   COALESCE(sap.avatar, '1') AS avatar
               FROM "tabCitizenship Learner" cl
-              JOIN "tabStudent" s  ON s.name = cl.student
-              JOIN "tabSchool"  sc ON sc.name = s.school_id
-             WHERE s.school_id IN ({school_placeholders})
-               AND s.name > %s
-             ORDER BY s.name
+              JOIN "tabSchool" sc
+                ON sc.name = cl.school
+         LEFT JOIN LATERAL (
+                   SELECT avatar
+                     FROM "tabCitizenship Auth Profile"
+                    WHERE citizenship_learner = cl.name
+                    LIMIT 1
+                   ) sap ON true
+             WHERE cl.school IN ({school_placeholders})
+               AND cl.name > %s
+             ORDER BY cl.name
              LIMIT %s
             """,
-            (*school_ids, last_student, chunk_size),
+            (*school_ids, last_name, chunk_size),
             as_dict=True,
         )
         if not rows:
             break
 
         for r in rows:
-            entry = (r.student_id, r.student_name or "", r.weekly_xp or 0, r.avatar or 1)
+            entry = (r.learner_id, r.student_name or "", r.weekly_xp or 0, r.avatar or "1")
             if r.school_id:
                 schools.setdefault(r.school_id, []).append(entry)
             if r.district_id:
@@ -208,30 +204,29 @@ def _fetch_active_students_chunked(school_ids: list):
             if r.state_id:
                 states.setdefault(r.state_id, []).append(entry)
 
-        last_student = rows[-1].student_id
+        last_name = rows[-1].learner_id
         time.sleep(0.2 if _free_mb() < _MEM_FLOOR_MB else _SLEEP_BETWEEN_CHUNKS)
 
     return schools, districts, states
 
 
 def _stream_bucket_data(district_scores: dict, state_scores: dict, national_scores: list):
-    last_student = ""
+    last_name = ""
     while True:
         chunk_size = _dynamic_batch(_BUCKET_CHUNK_MIN, _BUCKET_CHUNK_MAX)
         rows = frappe.db.sql(
             """
-            SELECT sc.district AS district_id,
-                   sc.state    AS state_id,
+            SELECT cl.name       AS learner_id,
                    cl.weekly_xp,
-                   s.name      AS student_id
+                   sc.district   AS district_id,
+                   sc.state      AS state_id
               FROM "tabCitizenship Learner" cl
-              JOIN "tabStudent" s  ON s.name = cl.student
-              JOIN "tabSchool"  sc ON sc.name = s.school_id
-             WHERE s.name > %s
-             ORDER BY s.name
+              JOIN "tabSchool" sc ON sc.name = cl.school
+             WHERE cl.name > %s
+             ORDER BY cl.name
              LIMIT %s
             """,
-            (last_student, chunk_size),
+            (last_name, chunk_size),
             as_dict=True,
         )
         if not rows:
@@ -243,26 +238,24 @@ def _stream_bucket_data(district_scores: dict, state_scores: dict, national_scor
             if r.state_id:
                 state_scores.setdefault(r.state_id, []).append(w)
             national_scores.append(w)
-        last_student = rows[-1].student_id
+        last_name = rows[-1].learner_id
         time.sleep(0.2 if _free_mb() < _MEM_FLOOR_MB else _SLEEP_BETWEEN_CHUNKS)
 
 
 def _fetch_national_top100():
     return frappe.db.sql(
         """
-        SELECT s.name      AS sid,
-               s.name1     AS n,
-               cl.weekly_xp AS w,
-               COALESCE(
-                   (
-                       SELECT sap.avatar
-                         FROM "tabStudent Auth Profile" sap
-                        WHERE sap.student = s.name
-                        LIMIT 1
-                   ), 1
-               ) AS a
+        SELECT cl.name         AS sid,
+               cl.student_name AS n,
+               cl.weekly_xp    AS w,
+               COALESCE(sap.avatar, '1') AS a
           FROM "tabCitizenship Learner" cl
-          JOIN "tabStudent" s ON s.name = cl.student
+     LEFT JOIN LATERAL (
+               SELECT avatar
+                 FROM "tabCitizenship Auth Profile"
+                WHERE citizenship_learner = cl.name
+                LIMIT 1
+               ) sap ON true
          ORDER BY cl.weekly_xp DESC
          LIMIT 100
         """,
@@ -287,7 +280,7 @@ def _build_bucket(scores: list, total: int, updated_at: str) -> dict:
 
 def _upload_streaming(client, bucket, uploads_iter, workers: int):
     batch_size = max(workers * 4, 40)
-    batch = []
+    batch      = []
 
     def _flush(b, w):
         with ThreadPoolExecutor(max_workers=w) as ex:
@@ -302,8 +295,8 @@ def _upload_streaming(client, bucket, uploads_iter, workers: int):
         batch.append(item)
         if len(batch) >= batch_size:
             _flush(batch, workers)
-            batch = []
-            workers = _dynamic_upload_workers()
+            batch      = []
+            workers    = _dynamic_upload_workers()
             batch_size = max(workers * 4, 40)
 
     if batch:
@@ -327,7 +320,7 @@ def run_leaderboard_batch():
 
 def _run_leaderboard_batch_inner():
     updated_at = _now_utc_iso()
-    t0 = time.time()
+    t0         = time.time()
 
     try:
         _rotate_xp_window()
