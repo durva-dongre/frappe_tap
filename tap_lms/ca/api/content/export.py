@@ -178,7 +178,7 @@ def _build_unit(lu_name, lang, include_r2):
 
 def _build_course(cl_name, lang, include_r2):
     row = frappe.db.sql(
-        'SELECT name, name1, level, vertical, course_description, course_summary, course_image, course_objectives, prerequisite_knowledge, download_url FROM "tabCourse Level" WHERE name = %s LIMIT 1',
+        'SELECT name, name1, level, vertical, course_description, course_summary, course_objectives, prerequisite_knowledge, download_url FROM "tabCourse Level" WHERE name = %s LIMIT 1',
         cl_name, as_dict=True,
     )
     if not row:
@@ -208,11 +208,11 @@ def _build_course(cl_name, lang, include_r2):
         cl_name, as_dict=True,
     )
     units = [u for u in (_build_unit(r.learning_unit, lang, include_r2) for r in lu_rows) if u]
-    return _c({"id": cl.name, "nm": nm, "lvl": cl.level, "vrt": cl.vertical, "desc": desc, "sum": summary, "img": cl.course_image, "obj": obj, "pre": pre, "dl": dl, "units": units or None})
+    return _c({"id": cl.name, "nm": nm, "lvl": cl.level, "vrt": cl.vertical, "desc": desc, "sum": summary, "obj": obj, "pre": pre, "dl": dl, "units": units or None})
 
 def _build_index_entry(cl_name, lang):
     row = frappe.db.sql(
-        'SELECT name, name1, level, vertical, course_description, course_summary, course_image FROM "tabCourse Level" WHERE name = %s LIMIT 1',
+        'SELECT name, name1, level, vertical, course_description, course_summary FROM "tabCourse Level" WHERE name = %s LIMIT 1',
         cl_name, as_dict=True,
     )
     if not row:
@@ -231,7 +231,7 @@ def _build_index_entry(cl_name, lang):
             nm      = t.translated_name or nm
             desc    = _h(t.translated_course_description) or desc
             summary = t.translated_course_summary or summary
-    return _c({"id": cl.name, "nm": nm, "lvl": cl.level, "vrt": cl.vertical, "desc": desc, "sum": summary, "img": cl.course_image})
+    return _c({"id": cl.name, "nm": nm, "lvl": cl.level, "vrt": cl.vertical, "desc": desc, "sum": summary})
 
 def _build_constants(program_id):
     vid_pts = frappe.db.sql(
