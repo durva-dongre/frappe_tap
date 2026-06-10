@@ -7,6 +7,7 @@ XP_QUEUE_KEY = "ca:xp_queue"
 XP_QUEUE_MAX_SIZE = 500000
 XP_FLUSH_LOCK_KEY = "ca:xp_flush:running"
 XP_FLUSH_LOCK_TTL = 60
+XP_LPOP_BATCH = 1000
 
 
 def _today():
@@ -98,15 +99,27 @@ def _queue_xp(learner_id: str, xp: int):
 def flush_xp_queue():
     cache = frappe.cache()
 
-    acquired = cache.set_value(XP_FLUSH_LOCK_KEY, "1", expires_in_sec=XP_FLUSH_LOCK_TTL, nx=True)
+    redis = cache.redis_client
+    acquired = redis.set(
+        cache.make_key(XP_FLUSH_LOCK_KEY),
+        "1",
+        nx=True,
+        ex=XP_FLUSH_LOCK_TTL,
+    )
     if not acquired:
         return
 
     try:
-        raw_items = cache.lrange(XP_QUEUE_KEY, 0, -1)
+        raw_items = []
+        queue_key = cache.make_key(XP_QUEUE_KEY)
+        while True:
+            batch = redis.lpop(queue_key, XP_LPOP_BATCH)
+            if not batch:
+                break
+            raw_items.extend(batch)
+
         if not raw_items:
             return
-        cache.delete(XP_QUEUE_KEY)
 
         totals: dict[str, int] = {}
         for item in raw_items:
@@ -123,10 +136,7 @@ def flush_xp_queue():
                 UPDATE "tabCitizenship Learner"
                    SET xp        = xp + %s,
                        xp_d0     = xp_d0 + %s,
-                       -- PostgreSQL evaluates all RHS expressions against the pre-update row values.
-                       -- xp_d0 here is the OLD value. (old_xp_d0 + delta) + xp_d1 + ... is correct.
-                       -- Do not change this to xp_d0 alone — that would drop the delta.
-                       weekly_xp = (xp_d0 + %s) + xp_d1 + xp_d2 + xp_d3 + xp_d4 + xp_d5 + xp_d6,
+                       weekly_xp = weekly_xp + %s,
                        modified  = NOW()
                  WHERE name = %s
                 """,
@@ -134,7 +144,7 @@ def flush_xp_queue():
             )
         frappe.db.commit()
     finally:
-        cache.delete_value(XP_FLUSH_LOCK_KEY)
+        redis.delete(cache.make_key(XP_FLUSH_LOCK_KEY))
 
 
 @frappe.whitelist(allow_guest=True)

@@ -126,33 +126,31 @@ def create_mentor_profile(
 
 
 @frappe.whitelist(allow_guest=True)
-def get_class_roster(phone=None, grade=None, division=None, page=1, page_size=50):
+def get_class_roster(phone=None, grade=None, page=1, page_size=50):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
     grade = grade or fd.get("grade")
-    division = division or fd.get("division")
     page = int(fd.get("page", page))
     page_size = min(int(fd.get("page_size", page_size)), 100)
 
     _require_access_token(phone)
     _require_mentor(phone)
 
-    if not grade or not division:
-        frappe.throw("grade and division are required", frappe.ValidationError)
+    if not grade:
+        frappe.throw("grade is required", frappe.ValidationError)
 
     offset = (page - 1) * page_size
 
     rows = frappe.db.sql(
         """
         SELECT citizenship_learner, student_name,
-               roll_number, grade, division, avatar,
-               CASE WHEN citizenship_learner IS NULL THEN 'pending' ELSE 'joined' END AS slot_status
+               roll_number, grade, avatar
         FROM "tabCitizenship Auth Profile"
-        WHERE parent=%s AND grade=%s AND division=%s
+        WHERE parent=%s AND grade=%s
         ORDER BY roll_number ASC
         LIMIT %s OFFSET %s
         """,
-        (phone, grade, division, page_size + 1, offset),
+        (phone, grade, page_size + 1, offset),
         as_dict=True,
     )
 
@@ -267,8 +265,7 @@ def get_all_students(phone=None, grade=None, page=1, page_size=50):
 
     rows = frappe.db.sql(
         """
-        SELECT citizenship_learner, student_name, roll_number, grade, division, avatar,
-               CASE WHEN citizenship_learner IS NULL THEN 'pending' ELSE 'joined' END AS slot_status
+        SELECT citizenship_learner, student_name, roll_number, grade, avatar
         FROM "tabCitizenship Auth Profile"
         WHERE parent=%s
           AND (%s IS NULL OR grade=%s)

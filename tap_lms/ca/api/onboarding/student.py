@@ -38,43 +38,40 @@ def _insert_student(display_name, phone, grade, school_id, language, dob=None):
 
 
 def _insert_learner(student_id, display_name, grade, school_id, language):
-    # CREATE SEQUENCE IF NOT EXISTS citizenship_learner_seq START 1;
-    rows = frappe.db.sql(
+    learner_name = frappe.generate_hash(length=10)
+    frappe.db.sql(
         """
         INSERT INTO "tabCitizenship Learner"
-            (name, student, student_name, school, language,
+            (name, student_name, school, language,
              xp, xp_d0, xp_d1, xp_d2, xp_d3, xp_d4, xp_d5, xp_d6,
              weekly_xp, streak, longest_streak, level,
              creation, modified, modified_by, owner)
         VALUES
-            (CONCAT('CL', LPAD(nextval('citizenship_learner_seq')::TEXT, 8, '0')),
-             %s, %s, %s, %s,
+            (%s, %s, %s, %s,
              0, 0, 0, 0, 0, 0, 0, 0,
              0, 0, 0, 'Level 1',
              NOW(), NOW(), 'Administrator', 'Administrator')
-        RETURNING name
         """,
-        (student_id, display_name, school_id, language),
-        as_dict=True,
+        (learner_name, display_name, school_id, language),
     )
     frappe.db.commit()
-    return rows[0].name
+    return learner_name
 
 
-def _append_profile_row(auth_phone, learner_id, student_id, display_name, grade, avatar, roll_number=None, division=None):
+def _append_profile_row(auth_phone, learner_id, student_id, display_name, grade, avatar, roll_number=None):
     frappe.db.sql(
         """
         INSERT INTO "tabCitizenship Auth Profile"
             (name, parent, parenttype, parentfield,
-             citizenship_learner, student, student_name, grade, division, avatar, roll_number,
+             citizenship_learner, student, student_name, grade, avatar, roll_number,
              creation, modified, modified_by, owner, idx)
         VALUES
             (MD5(RANDOM()::TEXT), %s, 'Citizenship Auth', 'students',
-             %s, %s, %s, %s, %s, %s, %s,
+             %s, %s, %s, %s, %s, %s,
              NOW(), NOW(), 'Administrator', 'Administrator',
              COALESCE((SELECT MAX(idx) FROM "tabCitizenship Auth Profile" WHERE parent=%s), 0) + 1)
         """,
-        (auth_phone, learner_id, student_id, display_name, grade, division, avatar or "1", roll_number, auth_phone),
+        (auth_phone, learner_id, student_id, display_name, grade, avatar or "1", roll_number, auth_phone),
     )
     frappe.db.commit()
 
@@ -163,10 +160,6 @@ def add_profile(
 
     _require_access_token(phone)
 
-    # KNOWN ACCEPTED RISK: registration tokens have a 30-minute expiry with no
-    # one-time-use invalidation. A stolen token can be replayed within the window.
-    # To close this later: add a jti claim to the token and maintain a Redis set
-    # of used JTIs with 30-minute TTL, rejecting replays on first check.
     reg_token = frappe.get_request_header("X-Registration-Token", "")
     if not reg_token:
         frappe.throw("Missing registration token", frappe.AuthenticationError)

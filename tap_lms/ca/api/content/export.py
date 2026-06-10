@@ -1,24 +1,6 @@
 import frappe
 import re
 
-_vid_seq = 0
-_quiz_seq = 0
-
-def _next_vid():
-    global _vid_seq
-    _vid_seq += 1
-    return _vid_seq
-
-def _next_quiz():
-    global _quiz_seq
-    _quiz_seq += 1
-    return _quiz_seq
-
-def _reset_counters():
-    global _vid_seq, _quiz_seq
-    _vid_seq = 0
-    _quiz_seq = 0
-
 _YT_RE = re.compile(
     r"(?:youtu\.be/|youtube\.com/(?:watch\?v=|embed/|shorts/|v/))([A-Za-z0-9_\-]{11})"
 )
@@ -57,7 +39,7 @@ def _tr_option(opt_name, lang):
     )
     return row[0].translated_option if row and row[0].translated_option else None
 
-def _build_quiz(quiz_name, lang):
+def _build_quiz(quiz_name, lang, counters):
     if not quiz_name:
         return None
     row = frappe.db.sql(
@@ -88,9 +70,10 @@ def _build_quiz(quiz_name, lang):
             if o.option_number == qr.correct_option:
                 correct_id = str(o.option_number)
         questions.append(_c({"q": q_text, "opts": opts or None, "ans": correct_id, "hint": hint, "exp": exp}))
-    return _c({"id": _next_quiz(), "nm": row[0].quiz_name, "qs": questions})
+    counters["quiz_seq"] += 1
+    return _c({"id": counters["quiz_seq"], "nm": row[0].quiz_name, "qs": questions})
 
-def _build_video(vc_name, lang, include_r2):
+def _build_video(vc_name, lang, include_r2, counters):
     row = frappe.db.sql(
         'SELECT name, video_name, description, video_youtube_url, video_url, video_plio_url, duration, points, plio_at_seconds FROM "tabVideoClass" WHERE name = %s LIMIT 1',
         vc_name, as_dict=True,
@@ -122,10 +105,11 @@ def _build_video(vc_name, lang, include_r2):
             vc_name, as_dict=True,
         )
         if pq_row and pq_row[0].assessment:
-            plio_quiz = _build_quiz(pq_row[0].assessment, lang)
-    return _c({"id": _next_vid(), "nm": nm, "desc": desc, "yt": yt, "url": url, "dur": str(v.duration) if v.duration else None, "pts": pts, "plio_at": plio_at, "pq": plio_quiz})
+            plio_quiz = _build_quiz(pq_row[0].assessment, lang, counters)
+    counters["vid_seq"] += 1
+    return _c({"id": counters["vid_seq"], "nm": nm, "desc": desc, "yt": yt, "url": url, "dur": str(v.duration) if v.duration else None, "pts": pts, "plio_at": plio_at, "pq": plio_quiz})
 
-def _build_unit(lu_name, lang, include_r2):
+def _build_unit(lu_name, lang, include_r2, counters):
     row = frappe.db.sql(
         'SELECT name, unit_name, description, real_world_connection, difficulty_tier, status FROM "tabLearningUnit" WHERE name = %s LIMIT 1',
         lu_name, as_dict=True,
@@ -158,25 +142,18 @@ def _build_unit(lu_name, lang, include_r2):
     for ci in content_items:
         ct = (ci.get("content_type") or "").lower()
         if ci.get("video") and ct in ("", "video"):
-            vobj = _build_video(ci.video, lang, include_r2)
+            vobj = _build_video(ci.video, lang, include_r2, counters)
             if vobj:
                 videos.append(vobj)
                 unit_pts = vobj.get("pts", 10)
-        if ci.get("quiz") and ct in ("", "quiz"):
-            unit_quiz = _build_quiz(ci.quiz, lang)
-    if not unit_quiz:
-        fb = frappe.db.sql(
-            'SELECT quiz FROM "tabUnitContentItem" WHERE parent = %s AND quiz IS NOT NULL LIMIT 1',
-            lu_name, as_dict=True,
-        )
-        if fb:
-            unit_quiz = _build_quiz(fb[0].quiz, lang)
+        if ci.get("quiz") and ct in ("", "quiz") and unit_quiz is None:
+            unit_quiz = _build_quiz(ci.quiz, lang, counters)
     vid_count = len(videos)
     q_count   = len(unit_quiz["qs"]) if unit_quiz and unit_quiz.get("qs") else 0
     total_xp  = sum(v.get("pts", 0) for v in videos) + (unit_pts if unit_quiz else 0)
     return _c({"nm": nm, "desc": desc, "rwc": rwc, "diff": lu.difficulty_tier, "total_xp": total_xp, "vid_count": vid_count, "q_count": q_count, "vids": videos or None, "quiz": unit_quiz})
 
-def _build_course(cl_name, lang, include_r2):
+def _build_course(cl_name, lang, include_r2, counters):
     row = frappe.db.sql(
         'SELECT name, name1, level, vertical, course_description, course_summary, course_objectives, prerequisite_knowledge, download_url FROM "tabCourse Level" WHERE name = %s LIMIT 1',
         cl_name, as_dict=True,
@@ -207,7 +184,7 @@ def _build_course(cl_name, lang, include_r2):
         'SELECT learning_unit FROM "tabLearningUnitList" WHERE parent = %s ORDER BY idx ASC',
         cl_name, as_dict=True,
     )
-    units = [u for u in (_build_unit(r.learning_unit, lang, include_r2) for r in lu_rows) if u]
+    units = [u for u in (_build_unit(r.learning_unit, lang, include_r2, counters) for r in lu_rows) if u]
     return _c({"id": cl.name, "nm": nm, "lvl": cl.level, "vrt": cl.vertical, "desc": desc, "sum": summary, "obj": obj, "pre": pre, "dl": dl, "units": units or None})
 
 def _build_index_entry(cl_name, lang):
@@ -275,11 +252,11 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
     payload = {"constants": _build_constants(program_id), "langs": {}}
 
     for lang in lang_list:
-        _reset_counters()
+        counters = {"vid_seq": 0, "quiz_seq": 0}
         index_courses = [e for e in (_build_index_entry(cid, lang) for cid in course_ids) if e]
         courses = {}
         for cid in course_ids:
-            data = _build_course(cid, lang, include_r2)
+            data = _build_course(cid, lang, include_r2, counters)
             if data:
                 courses[cid] = data
         payload["langs"][lang] = {"index": {"courses": index_courses}, "courses": courses}
