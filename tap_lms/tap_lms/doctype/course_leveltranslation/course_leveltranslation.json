@@ -14,7 +14,6 @@
   "translated_prerequisite_knowledge",
   "translated_download_url",
   "zip_section",
-  "zip_created",
   "zip_last_modified"
  ],
  "fields": [
@@ -65,13 +64,6 @@
    "label": "Zip"
   },
   {
-   "default": "0",
-   "fieldname": "zip_created",
-   "fieldtype": "Check",
-   "in_list_view": 1,
-   "label": "Zip Created"
-  },
-  {
    "fieldname": "zip_last_modified",
    "fieldtype": "Datetime",
    "in_list_view": 1,
@@ -82,7 +74,7 @@
  "index_web_pages_for_search": 0,
  "istable": 1,
  "links": [],
- "modified": "2026-06-06 00:00:00.000000",
+ "modified": "2026-06-10 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "Course_LevelTranslation",
