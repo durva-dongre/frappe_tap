@@ -104,9 +104,9 @@ def _token_needs_refresh(payload):
     exp = payload.get("exp")
     if not exp:
         return False
-    exp_dt = datetime.datetime.utcfromtimestamp(exp)
-    threshold = datetime.datetime.utcnow() + datetime.timedelta(days=TOKEN_REFRESH_THRESHOLD_DAYS)
-    return exp_dt < threshold
+    return datetime.datetime.utcfromtimestamp(exp) < (
+        datetime.datetime.utcnow() + datetime.timedelta(days=TOKEN_REFRESH_THRESHOLD_DAYS)
+    )
 
 
 def _require_access_token(phone):
@@ -123,18 +123,15 @@ def _require_access_token(phone):
 
 def _require_access_token_with_refresh(phone):
     payload = _require_access_token(phone)
-    new_token = None
-    if _token_needs_refresh(payload):
-        new_token = _generate_access_token(phone)
+    new_token = _generate_access_token(phone) if _token_needs_refresh(payload) else None
     return payload, new_token
 
 
 def _password_exists(auth_name):
-    result = frappe.db.sql(
+    return bool(frappe.db.sql(
         "SELECT 1 FROM \"__Auth\" WHERE doctype='Citizenship Auth' AND name=%s AND fieldname='password'",
         auth_name,
-    )
-    return bool(result)
+    ))
 
 
 def _use_hardcoded_otp():
@@ -230,8 +227,7 @@ def send_otp(phone=None, context=None):
         frappe.throw("phone is required", frappe.ValidationError)
 
     if context == "register":
-        exists = frappe.db.sql("SELECT 1 FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1", phone)
-        if exists:
+        if frappe.db.sql("SELECT 1 FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1", phone):
             return {"success": False, "error": "phone_already_registered"}
     elif context == "add_profile":
         _require_access_token(phone)
@@ -259,10 +255,9 @@ def verify_otp(phone=None, otp=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def login_with_password(phone=None, password=None, admin_code=None):
+def login_with_password(phone=None, password=None):
     phone = phone or frappe.form_dict.get("phone", "")
     password = password or frappe.form_dict.get("password")
-    admin_code = admin_code or frappe.form_dict.get("admin_code")
 
     if not phone or not password:
         return {"success": False, "error": "invalid_credentials"}
@@ -272,14 +267,7 @@ def login_with_password(phone=None, password=None, admin_code=None):
         phone,
         as_dict=True,
     )
-    if not row:
-        return {"success": False, "error": "invalid_credentials"}
-
-    r = row[0]
-    if r.admin_code and admin_code != r.admin_code:
-        return {"success": False, "error": "invalid_admin_code"}
-
-    if not _password_exists(phone):
+    if not row or not _password_exists(phone):
         return {"success": False, "error": "invalid_credentials"}
 
     try:
@@ -287,8 +275,9 @@ def login_with_password(phone=None, password=None, admin_code=None):
     except frappe.AuthenticationError:
         return {"success": False, "error": "invalid_credentials"}
 
+    r = row[0]
     profiles, has_more = _fetch_profiles_sql(phone)
-    return {
+    result = {
         "success": True,
         "token": _generate_access_token(phone),
         "phone": phone,
@@ -296,6 +285,9 @@ def login_with_password(phone=None, password=None, admin_code=None):
         "profiles": profiles,
         "profiles_has_more": has_more,
     }
+    if r.mentor:
+        result["admin_code"] = r.admin_code
+    return result
 
 
 @frappe.whitelist(allow_guest=True)
@@ -330,8 +322,7 @@ def forgot_password_send_otp(phone=None):
     phone = phone or frappe.form_dict.get("phone", "")
     if not phone:
         frappe.throw("phone is required", frappe.ValidationError)
-    exists = frappe.db.sql("SELECT 1 FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1", phone)
-    if not exists:
+    if not frappe.db.sql("SELECT 1 FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1", phone):
         return {"success": False, "error": "phone_not_registered"}
     otp = _make_otp()
     frappe.cache().set_value(f"otp_reset::{phone}", otp, expires_in_sec=OTP_EXPIRY_SECONDS)
@@ -367,8 +358,7 @@ def reset_password(phone=None, password=None):
         frappe.throw("Invalid or expired reset token", frappe.AuthenticationError)
     if payload.get("phone") != phone:
         frappe.throw("Token phone mismatch", frappe.AuthenticationError)
-    exists = frappe.db.sql("SELECT 1 FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1", phone)
-    if not exists:
+    if not frappe.db.sql("SELECT 1 FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1", phone):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
     update_password(phone, password, doctype="Citizenship Auth", fieldname="password")
     frappe.db.commit()
