@@ -72,9 +72,9 @@ def _build_quiz(quiz_name, lang, counters):
         exp = _strip_html(tr.get("translated_explanation") or qr.explanation)
         hint = tr.get("translated_hint") or qr.hint
         opts_raw = frappe.db.sql(
-            'SELECT qo.name AS opt_name, qo.option_text, qo.option_number'
+            'SELECT CAST(qo.name AS varchar) AS opt_name, qo.option_text, qo.option_number'
             ' FROM "tabQuizOptionList" ol'
-            ' JOIN "tabQuizOption" qo ON qo.name = ol.options'
+            ' JOIN "tabQuizOption" qo ON CAST(qo.name AS varchar) = ol.options'
             ' WHERE ol.parent = %s ORDER BY qo.option_number ASC',
             qr.q_name,
             as_dict=True,
@@ -122,7 +122,7 @@ def _build_video(vc_name, lang, include_r2, counters):
     plio_quiz = None
     if v.video_plio_url:
         pq_row = frappe.db.sql(
-            'SELECT assessment FROM "tabAssessmentList" WHERE parent = %s ORDER BY idx ASC LIMIT 1',
+            'SELECT assessment FROM "tabAssessmentList" WHERE parent = %s AND assessment_type = \'Quiz\' ORDER BY idx ASC LIMIT 1',
             vc_name,
             as_dict=True,
         )
