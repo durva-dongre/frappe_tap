@@ -29,7 +29,7 @@ def _tr_question(q_name, lang):
     if not lang or lang == "en":
         return {}
     row = frappe.db.sql(
-        'SELECT translated_question, translated_explanation, translated_hint FROM `tabQuizQuestionTranslation` WHERE parent = %s AND language = %s LIMIT 1',
+        'SELECT translated_question, translated_explanation, translated_hint FROM "tabQuizQuestionTranslation" WHERE parent = %s AND language = %s LIMIT 1',
         (q_name, lang),
         as_dict=True,
     )
@@ -40,7 +40,7 @@ def _tr_option(opt_name, lang):
     if not lang or lang == "en":
         return None
     row = frappe.db.sql(
-        'SELECT translated_option FROM `tabQuizOptionTranslation` WHERE parent = %s AND language = %s LIMIT 1',
+        'SELECT translated_option FROM "tabQuizOptionTranslation" WHERE parent = %s AND language = %s LIMIT 1',
         (opt_name, lang),
         as_dict=True,
     )
@@ -51,7 +51,7 @@ def _build_quiz(quiz_name, lang, counters):
     if not quiz_name:
         return None
     row = frappe.db.sql(
-        'SELECT quiz_name FROM `tabQuiz` WHERE name = %s LIMIT 1',
+        'SELECT quiz_name FROM "tabQuiz" WHERE name = %s LIMIT 1',
         quiz_name,
         as_dict=True,
     )
@@ -59,8 +59,8 @@ def _build_quiz(quiz_name, lang, counters):
         return None
     qs_raw = frappe.db.sql(
         'SELECT qq.name AS q_name, qq.question, qq.correct_option, qq.explanation, qq.hint'
-        ' FROM `tabQuizQuestionList` ql'
-        ' JOIN `tabQuizQuestion` qq ON qq.name = ql.question'
+        ' FROM "tabQuizQuestionList" ql'
+        ' JOIN "tabQuizQuestion" qq ON qq.name = ql.question'
         ' WHERE ql.parent = %s ORDER BY ql.question_number ASC',
         quiz_name,
         as_dict=True,
@@ -73,8 +73,8 @@ def _build_quiz(quiz_name, lang, counters):
         hint = tr.get("translated_hint") or qr.hint
         opts_raw = frappe.db.sql(
             'SELECT qo.name AS opt_name, qo.option_text, qo.option_number'
-            ' FROM `tabQuizOptionList` ol'
-            ' JOIN `tabQuizOption` qo ON qo.name = ol.options'
+            ' FROM "tabQuizOptionList" ol'
+            ' JOIN "tabQuizOption" qo ON qo.name = ol.options'
             ' WHERE ol.parent = %s ORDER BY qo.option_number ASC',
             qr.q_name,
             as_dict=True,
@@ -93,8 +93,8 @@ def _build_quiz(quiz_name, lang, counters):
 
 def _build_video(vc_name, lang, include_r2, counters):
     row = frappe.db.sql(
-        'SELECT name, video_name, description, video_youtube_url, video_url, video_plio_url, duration, points, plio_at_seconds'
-        ' FROM `tabVideoClass` WHERE name = %s LIMIT 1',
+        'SELECT name, video_name, description, video_youtube_url, video_url, video_plio_url, duration, points'
+        ' FROM "tabVideoClass" WHERE name = %s LIMIT 1',
         vc_name,
         as_dict=True,
     )
@@ -106,11 +106,10 @@ def _build_video(vc_name, lang, include_r2, counters):
     yt = _yt(v.video_youtube_url)
     url = v.video_url if include_r2 else None
     pts = v.points or 10
-    plio_at = int(v.plio_at_seconds) if v.get("plio_at_seconds") else None
     if lang and lang != "en":
         tr = frappe.db.sql(
             'SELECT translated_name, translated_description, video_youtube_url, video_url'
-            ' FROM `tabVideoTranslation` WHERE parent = %s AND language = %s LIMIT 1',
+            ' FROM "tabVideoTranslation" WHERE parent = %s AND language = %s LIMIT 1',
             (vc_name, lang),
             as_dict=True,
         )
@@ -123,7 +122,7 @@ def _build_video(vc_name, lang, include_r2, counters):
     plio_quiz = None
     if v.video_plio_url:
         pq_row = frappe.db.sql(
-            'SELECT assessment FROM `tabAssessmentList` WHERE parent = %s ORDER BY idx ASC LIMIT 1',
+            'SELECT assessment FROM "tabAssessmentList" WHERE parent = %s ORDER BY idx ASC LIMIT 1',
             vc_name,
             as_dict=True,
         )
@@ -138,7 +137,6 @@ def _build_video(vc_name, lang, include_r2, counters):
         "url": url,
         "dur": str(v.duration) if v.duration else None,
         "pts": pts,
-        "plio_at": plio_at,
         "pq": plio_quiz,
     })
 
@@ -146,7 +144,7 @@ def _build_video(vc_name, lang, include_r2, counters):
 def _build_unit(lu_name, lang, include_r2, counters):
     row = frappe.db.sql(
         'SELECT name, unit_name, description, real_world_connection, difficulty_tier, status'
-        ' FROM `tabLearningUnit` WHERE name = %s LIMIT 1',
+        ' FROM "tabLearningUnit" WHERE name = %s LIMIT 1',
         lu_name,
         as_dict=True,
     )
@@ -161,7 +159,7 @@ def _build_unit(lu_name, lang, include_r2, counters):
     if lang and lang != "en":
         tr = frappe.db.sql(
             'SELECT translated_name, translated_description, translated_real_world_connection'
-            ' FROM `tabLearningUnitTranslation` WHERE parent = %s AND language = %s LIMIT 1',
+            ' FROM "tabLearningUnitTranslation" WHERE parent = %s AND language = %s LIMIT 1',
             (lu_name, lang),
             as_dict=True,
         )
@@ -171,7 +169,7 @@ def _build_unit(lu_name, lang, include_r2, counters):
             desc = _strip_html(t.translated_description) or desc
             rwc = t.translated_real_world_connection or rwc
     content_items = frappe.db.sql(
-        'SELECT content_type, video, quiz, order_index FROM `tabUnitContentItem` WHERE parent = %s ORDER BY order_index ASC',
+        'SELECT content_type, content, idx FROM "tabUnitContentItem" WHERE parent = %s ORDER BY idx ASC',
         lu_name,
         as_dict=True,
     )
@@ -180,13 +178,16 @@ def _build_unit(lu_name, lang, include_r2, counters):
     unit_pts = 10
     for ci in content_items:
         ct = (ci.get("content_type") or "").lower()
-        if ci.get("video") and ct in ("", "video"):
-            vobj = _build_video(ci.video, lang, include_r2, counters)
+        content_ref = ci.get("content")
+        if not content_ref:
+            continue
+        if ct == "video":
+            vobj = _build_video(content_ref, lang, include_r2, counters)
             if vobj:
                 videos.append(vobj)
                 unit_pts = vobj.get("pts", 10)
-        if ci.get("quiz") and ct in ("", "quiz") and unit_quiz is None:
-            unit_quiz = _build_quiz(ci.quiz, lang, counters)
+        elif ct == "quiz" and unit_quiz is None:
+            unit_quiz = _build_quiz(content_ref, lang, counters)
     vid_count = len(videos)
     q_count = len(unit_quiz["qs"]) if unit_quiz and unit_quiz.get("qs") else 0
     total_xp = sum(v.get("pts", 0) for v in videos) + (unit_pts if unit_quiz else 0)
@@ -205,9 +206,9 @@ def _build_unit(lu_name, lang, include_r2, counters):
 
 def _build_course(cl_name, lang, include_r2, counters):
     row = frappe.db.sql(
-        'SELECT name, name1, level, vertical, stage, kit_less, program,'
+        'SELECT name, name1, level, vertical, stage, kit_less,'
         ' course_description, course_summary, course_objectives, prerequisite_knowledge, download_url'
-        ' FROM `tabCourse Level` WHERE name = %s LIMIT 1',
+        ' FROM "tabCourse Level" WHERE name = %s LIMIT 1',
         cl_name,
         as_dict=True,
     )
@@ -224,7 +225,7 @@ def _build_course(cl_name, lang, include_r2, counters):
         tr = frappe.db.sql(
             'SELECT translated_name, translated_course_description, translated_course_summary,'
             ' translated_course_objectives, translated_prerequisite_knowledge, translated_download_url'
-            ' FROM `tabCourse_LevelTranslation` WHERE parent = %s AND language = %s LIMIT 1',
+            ' FROM "tabCourse_LevelTranslation" WHERE parent = %s AND language = %s LIMIT 1',
             (cl_name, lang),
             as_dict=True,
         )
@@ -237,7 +238,7 @@ def _build_course(cl_name, lang, include_r2, counters):
             pre = _strip_html(t.translated_prerequisite_knowledge) or pre
             dl = t.translated_download_url or dl
     lu_rows = frappe.db.sql(
-        'SELECT learning_unit FROM `tabLearningUnitList` WHERE parent = %s ORDER BY idx ASC',
+        'SELECT learning_unit FROM "tabLearningUnitList" WHERE parent = %s ORDER BY idx ASC',
         cl_name,
         as_dict=True,
     )
@@ -261,7 +262,7 @@ def _build_course(cl_name, lang, include_r2, counters):
 def _build_index_entry(cl_name, lang):
     row = frappe.db.sql(
         'SELECT name, name1, level, vertical, stage, kit_less, course_description, course_summary'
-        ' FROM `tabCourse Level` WHERE name = %s LIMIT 1',
+        ' FROM "tabCourse Level" WHERE name = %s LIMIT 1',
         cl_name,
         as_dict=True,
     )
@@ -274,7 +275,7 @@ def _build_index_entry(cl_name, lang):
     if lang and lang != "en":
         tr = frappe.db.sql(
             'SELECT translated_name, translated_course_description, translated_course_summary'
-            ' FROM `tabCourse_LevelTranslation` WHERE parent = %s AND language = %s LIMIT 1',
+            ' FROM "tabCourse_LevelTranslation" WHERE parent = %s AND language = %s LIMIT 1',
             (cl_name, lang),
             as_dict=True,
         )
@@ -298,10 +299,10 @@ def _build_index_entry(cl_name, lang):
 def _build_constants(program_id):
     vid_pts = frappe.db.sql(
         'SELECT COALESCE(MIN(vc.points), 10) AS mn'
-        ' FROM `tabVideoClass` vc'
-        ' JOIN `tabUnitContentItem` uci ON uci.video = vc.name'
-        ' JOIN `tabLearningUnitList` lul ON lul.learning_unit = uci.parent'
-        ' JOIN `tabCourse Level` cl ON cl.name = lul.parent'
+        ' FROM "tabVideoClass" vc'
+        ' JOIN "tabUnitContentItem" uci ON uci.content = vc.name AND uci.content_type = \'video\''
+        ' JOIN "tabLearningUnitList" lul ON lul.learning_unit = uci.parent'
+        ' JOIN "tabCourse Level" cl ON cl.name = lul.parent'
         ' WHERE cl.program = %s',
         program_id,
         as_dict=True,
@@ -312,7 +313,7 @@ def _build_constants(program_id):
 
 def _build_languages():
     rows = frappe.db.sql(
-        'SELECT language_code, language_name, glific_language_id FROM `tabTAP Language` ORDER BY language_code',
+        'SELECT language_code, language_name, glific_language_id FROM "tabTAP Language" ORDER BY language_code',
         as_dict=True,
     )
     return [
@@ -323,7 +324,7 @@ def _build_languages():
 
 def _build_states():
     rows = frappe.db.sql(
-        'SELECT name, state_name, country FROM `tabState` ORDER BY state_name',
+        'SELECT name, state_name, country FROM "tabState" ORDER BY state_name',
         as_dict=True,
     )
     return [_c({"id": r.name, "name": r.state_name, "country": r.country}) for r in rows]
@@ -331,9 +332,8 @@ def _build_states():
 
 def _build_districts():
     rows = frappe.db.sql(
-        'SELECT d.name, d.district_name, d.state, s.state_name'
-        ' FROM `tabDistrict` d'
-        ' LEFT JOIN `tabState` s ON s.name = d.state'
+        'SELECT d.name, d.district_name, d.state'
+        ' FROM "tabDistrict" d'
         ' ORDER BY d.state, d.district_name',
         as_dict=True,
     )
@@ -361,13 +361,13 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
             if l.strip()
         ]
     else:
-        rows = frappe.db.sql('SELECT language_code FROM `tabTAP Language` ORDER BY language_code', as_list=True)
+        rows = frappe.db.sql('SELECT language_code FROM "tabTAP Language" ORDER BY language_code', as_list=True)
         lang_list = [r[0] for r in rows] or ["en"]
 
     course_ids = [
         r.name
         for r in frappe.db.sql(
-            'SELECT name FROM `tabCourse Level` WHERE program = %s ORDER BY name ASC',
+            'SELECT name FROM "tabCourse Level" WHERE program = %s ORDER BY name ASC',
             program_id,
             as_dict=True,
         )
