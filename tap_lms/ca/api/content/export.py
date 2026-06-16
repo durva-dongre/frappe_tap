@@ -425,4 +425,4 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
                 courses[cid] = data
         payload["langs"][lang] = {"index": {"courses": index_courses}, "courses": courses}
 
-    return {"success": True, "program": program_id, "payload": payload}
+    return {"success": True, "program": program_id, "payload": payload} 
