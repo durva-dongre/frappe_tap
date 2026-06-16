@@ -126,7 +126,7 @@ def _build_quiz(quiz_name, lang_name, counters):
 
 def _build_video(vc_name, lang_name, counters):
     row = frappe.db.sql(
-        'SELECT name, video_name, description, video_youtube_url, duration, points'
+        'SELECT name, video_name, description, video_youtube_url, points'
         ' FROM "tabVideoClass" WHERE name = %s LIMIT 1',
         vc_name,
         as_dict=True,
@@ -170,7 +170,6 @@ def _build_video(vc_name, lang_name, counters):
         "nm": nm,
         "desc": desc,
         "yt": yt,
-        "dur": str(v.duration) if v.duration else None,
         "pts": pts,
         "pq": plio_quiz,
     })
