@@ -244,7 +244,7 @@ def _build_course(cl_name, lang, include_r2, counters):
     )
     units = [u for u in (_build_unit(r.learning_unit, lang, include_r2, counters) for r in lu_rows) if u]
     return _c({
-        "id": cl.name,
+        "id": cl.name.replace(" ", "-"),
         "nm": nm,
         "lvl": cl.level,
         "vrt": cl.vertical,
@@ -285,7 +285,7 @@ def _build_index_entry(cl_name, lang):
             desc = _strip_html(t.translated_course_description) or desc
             summary = t.translated_course_summary or summary
     return _c({
-        "id": cl.name,
+        "id": cl.name.replace(" ", "-"),
         "nm": nm,
         "lvl": cl.level,
         "vrt": cl.vertical,
