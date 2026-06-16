@@ -39,6 +39,7 @@ def _lang_name(lang_code):
 def _build_quiz(quiz_name, lang_name, counters):
     if not quiz_name:
         return None
+
     row = frappe.db.sql(
         'SELECT name, quiz_name FROM "tabQuiz" WHERE name = %s LIMIT 1',
         quiz_name,
@@ -46,7 +47,9 @@ def _build_quiz(quiz_name, lang_name, counters):
     )
     if not row:
         return None
+
     nm = row[0].quiz_name
+
     if lang_name:
         tr = frappe.db.sql(
             'SELECT translated_name FROM "tabQuizTranslation" WHERE parent = %s AND language = %s LIMIT 1',
@@ -55,19 +58,22 @@ def _build_quiz(quiz_name, lang_name, counters):
         )
         if tr and tr[0].translated_name:
             nm = tr[0].translated_name
+
     qs_raw = frappe.db.sql(
         'SELECT qq.name AS q_name, qq.question, qq.correct_option, qq.explanation, qq.hint'
         ' FROM "tabQuizQuestionList" ql'
-        ' JOIN "tabQuizQuestion" qq ON qq.name = ql.question'
+        ' JOIN "tabQuizQuestion" qq ON qq.name = CAST(ql.question AS VARCHAR)'
         ' WHERE ql.parent = %s ORDER BY ql.question_number ASC',
         quiz_name,
         as_dict=True,
     )
+
     questions = []
     for qr in qs_raw:
         q_text = qr.question
         exp = _strip_html(qr.explanation)
         hint = qr.hint
+
         if lang_name:
             qtr = frappe.db.sql(
                 'SELECT translated_question, translated_explanation, translated_hint'
@@ -79,14 +85,16 @@ def _build_quiz(quiz_name, lang_name, counters):
                 q_text = qtr[0].translated_question or q_text
                 exp = _strip_html(qtr[0].translated_explanation) or exp
                 hint = qtr[0].translated_hint or hint
+
         opts_raw = frappe.db.sql(
             'SELECT qo.name AS opt_name, qo.option_text, qo.option_number'
             ' FROM "tabQuizOptionList" ol'
-            ' JOIN "tabQuizOption" qo ON qo.name = ol.options'
+            ' JOIN "tabQuizOption" qo ON qo.name = CAST(ol.options AS VARCHAR)'
             ' WHERE ol.parent = %s ORDER BY qo.option_number ASC',
             qr.q_name,
             as_dict=True,
         )
+
         opts = {}
         correct_id = None
         for o in opts_raw:
@@ -103,7 +111,15 @@ def _build_quiz(quiz_name, lang_name, counters):
             opts[str(o.option_number)] = text
             if o.option_number == qr.correct_option:
                 correct_id = str(o.option_number)
-        questions.append(_c({"q": q_text, "opts": opts or None, "ans": correct_id, "hint": hint, "exp": exp}))
+
+        questions.append(_c({
+            "q": q_text,
+            "opts": opts or None,
+            "ans": correct_id,
+            "hint": hint,
+            "exp": exp,
+        }))
+
     counters["quiz_seq"] += 1
     return _c({"id": counters["quiz_seq"], "nm": nm, "qs": questions})
 
@@ -117,6 +133,7 @@ def _build_video(vc_name, lang_name, counters):
     )
     if not row:
         return None
+
     v = row[0]
     nm = v.video_name
     desc = _strip_html(v.description)
@@ -172,9 +189,11 @@ def _build_unit(lu_name, lang_name, counters):
     )
     if not row:
         return None
+
     lu = row[0]
     if lu.status and lu.status != "Published":
         return None
+
     nm = lu.unit_name
     desc = _strip_html(lu.description)
     rwc = lu.real_world_connection
@@ -197,6 +216,7 @@ def _build_unit(lu_name, lang_name, counters):
         lu_name,
         as_dict=True,
     )
+
     videos = []
     unit_quiz = None
     for ci in content_items:
@@ -235,6 +255,7 @@ def _build_course(cl_name, lang_name, counters):
     )
     if not row:
         return None
+
     cl = row[0]
     nm = cl.name1
     desc = _strip_html(cl.course_description)
@@ -265,7 +286,7 @@ def _build_course(cl_name, lang_name, counters):
         cl_name,
         as_dict=True,
     )
-    counters_snap = {"vid_seq": counters["vid_seq"], "quiz_seq": counters["quiz_seq"]}
+
     units = []
     for r in lu_rows:
         u = _build_unit(r.learning_unit, lang_name, counters)
@@ -297,6 +318,7 @@ def _build_index_entry(cl_name, lang_name):
     )
     if not row:
         return None
+
     cl = row[0]
     nm = cl.name1
     desc = _strip_html(cl.course_description)
@@ -348,7 +370,12 @@ def _build_languages():
         as_dict=True,
     )
     return [
-        _c({"id": r.language_code, "code": r.language_code, "name": r.language_name, "glific_id": r.glific_language_id})
+        _c({
+            "id": r.language_code,
+            "code": r.language_code,
+            "name": r.language_name,
+            "glific_id": r.glific_language_id,
+        })
         for r in rows
     ]
 
@@ -417,12 +444,15 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
     for lang in lang_list:
         ln = lang_name_cache[lang]
         counters = {"vid_seq": 0, "quiz_seq": 0}
+
         index_courses = [e for e in (_build_index_entry(cid, ln) for cid in course_ids) if e]
+
         courses = {}
         for cid in course_ids:
             data = _build_course(cid, ln, counters)
             if data:
                 courses[cid] = data
+
         payload["langs"][lang] = {"index": {"courses": index_courses}, "courses": courses}
 
-    return {"success": True, "program": program_id, "payload": payload} 
+    return {"success": True, "program": program_id, "payload": payload}
