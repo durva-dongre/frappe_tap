@@ -62,7 +62,7 @@ def _build_quiz(quiz_name, lang_name, counters):
     qs_raw = frappe.db.sql(
         'SELECT qq.name AS q_name, qq.question, qq.correct_option, qq.explanation, qq.hint'
         ' FROM "tabQuizQuestionList" ql'
-        ' JOIN "tabQuizQuestion" qq ON qq.name = CAST(ql.question AS VARCHAR)'
+        ' JOIN "tabQuizQuestion" qq ON qq.name = ql.question'
         ' WHERE ql.parent = %s ORDER BY ql.question_number ASC',
         quiz_name,
         as_dict=True,
@@ -89,7 +89,7 @@ def _build_quiz(quiz_name, lang_name, counters):
         opts_raw = frappe.db.sql(
             'SELECT qo.name AS opt_name, qo.option_text, qo.option_number'
             ' FROM "tabQuizOptionList" ol'
-            ' JOIN "tabQuizOption" qo ON qo.name = CAST(ol.options AS VARCHAR)'
+            ' JOIN "tabQuizOption" qo ON CAST(qo.name AS VARCHAR) = ol.options'
             ' WHERE ol.parent = %s ORDER BY qo.option_number ASC',
             qr.q_name,
             as_dict=True,
