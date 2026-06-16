@@ -224,7 +224,7 @@ def _build_unit(lu_name, lang_name, counters):
         content_ref = ci.get("content")
         if not content_ref:
             continue
-        if ct == "video":
+        if ct == "videoclass":
             vobj = _build_video(content_ref, lang_name, counters)
             if vobj:
                 videos.append(vobj)
@@ -353,7 +353,7 @@ def _build_constants(program_id):
     vid_pts = frappe.db.sql(
         'SELECT COALESCE(MIN(vc.points), 10) AS mn'
         ' FROM "tabVideoClass" vc'
-        ' JOIN "tabUnitContentItem" uci ON uci.content = vc.name AND uci.content_type = \'Video\''
+        ' JOIN "tabUnitContentItem" uci ON uci.content = vc.name AND uci.content_type = \'VideoClass\''
         ' JOIN "tabLearningUnitList" lul ON lul.learning_unit = uci.parent'
         ' JOIN "tabCourse Level" cl ON cl.name = lul.parent'
         ' WHERE cl.program = %s',
