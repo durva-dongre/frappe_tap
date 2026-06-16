@@ -126,7 +126,7 @@ def _build_quiz(quiz_name, lang_name, counters):
 
 def _build_video(vc_name, lang_name, counters):
     row = frappe.db.sql(
-        'SELECT name, video_name, description, video_youtube_url, video_plio_url, duration, points'
+        'SELECT name, video_name, description, video_youtube_url, duration, points'
         ' FROM "tabVideoClass" WHERE name = %s LIMIT 1',
         vc_name,
         as_dict=True,
@@ -139,11 +139,10 @@ def _build_video(vc_name, lang_name, counters):
     desc = _strip_html(v.description)
     yt = _yt(v.video_youtube_url)
     pts = v.points or 10
-    has_plio = bool(v.video_plio_url)
 
     if lang_name:
         tr = frappe.db.sql(
-            'SELECT translated_name, translated_description, video_youtube_url, video_plio_url'
+            'SELECT translated_name, translated_description, video_youtube_url'
             ' FROM "tabVideoTranslation" WHERE parent = %s AND language = %s LIMIT 1',
             (vc_name, lang_name),
             as_dict=True,
@@ -154,19 +153,16 @@ def _build_video(vc_name, lang_name, counters):
             desc = _strip_html(t.translated_description) or desc
             if t.video_youtube_url:
                 yt = _yt(t.video_youtube_url)
-            if t.video_plio_url:
-                has_plio = True
 
     plio_quiz = None
-    if has_plio:
-        pq_row = frappe.db.sql(
-            'SELECT assessment FROM "tabAssessmentList"'
-            ' WHERE parent = %s AND assessment_type = \'Quiz\' ORDER BY idx ASC LIMIT 1',
-            vc_name,
-            as_dict=True,
-        )
-        if pq_row and pq_row[0].assessment:
-            plio_quiz = _build_quiz(pq_row[0].assessment, lang_name, counters)
+    pq_row = frappe.db.sql(
+        'SELECT assessment FROM "tabAssessmentList"'
+        ' WHERE parent = %s AND assessment_type = \'Quiz\' ORDER BY idx ASC LIMIT 1',
+        vc_name,
+        as_dict=True,
+    )
+    if pq_row and pq_row[0].assessment:
+        plio_quiz = _build_quiz(pq_row[0].assessment, lang_name, counters)
 
     counters["vid_seq"] += 1
     return _c({
