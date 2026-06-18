@@ -22,14 +22,42 @@ def _require_registration_token():
     return payload
 
 
+def _resolve_language(language_code):
+    """
+    The Flutter app and worker pass short codes (en, hi, mr, kn, pa, hi-en),
+    but TAP Language is autonamed by field:language_name, so the Link field's
+    `name` is actually the language_name ("English", "Hindi", ...), not the
+    code. Resolve code -> name here so Link validation passes when inserting
+    Student / Citizenship Learner docs.
+
+    Falls back to treating the input as already-a-name if no code match is
+    found, for backward compatibility with any direct name usage.
+    """
+    if not language_code:
+        frappe.throw("language is required", frappe.ValidationError)
+
+    name = frappe.db.get_value(
+        "TAP Language", {"language_code": language_code}, "name"
+    )
+    if name:
+        return name
+
+    # Already a valid TAP Language name (e.g. "English")?
+    if frappe.db.exists("TAP Language", language_code):
+        return language_code
+
+    frappe.throw(f"Unsupported language: {language_code}", frappe.ValidationError)
+
+
 def _insert_student(display_name, phone, grade, school_id, language, dob=None):
+    language_name = _resolve_language(language)
     doc = frappe.get_doc({
         "doctype": "Student",
         "name1": display_name,
         "phone": phone,
         "grade": grade,
         "school_id": school_id,
-        "language": language,
+        "language": language_name,
         "status": "active",
         **({"dob": dob} if dob else {}),
     })
@@ -38,6 +66,7 @@ def _insert_student(display_name, phone, grade, school_id, language, dob=None):
 
 
 def _insert_learner(student_id, display_name, grade, school_id, language):
+    language_name = _resolve_language(language)
     learner_name = frappe.generate_hash(length=10)
     frappe.db.sql(
         """
@@ -52,7 +81,7 @@ def _insert_learner(student_id, display_name, grade, school_id, language):
              0, 0, 0, 'Level 1',
              NOW(), NOW(), 'Administrator', 'Administrator')
         """,
-        (learner_name, display_name, school_id, language),
+        (learner_name, display_name, school_id, language_name),
     )
     frappe.db.commit()
     return learner_name
