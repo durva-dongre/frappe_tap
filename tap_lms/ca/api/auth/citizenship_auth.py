@@ -172,6 +172,31 @@ def _fetch_profiles_sql(phone, page=1, page_size=50):
     return profiles, has_more
 
 
+def _fetch_mentor_name(mentor_ref, mentor_type):
+    if not mentor_ref or not mentor_type:
+        return None
+    try:
+        if mentor_type == "Teacher":
+            row = frappe.db.sql(
+                "SELECT first_name, last_name FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
+                mentor_ref,
+                as_dict=True,
+            )
+            if not row:
+                return None
+            parts = [row[0].first_name or "", row[0].last_name or ""]
+            return " ".join(p for p in parts if p).strip() or None
+        else:
+            row = frappe.db.sql(
+                "SELECT name1 FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
+                mentor_ref,
+                as_dict=True,
+            )
+            return row[0].name1 if row else None
+    except Exception:
+        return None
+
+
 def _ensure_citizenship_auth(phone, password=None):
     frappe.db.sql(
         """
@@ -282,6 +307,7 @@ def login_with_password(phone=None, password=None):
         "token": _generate_access_token(phone),
         "phone": phone,
         "mentor_type": r.mentor_type,
+        "mentor_name": _fetch_mentor_name(r.mentor, r.mentor_type),
         "profiles": profiles,
         "profiles_has_more": has_more,
     }
@@ -299,7 +325,11 @@ def get_profiles(phone=None):
 
     payload, new_token = _require_access_token_with_refresh(phone)
 
-    row = frappe.db.sql("SELECT mentor_type FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1", phone, as_dict=True)
+    row = frappe.db.sql(
+        "SELECT mentor_type, mentor FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1",
+        phone,
+        as_dict=True,
+    )
     if not row:
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
 
@@ -307,6 +337,7 @@ def get_profiles(phone=None):
     result = {
         "phone": phone,
         "mentor_type": row[0].mentor_type,
+        "mentor_name": _fetch_mentor_name(row[0].mentor, row[0].mentor_type),
         "profiles": profiles,
         "profiles_has_more": has_more,
         "page": page,
@@ -363,12 +394,19 @@ def reset_password(phone=None, password=None):
     update_password(phone, password, doctype="Citizenship Auth", fieldname="password")
     frappe.db.commit()
     profiles, has_more = _fetch_profiles_sql(phone)
-    mentor_type = frappe.db.get_value("Citizenship Auth", phone, "mentor_type")
+    row = frappe.db.sql(
+        "SELECT mentor_type, mentor FROM \"tabCitizenship Auth\" WHERE phone=%s LIMIT 1",
+        phone,
+        as_dict=True,
+    )
+    mentor_type = row[0].mentor_type if row else None
+    mentor_name = _fetch_mentor_name(row[0].mentor, mentor_type) if row else None
     return {
         "success": True,
         "token": _generate_access_token(phone),
         "phone": phone,
         "mentor_type": mentor_type,
+        "mentor_name": mentor_name,
         "profiles": profiles,
         "profiles_has_more": has_more,
     }
