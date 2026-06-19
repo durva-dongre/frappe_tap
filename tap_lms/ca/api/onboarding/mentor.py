@@ -56,9 +56,10 @@ def _get_mentor_school_geo(mentor_ref, mentor_type):
 
 
 @frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True)
 def create_mentor_profile(
     display_name=None, mentor_type=None, avatar=None,
-    password=None,
+    password=None, admin_code=None,
 ):
     fd = frappe.form_dict
     display_name = display_name or fd.get("display_name")
@@ -66,6 +67,7 @@ def create_mentor_profile(
     mentor_type = mentor_type or fd.get("mentor_type")
     avatar = avatar or fd.get("avatar", "1")
     password = password or fd.get("password")
+    admin_code = admin_code or fd.get("admin_code")
 
     from tap_lms.ca.api.auth.citizenship_auth import _bearer_token
     token = _bearer_token()
@@ -108,10 +110,11 @@ def create_mentor_profile(
     frappe.db.sql(
         """
         UPDATE "tabCitizenship Auth"
-        SET mentor_type=%s, mentor=%s, mentor_avatar=%s, modified=NOW()
+        SET mentor_type=%s, mentor=%s, mentor_avatar=%s,
+            admin_code=COALESCE(%s, admin_code), modified=NOW()
         WHERE phone=%s
         """,
-        (mentor_type, mentor_ref, avatar, phone),
+        (mentor_type, mentor_ref, avatar, admin_code, phone),
     )
     frappe.db.commit()
 
@@ -123,7 +126,6 @@ def create_mentor_profile(
         "profiles": [],
         "profiles_has_more": False,
     }
-
 
 @frappe.whitelist(allow_guest=True)
 def get_class_roster(phone=None, grade=None, page=1, page_size=50):
