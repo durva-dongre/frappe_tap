@@ -2,7 +2,6 @@ import frappe
 import json
 from datetime import date, datetime
 
-MAX_XP_PER_CALL = 25
 XP_QUEUE_KEY = "ca:xp_queue"
 XP_QUEUE_MAX_SIZE = 500000
 XP_FLUSH_LOCK_KEY = "ca:xp_flush:running"
@@ -71,14 +70,6 @@ def _update_streak(learner_id: str):
                             THEN streak + 1
                             ELSE 1
                         END,
-               longest_streak = GREATEST(
-                                    longest_streak,
-                                    CASE
-                                        WHEN last_activity_date = CURRENT_DATE - INTERVAL '1 day'
-                                        THEN streak + 1
-                                        ELSE 1
-                                    END
-                                ),
                last_activity_date = CURRENT_DATE
          WHERE name = %s
            AND (last_activity_date IS NULL OR last_activity_date < CURRENT_DATE)
@@ -240,7 +231,7 @@ def add_xp_and_streak(learner_id=None, xp=None):
     if not learner_id:
         frappe.throw("learner_id is required", frappe.ValidationError)
 
-    xp = min(int(xp or 10), MAX_XP_PER_CALL)
+    xp = int(xp or 10)
     if xp <= 0:
         frappe.throw("xp must be positive", frappe.ValidationError)
 
