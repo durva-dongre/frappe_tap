@@ -26,40 +26,48 @@ def _require_mentor(phone):
     return row[0]
 
 
+def _fetch_school_geo(school_id):
+    if not school_id:
+        return None, None
+    row = frappe.db.sql(
+        "SELECT district, state FROM \"tabSchool\" WHERE name=%s LIMIT 1",
+        school_id,
+        as_dict=True,
+    )
+    if not row:
+        return None, None
+    return row[0].district, row[0].state
+
+
 def _get_mentor_school_geo(mentor_ref, mentor_type):
-    if mentor_type == "Teacher":
-        row = frappe.db.sql(
-            "SELECT school_id AS school FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
-            mentor_ref,
-            as_dict=True,
-        )
-        if not row or not row[0].school:
-            return None, None
-        school_name = row[0].school
-        geo = frappe.db.sql(
-            "SELECT district, state FROM \"tabSchool\" WHERE name=%s LIMIT 1",
-            school_name,
-            as_dict=True,
-        )
-        if not geo:
-            return None, None
-        return geo[0].district, geo[0].state
-    else:
-        row = frappe.db.sql(
-            "SELECT state, district FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
-            mentor_ref,
-            as_dict=True,
-        )
-        if not row:
-            return None, None
-        return row[0].district, row[0].state
+    table = "tabTeacher" if mentor_type == "Teacher" else "tabGuardian"
+    row = frappe.db.sql(
+        f'SELECT district, state FROM "{table}" WHERE name=%s LIMIT 1',
+        mentor_ref,
+        as_dict=True,
+    )
+    if not row:
+        return None, None
+    return row[0].district, row[0].state
 
 
-@frappe.whitelist(allow_guest=True)
+def _mentor_school_context(mentor_ref, mentor_type):
+    if mentor_type != "Teacher":
+        return {}
+    row = frappe.db.sql(
+        "SELECT school_id, district, state FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
+        mentor_ref,
+        as_dict=True,
+    )
+    if not row:
+        return {}
+    return {"school_id": row[0].school_id, "district": row[0].district, "state": row[0].state}
+
+
 @frappe.whitelist(allow_guest=True)
 def create_mentor_profile(
     display_name=None, mentor_type=None, avatar=None,
-    password=None, admin_code=None,
+    password=None, admin_code=None, school_id=None,
 ):
     fd = frappe.form_dict
     display_name = display_name or fd.get("display_name")
@@ -68,6 +76,7 @@ def create_mentor_profile(
     avatar = avatar or fd.get("avatar", "1")
     password = password or fd.get("password")
     admin_code = admin_code or fd.get("admin_code")
+    school_id = school_id or fd.get("school_id")
 
     from tap_lms.ca.api.auth.citizenship_auth import _bearer_token
     token = _bearer_token()
@@ -84,14 +93,20 @@ def create_mentor_profile(
         frappe.throw("password must be at least 6 characters", frappe.ValidationError)
     if not display_name:
         frappe.throw("display_name is required", frappe.ValidationError)
+    if mentor_type == "Teacher" and not school_id:
+        frappe.throw("school_id is required", frappe.ValidationError)
 
     _ensure_citizenship_auth(phone, password)
 
     if mentor_type == "Teacher":
+        district, state = _fetch_school_geo(school_id)
         doc_data = {
             "doctype": "Teacher",
             "first_name": display_name,
             "phone_number": phone,
+            "school_id": school_id,
+            "district": district,
+            "state": state,
         }
         if last_name:
             doc_data["last_name"] = last_name
@@ -118,7 +133,7 @@ def create_mentor_profile(
     )
     frappe.db.commit()
 
-    return {
+    result = {
         "success": True,
         "token": _generate_access_token(phone),
         "phone": phone,
@@ -126,6 +141,9 @@ def create_mentor_profile(
         "profiles": [],
         "profiles_has_more": False,
     }
+    result.update(_mentor_school_context(mentor_ref, mentor_type))
+    return result
+
 
 @frappe.whitelist(allow_guest=True)
 def get_class_roster(phone=None, grade=None, page=1, page_size=50):
@@ -136,7 +154,7 @@ def get_class_roster(phone=None, grade=None, page=1, page_size=50):
     page_size = min(int(fd.get("page_size", page_size)), 100)
 
     _require_access_token(phone)
-    _require_mentor(phone)
+    mentor = _require_mentor(phone)
 
     if not grade:
         frappe.throw("grade is required", frappe.ValidationError)
@@ -157,12 +175,14 @@ def get_class_roster(phone=None, grade=None, page=1, page_size=50):
     )
 
     has_more = len(rows) > page_size
-    return {
+    result = {
         "data": rows[:page_size],
         "page": page,
         "page_size": page_size,
         "has_more": has_more,
     }
+    result.update(_mentor_school_context(mentor.mentor, mentor.mentor_type))
+    return result
 
 
 @frappe.whitelist(allow_guest=True)
@@ -198,7 +218,7 @@ def search_students(phone=None, query=None, grade=None, page=1, page_size=20):
     page_size = min(int(fd.get("page_size", page_size)), 100)
 
     _require_access_token(phone)
-    _require_mentor(phone)
+    mentor = _require_mentor(phone)
 
     offset = (page - 1) * page_size
     rows = frappe.db.sql(
@@ -215,12 +235,14 @@ def search_students(phone=None, query=None, grade=None, page=1, page_size=20):
         as_dict=True,
     )
     has_more = len(rows) > page_size
-    return {
+    result = {
         "data": rows[:page_size],
         "page": page,
         "page_size": page_size,
         "has_more": has_more,
     }
+    result.update(_mentor_school_context(mentor.mentor, mentor.mentor_type))
+    return result
 
 
 @frappe.whitelist(allow_guest=True)
@@ -261,7 +283,7 @@ def get_all_students(phone=None, grade=None, page=1, page_size=50):
     page_size = min(int(fd.get("page_size", page_size)), 50)
 
     _require_access_token(phone)
-    _require_mentor(phone)
+    mentor = _require_mentor(phone)
 
     offset = (page - 1) * page_size
 
@@ -278,12 +300,14 @@ def get_all_students(phone=None, grade=None, page=1, page_size=50):
         as_dict=True,
     )
     has_more = len(rows) > page_size
-    return {
+    result = {
         "data": rows[:page_size],
         "page": page,
         "page_size": page_size,
         "has_more": has_more,
     }
+    result.update(_mentor_school_context(mentor.mentor, mentor.mentor_type))
+    return result
 
 
 @frappe.whitelist(allow_guest=True)

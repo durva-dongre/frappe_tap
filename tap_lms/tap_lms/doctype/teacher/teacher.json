@@ -12,6 +12,8 @@
   "first_name",
   "last_name",
   "school_id",
+  "district",
+  "state",
   "teacher_batch",
   "gender",
   "language",
@@ -68,6 +70,18 @@
    "options": "School"
   },
   {
+   "fieldname": "district",
+   "fieldtype": "Link",
+   "label": "District",
+   "options": "District"
+  },
+  {
+   "fieldname": "state",
+   "fieldtype": "Link",
+   "label": "State",
+   "options": "State"
+  },
+  {
    "fieldname": "course_level",
    "fieldtype": "Link",
    "label": "Course Level ",
@@ -99,7 +113,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-10 00:00:00.000000",
+ "modified": "2026-06-20 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "TAP LMS",
  "name": "Teacher",

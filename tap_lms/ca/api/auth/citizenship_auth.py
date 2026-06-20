@@ -172,29 +172,40 @@ def _fetch_profiles_sql(phone, page=1, page_size=50):
     return profiles, has_more
 
 
-def _fetch_mentor_name(mentor_ref, mentor_type):
+def _fetch_mentor_details(mentor_ref, mentor_type):
     if not mentor_ref or not mentor_type:
-        return None
+        return {"mentor_name": None}
     try:
         if mentor_type == "Teacher":
             row = frappe.db.sql(
-                "SELECT first_name, last_name FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
+                "SELECT first_name, last_name, school_id, district, state FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
                 mentor_ref,
                 as_dict=True,
             )
             if not row:
-                return None
+                return {"mentor_name": None}
             parts = [row[0].first_name or "", row[0].last_name or ""]
-            return " ".join(p for p in parts if p).strip() or None
-        else:
-            row = frappe.db.sql(
-                "SELECT name1 FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
-                mentor_ref,
-                as_dict=True,
-            )
-            return row[0].name1 if row else None
+            name = " ".join(p for p in parts if p).strip() or None
+            return {
+                "mentor_name": name,
+                "school_id": row[0].school_id,
+                "district": row[0].district,
+                "state": row[0].state,
+            }
+        row = frappe.db.sql(
+            "SELECT name1, district, state FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
+            mentor_ref,
+            as_dict=True,
+        )
+        if not row:
+            return {"mentor_name": None}
+        return {
+            "mentor_name": row[0].name1,
+            "district": row[0].district,
+            "state": row[0].state,
+        }
     except Exception:
-        return None
+        return {"mentor_name": None}
 
 
 def _ensure_citizenship_auth(phone, password=None):
@@ -307,10 +318,10 @@ def login_with_password(phone=None, password=None):
         "token": _generate_access_token(phone),
         "phone": phone,
         "mentor_type": r.mentor_type,
-        "mentor_name": _fetch_mentor_name(r.mentor, r.mentor_type),
         "profiles": profiles,
         "profiles_has_more": has_more,
     }
+    result.update(_fetch_mentor_details(r.mentor, r.mentor_type))
     if r.mentor:
         result["admin_code"] = r.admin_code
     return result
@@ -337,12 +348,12 @@ def get_profiles(phone=None):
     result = {
         "phone": phone,
         "mentor_type": row[0].mentor_type,
-        "mentor_name": _fetch_mentor_name(row[0].mentor, row[0].mentor_type),
         "profiles": profiles,
         "profiles_has_more": has_more,
         "page": page,
         "page_size": page_size,
     }
+    result.update(_fetch_mentor_details(row[0].mentor, row[0].mentor_type))
     if new_token:
         result["token"] = new_token
     return result
@@ -400,13 +411,14 @@ def reset_password(phone=None, password=None):
         as_dict=True,
     )
     mentor_type = row[0].mentor_type if row else None
-    mentor_name = _fetch_mentor_name(row[0].mentor, mentor_type) if row else None
-    return {
+    mentor_ref = row[0].mentor if row else None
+    result = {
         "success": True,
         "token": _generate_access_token(phone),
         "phone": phone,
         "mentor_type": mentor_type,
-        "mentor_name": mentor_name,
         "profiles": profiles,
         "profiles_has_more": has_more,
     }
+    result.update(_fetch_mentor_details(mentor_ref, mentor_type))
+    return result
