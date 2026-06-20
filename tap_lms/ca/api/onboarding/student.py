@@ -23,16 +23,6 @@ def _require_registration_token():
 
 
 def _resolve_language(language_code):
-    """
-    The Flutter app and worker pass short codes (en, hi, mr, kn, pa, hi-en),
-    but TAP Language is autonamed by field:language_name, so the Link field's
-    `name` is actually the language_name ("English", "Hindi", ...), not the
-    code. Resolve code -> name here so Link validation passes when inserting
-    Student / Citizenship Learner docs.
-
-    Falls back to treating the input as already-a-name if no code match is
-    found, for backward compatibility with any direct name usage.
-    """
     if not language_code:
         frappe.throw("language is required", frappe.ValidationError)
 
@@ -42,7 +32,6 @@ def _resolve_language(language_code):
     if name:
         return name
 
-    # Already a valid TAP Language name (e.g. "English")?
     if frappe.db.exists("TAP Language", language_code):
         return language_code
 
@@ -134,7 +123,7 @@ def _sync_leaderboard(student_id, display_name, school_id):
 @frappe.whitelist(allow_guest=True)
 def create_first_profile(
     display_name=None, grade=None, school_id=None,
-    language=None, avatar=None, password=None, dob=None,
+    language=None, avatar=None, password=None, dob=None, roll_number=None,
 ):
     fd = frappe.form_dict
     display_name = display_name or fd.get("display_name")
@@ -144,6 +133,7 @@ def create_first_profile(
     avatar = avatar or fd.get("avatar", "1")
     password = password or fd.get("password")
     dob = dob or fd.get("dob")
+    roll_number = roll_number or fd.get("roll_number")
 
     payload = _require_registration_token()
     phone = payload["phone"]
@@ -166,7 +156,7 @@ def create_first_profile(
 
     student_id = _insert_student(display_name, phone, grade, school_id, language, dob)
     learner_id = _insert_learner(student_id, display_name, grade, school_id, language)
-    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar)
+    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar, roll_number)
     _sync_leaderboard_async(student_id, display_name, school_id)
 
     profiles, has_more = _fetch_profiles_sql(phone)
@@ -176,7 +166,7 @@ def create_first_profile(
 @frappe.whitelist(allow_guest=True)
 def add_profile(
     phone=None, display_name=None, grade=None, school_id=None,
-    language=None, avatar=None, dob=None,
+    language=None, avatar=None, dob=None, roll_number=None,
 ):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
@@ -186,6 +176,7 @@ def add_profile(
     language = language or fd.get("language")
     avatar = avatar or fd.get("avatar", "1")
     dob = dob or fd.get("dob")
+    roll_number = roll_number or fd.get("roll_number")
 
     _require_access_token(phone)
 
@@ -201,7 +192,7 @@ def add_profile(
 
     student_id = _insert_student(display_name, phone, grade, school_id, language, dob)
     learner_id = _insert_learner(student_id, display_name, grade, school_id, language)
-    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar)
+    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar, roll_number)
     _sync_leaderboard_async(student_id, display_name, school_id)
 
     profiles, has_more = _fetch_profiles_sql(phone)

@@ -6,6 +6,7 @@ from tap_lms.ca.api.auth.citizenship_auth import (
     _require_access_token_with_refresh,
     _fetch_profiles_sql,
     _ensure_citizenship_auth,
+    _bearer_token,
 )
 from tap_lms.ca.api.onboarding.student import (
     _insert_student,
@@ -91,7 +92,6 @@ def create_mentor_profile(
     state = state or fd.get("state")
     district = district or fd.get("district")
 
-    from tap_lms.ca.api.auth.citizenship_auth import _bearer_token
     token = _bearer_token()
     if not token:
         frappe.throw("Missing registration token", frappe.AuthenticationError)
@@ -270,7 +270,7 @@ def search_students(phone=None, query=None, grade=None, page=1, page_size=20):
 @frappe.whitelist(allow_guest=True)
 def add_student_profile(
     phone=None, display_name=None, grade=None, school_id=None,
-    language=None, avatar=None, dob=None,
+    language=None, avatar=None, dob=None, roll_number=None,
 ):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
@@ -280,6 +280,7 @@ def add_student_profile(
     language = language or fd.get("language")
     avatar = avatar or fd.get("avatar", "1")
     dob = dob or fd.get("dob")
+    roll_number = roll_number or fd.get("roll_number")
 
     _require_access_token(phone)
     _require_mentor(phone)
@@ -289,7 +290,7 @@ def add_student_profile(
 
     student_id = _insert_student(display_name, phone, grade, school_id, language, dob)
     learner_id = _insert_learner(student_id, display_name, grade, school_id, language)
-    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar)
+    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar, roll_number)
     _sync_leaderboard_async(student_id, display_name, school_id)
 
     profiles, has_more = _fetch_profiles_sql(phone)

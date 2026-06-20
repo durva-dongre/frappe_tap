@@ -58,7 +58,7 @@ def get_school_meta(school_id=None):
 def finalize_join(
     phone=None, display_name=None, grade=None,
     school_id=None, language=None, avatar=None,
-    password=None, dob=None,
+    password=None, dob=None, roll_number=None,
 ):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
@@ -69,6 +69,7 @@ def finalize_join(
     avatar = avatar or fd.get("avatar", "1")
     password = password or fd.get("password")
     dob = dob or fd.get("dob")
+    roll_number = roll_number or fd.get("roll_number")
 
     if not phone or not display_name or not grade or not school_id or not language:
         frappe.throw("phone, display_name, grade, school_id, language are required", frappe.ValidationError)
@@ -79,7 +80,7 @@ def finalize_join(
 
     student_id = _insert_student(display_name, phone, grade, school_id, language, dob)
     learner_id = _insert_learner(student_id, display_name, grade, school_id, language)
-    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar)
+    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar, roll_number)
     _sync_leaderboard_async(student_id, display_name, school_id)
 
     profiles, has_more = _fetch_profiles_sql(phone)
