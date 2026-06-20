@@ -11,6 +11,7 @@
  "field_order": [
   "name1",
   "phone",
+  "gender",
   "state",
   "district"
  ],
@@ -31,6 +32,12 @@
    "unique": 1
   },
   {
+   "fieldname": "gender",
+   "fieldtype": "Select",
+   "label": "Gender",
+   "options": "Select\nMale\nFemale\nOthers\nNot Available"
+  },
+  {
    "fieldname": "state",
    "fieldtype": "Link",
    "label": "State",
@@ -45,7 +52,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-06-10 00:00:00.000000",
+ "modified": "2026-06-20 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Guardian",

@@ -52,22 +52,32 @@ def _get_mentor_school_geo(mentor_ref, mentor_type):
 
 
 def _mentor_school_context(mentor_ref, mentor_type):
-    if mentor_type != "Teacher":
-        return {}
-    row = frappe.db.sql(
-        "SELECT school_id, district, state FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
-        mentor_ref,
-        as_dict=True,
-    )
-    if not row:
-        return {}
-    return {"school_id": row[0].school_id, "district": row[0].district, "state": row[0].state}
+    if mentor_type == "Teacher":
+        row = frappe.db.sql(
+            "SELECT school_id, district, state FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
+            mentor_ref,
+            as_dict=True,
+        )
+        if not row:
+            return {}
+        return {"school_id": row[0].school_id, "district": row[0].district, "state": row[0].state}
+    if mentor_type == "Guardian":
+        row = frappe.db.sql(
+            "SELECT district, state FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
+            mentor_ref,
+            as_dict=True,
+        )
+        if not row:
+            return {}
+        return {"district": row[0].district, "state": row[0].state}
+    return {}
 
 
 @frappe.whitelist(allow_guest=True)
 def create_mentor_profile(
     display_name=None, mentor_type=None, avatar=None,
     password=None, admin_code=None, school_id=None,
+    gender=None, state=None, district=None,
 ):
     fd = frappe.form_dict
     display_name = display_name or fd.get("display_name")
@@ -77,6 +87,9 @@ def create_mentor_profile(
     password = password or fd.get("password")
     admin_code = admin_code or fd.get("admin_code")
     school_id = school_id or fd.get("school_id")
+    gender = gender or fd.get("gender")
+    state = state or fd.get("state")
+    district = district or fd.get("district")
 
     from tap_lms.ca.api.auth.citizenship_auth import _bearer_token
     token = _bearer_token()
@@ -95,30 +108,39 @@ def create_mentor_profile(
         frappe.throw("display_name is required", frappe.ValidationError)
     if mentor_type == "Teacher" and not school_id:
         frappe.throw("school_id is required", frappe.ValidationError)
+    if mentor_type == "Guardian" and (not state or not district):
+        frappe.throw("state and district are required", frappe.ValidationError)
 
     _ensure_citizenship_auth(phone, password)
 
     if mentor_type == "Teacher":
-        district, state = _fetch_school_geo(school_id)
+        teacher_district, teacher_state = _fetch_school_geo(school_id)
         doc_data = {
             "doctype": "Teacher",
             "first_name": display_name,
             "phone_number": phone,
             "school_id": school_id,
-            "district": district,
-            "state": state,
+            "district": teacher_district,
+            "state": teacher_state,
         }
         if last_name:
             doc_data["last_name"] = last_name
+        if gender:
+            doc_data["gender"] = gender
         doc = frappe.get_doc(doc_data)
         doc.insert(ignore_permissions=True)
         mentor_ref = doc.name
     else:
-        doc = frappe.get_doc({
+        doc_data = {
             "doctype": "Guardian",
             "name1": display_name,
             "phone": phone,
-        })
+            "state": state,
+            "district": district,
+        }
+        if gender:
+            doc_data["gender"] = gender
+        doc = frappe.get_doc(doc_data)
         doc.insert(ignore_permissions=True)
         mentor_ref = doc.name
 
