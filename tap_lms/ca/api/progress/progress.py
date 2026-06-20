@@ -4,7 +4,6 @@ from .learner import (
     _update_streak,
     _queue_xp,
     _parse_optional,
-    MAX_XP_PER_CALL,
 )
 
 
@@ -46,7 +45,7 @@ def update_content_progress(
 
     video_index = int(video_index) if has_video else None
     quiz_index = int(quiz_index) if has_quiz else None
-    xp = min(int(xp or 10), MAX_XP_PER_CALL)
+    xp = int(xp or 10)
     fetch_next_flag = str(fetch_next).lower() in ("true", "1", "yes") if fetch_next else False
 
     optional = _parse_optional(fields)
