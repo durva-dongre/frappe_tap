@@ -43,8 +43,8 @@ def update_content_progress(
     if not has_video and not has_quiz:
         frappe.throw("At least one of video_index or quiz_index is required", frappe.ValidationError)
 
-    video_index = int(video_index) if has_video else None
-    quiz_index = int(quiz_index) if has_quiz else None
+    video_count = int(video_index) if has_video else None
+    quiz_count = int(quiz_index) if has_quiz else None
     xp = int(xp or 10)
     fetch_next_flag = str(fetch_next).lower() in ("true", "1", "yes") if fetch_next else False
 
@@ -58,12 +58,12 @@ def update_content_progress(
     current_videos = enrollment.videos_completed or 0
     current_quizzes = enrollment.quizzes_completed or 0
 
-    video_already_done = has_video and video_index <= current_videos
-    quiz_already_done = has_quiz and quiz_index <= current_quizzes
+    new_videos = max(current_videos, video_count) if has_video else current_videos
+    new_quizzes = max(current_quizzes, quiz_count) if has_quiz else current_quizzes
 
-    new_videos = video_index if (has_video and not video_already_done) else current_videos
-    new_quizzes = quiz_index if (has_quiz and not quiz_already_done) else current_quizzes
-    needs_update = (has_video and not video_already_done) or (has_quiz and not quiz_already_done)
+    video_advanced = has_video and new_videos > current_videos
+    quiz_advanced = has_quiz and new_quizzes > current_quizzes
+    needs_update = video_advanced or quiz_advanced
 
     if needs_update:
         frappe.db.sql(
@@ -82,8 +82,8 @@ def update_content_progress(
 
     result = {
         "updated": needs_update,
-        "video_updated": has_video and not video_already_done,
-        "quiz_updated": has_quiz and not quiz_already_done,
+        "video_updated": video_advanced,
+        "quiz_updated": quiz_advanced,
         "videos_completed": new_videos,
         "quizzes_completed": new_quizzes,
         **_learner_xp_state(learner_id, include_daily=include_daily),

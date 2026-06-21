@@ -82,8 +82,7 @@ def _mentor_school_context(mentor_ref, mentor_type):
             "language": row[0].language,
         }
     return {}
-
-
+ 
 @frappe.whitelist(allow_guest=True)
 def create_mentor_profile(
     display_name=None, mentor_type=None, avatar=None,
@@ -119,6 +118,8 @@ def create_mentor_profile(
         frappe.throw("display_name is required", frappe.ValidationError)
     if mentor_type == "Teacher" and not school_id:
         frappe.throw("school_id is required", frappe.ValidationError)
+    if mentor_type == "Teacher" and not language:
+        frappe.throw("language is required", frappe.ValidationError)
     if mentor_type == "Guardian" and (not state or not district):
         frappe.throw("state and district are required", frappe.ValidationError)
     if mentor_type == "Guardian" and not language:
@@ -137,13 +138,12 @@ def create_mentor_profile(
             "school_id": school_id,
             "district": teacher_district,
             "state": teacher_state,
+            "language": language_name,
         }
         if last_name:
             doc_data["last_name"] = last_name
         if gender:
             doc_data["gender"] = gender
-        if language_name:
-            doc_data["language"] = language_name
         doc = frappe.get_doc(doc_data)
         doc.insert(ignore_permissions=True)
         mentor_ref = doc.name
@@ -183,173 +183,6 @@ def create_mentor_profile(
     }
     result.update(_mentor_school_context(mentor_ref, mentor_type))
     return result
-
-
-@frappe.whitelist(allow_guest=True)
-def get_class_roster(phone=None, grade=None, page=1, page_size=50):
-    fd = frappe.form_dict
-    phone = phone or fd.get("phone", "")
-    grade = grade or fd.get("grade")
-    page = int(fd.get("page", page))
-    page_size = min(int(fd.get("page_size", page_size)), 100)
-
-    _require_access_token(phone)
-    mentor = _require_mentor(phone)
-
-    if not grade:
-        frappe.throw("grade is required", frappe.ValidationError)
-
-    offset = (page - 1) * page_size
-
-    rows = frappe.db.sql(
-        """
-        SELECT citizenship_learner, student_name,
-               roll_number, grade, avatar
-        FROM "tabCitizenship Auth Profile"
-        WHERE parent=%s AND grade=%s
-        ORDER BY roll_number ASC
-        LIMIT %s OFFSET %s
-        """,
-        (phone, grade, page_size + 1, offset),
-        as_dict=True,
-    )
-
-    has_more = len(rows) > page_size
-    result = {
-        "data": rows[:page_size],
-        "page": page,
-        "page_size": page_size,
-        "has_more": has_more,
-    }
-    result.update(_mentor_school_context(mentor.mentor, mentor.mentor_type))
-    return result
-
-
-@frappe.whitelist(allow_guest=True)
-def get_student_detail(phone=None, learner_id=None, fields=None):
-    fd = frappe.form_dict
-    phone = phone or fd.get("phone", "")
-    learner_id = learner_id or fd.get("learner_id")
-    fields = fields or fd.get("fields")
-
-    _require_access_token(phone)
-    _require_mentor(phone)
-
-    owns = frappe.db.sql(
-        "SELECT 1 FROM \"tabCitizenship Auth Profile\" WHERE parent=%s AND citizenship_learner=%s LIMIT 1",
-        (phone, learner_id),
-    )
-    if not owns:
-        frappe.throw("Learner not in your roster", frappe.AuthenticationError)
-
-    from tap_lms.ca.api.progress.learner import _learner_xp_state, _parse_optional
-    optional = _parse_optional(fields)
-    include_daily = optional is None or "xp_daily" in optional
-    return _learner_xp_state(learner_id, include_daily=include_daily)
-
-
-@frappe.whitelist(allow_guest=True)
-def search_students(phone=None, query=None, grade=None, page=1, page_size=20):
-    fd = frappe.form_dict
-    phone = phone or fd.get("phone", "")
-    query = query or fd.get("query", "")
-    grade = grade or fd.get("grade")
-    page = int(fd.get("page", page))
-    page_size = min(int(fd.get("page_size", page_size)), 100)
-
-    _require_access_token(phone)
-    mentor = _require_mentor(phone)
-
-    offset = (page - 1) * page_size
-    rows = frappe.db.sql(
-        """
-        SELECT citizenship_learner, student_name, roll_number, grade, avatar
-        FROM "tabCitizenship Auth Profile"
-        WHERE parent=%s
-          AND student_name ILIKE %s
-          AND (%s IS NULL OR grade=%s)
-        ORDER BY student_name ASC
-        LIMIT %s OFFSET %s
-        """,
-        (phone, f"%{query}%", grade, grade, page_size + 1, offset),
-        as_dict=True,
-    )
-    has_more = len(rows) > page_size
-    result = {
-        "data": rows[:page_size],
-        "page": page,
-        "page_size": page_size,
-        "has_more": has_more,
-    }
-    result.update(_mentor_school_context(mentor.mentor, mentor.mentor_type))
-    return result
-
-
-@frappe.whitelist(allow_guest=True)
-def add_student_profile(
-    phone=None, display_name=None, grade=None, school_id=None,
-    language=None, avatar=None, dob=None, roll_number=None,
-):
-    fd = frappe.form_dict
-    phone = phone or fd.get("phone", "")
-    display_name = display_name or fd.get("display_name")
-    grade = grade or fd.get("grade")
-    school_id = school_id or fd.get("school_id")
-    language = language or fd.get("language")
-    avatar = avatar or fd.get("avatar", "1")
-    dob = dob or fd.get("dob")
-    roll_number = roll_number or fd.get("roll_number")
-
-    _require_access_token(phone)
-    _require_mentor(phone)
-
-    if not display_name or not grade or not school_id or not language:
-        frappe.throw("display_name, grade, school_id, language are required", frappe.ValidationError)
-
-    student_id = _insert_student(display_name, phone, grade, school_id, language, dob)
-    learner_id = _insert_learner(student_id, display_name, grade, school_id, language)
-    _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar, roll_number)
-    _sync_leaderboard_async(student_id, display_name, school_id)
-
-    profiles, has_more = _fetch_profiles_sql(phone)
-    return {"success": True, "phone": phone, "profiles": profiles, "profiles_has_more": has_more}
-
-
-@frappe.whitelist(allow_guest=True)
-def get_all_students(phone=None, grade=None, page=1, page_size=50):
-    fd = frappe.form_dict
-    phone = phone or fd.get("phone", "")
-    grade = grade or fd.get("grade")
-    page = int(fd.get("page", page))
-    page_size = min(int(fd.get("page_size", page_size)), 50)
-
-    _require_access_token(phone)
-    mentor = _require_mentor(phone)
-
-    offset = (page - 1) * page_size
-
-    rows = frappe.db.sql(
-        """
-        SELECT citizenship_learner, student_name, roll_number, grade, avatar
-        FROM "tabCitizenship Auth Profile"
-        WHERE parent=%s
-          AND (%s IS NULL OR grade=%s)
-        ORDER BY idx ASC
-        LIMIT %s OFFSET %s
-        """,
-        (phone, grade, grade, page_size + 1, offset),
-        as_dict=True,
-    )
-    has_more = len(rows) > page_size
-    result = {
-        "data": rows[:page_size],
-        "page": page,
-        "page_size": page_size,
-        "has_more": has_more,
-    }
-    result.update(_mentor_school_context(mentor.mentor, mentor.mentor_type))
-    return result
-
 
 @frappe.whitelist(allow_guest=True)
 def get_student_profiles_bulk(phone=None, learner_ids=None):

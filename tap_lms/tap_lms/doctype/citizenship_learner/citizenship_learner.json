@@ -11,6 +11,7 @@
     "student_name",
     "language",
     "district",
+    "state",
     "school",
     "birthdate",
     "xp",
@@ -50,6 +51,12 @@
       "fieldtype": "Link",
       "label": "District",
       "options": "District"
+    },
+    {
+      "fieldname": "state",
+      "fieldtype": "Link",
+      "label": "State",
+      "options": "State"
     },
     {
       "fieldname": "school",
@@ -169,7 +176,7 @@
   ],
   "index_web_pages_for_search": 0,
   "links": [],
-  "modified": "2026-06-10 00:00:00.000000",
+  "modified": "2026-06-21 00:00:00.000000",
   "modified_by": "Administrator",
   "module": "Tap Lms",
   "name": "Citizenship Learner",

@@ -38,8 +38,22 @@ def _resolve_language(language_code):
     frappe.throw(f"Unsupported language: {language_code}", frappe.ValidationError)
 
 
+def _fetch_school_geo(school_id):
+    if not school_id:
+        return None, None
+    row = frappe.db.sql(
+        "SELECT district, state FROM \"tabSchool\" WHERE name=%s LIMIT 1",
+        school_id,
+        as_dict=True,
+    )
+    if not row:
+        return None, None
+    return row[0].district, row[0].state
+
+
 def _insert_student(display_name, phone, grade, school_id, language, dob=None):
     language_name = _resolve_language(language)
+    district, state = _fetch_school_geo(school_id)
     doc = frappe.get_doc({
         "doctype": "Student",
         "name1": display_name,
@@ -48,7 +62,9 @@ def _insert_student(display_name, phone, grade, school_id, language, dob=None):
         "school_id": school_id,
         "language": language_name,
         "status": "active",
-        **({"dob": dob} if dob else {}),
+        "district": district,
+        "state": state,
+        "dob": dob,
     })
     doc.insert(ignore_permissions=True)
     return doc.name
@@ -56,21 +72,22 @@ def _insert_student(display_name, phone, grade, school_id, language, dob=None):
 
 def _insert_learner(student_id, display_name, grade, school_id, language):
     language_name = _resolve_language(language)
+    district, state = _fetch_school_geo(school_id)
     learner_name = frappe.generate_hash(length=10)
     frappe.db.sql(
         """
         INSERT INTO "tabCitizenship Learner"
-            (name, student_name, school, language,
+            (name, student_name, school, language, district, state,
              xp, xp_d0, xp_d1, xp_d2, xp_d3, xp_d4, xp_d5, xp_d6,
              weekly_xp, streak, longest_streak, level,
              creation, modified, modified_by, owner)
         VALUES
-            (%s, %s, %s, %s,
+            (%s, %s, %s, %s, %s, %s,
              0, 0, 0, 0, 0, 0, 0, 0,
              0, 0, 0, 'Level 1',
              NOW(), NOW(), 'Administrator', 'Administrator')
         """,
-        (learner_name, display_name, school_id, language_name),
+        (learner_name, display_name, school_id, language_name, district, state),
     )
     frappe.db.commit()
     return learner_name
@@ -208,7 +225,8 @@ def select_profile(phone=None, learner_id=None):
 
     row = frappe.db.sql(
         """
-        SELECT cap.citizenship_learner, cap.student_name, cap.grade, cap.avatar, cl.language
+        SELECT cap.citizenship_learner, cap.student_name, cap.grade, cap.avatar, cl.language,
+               cl.district AS district_id, cl.state AS state_id, cl.school AS school_id
         FROM "tabCitizenship Auth Profile" cap
         LEFT JOIN "tabCitizenship Learner" cl ON cl.name = cap.citizenship_learner
         WHERE cap.parent=%s AND cap.citizenship_learner=%s

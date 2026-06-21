@@ -11,6 +11,7 @@ INVITE_TOKEN_EXPIRY_SECONDS = 604800
 ACCESS_TOKEN_EXPIRY_SECONDS = 60 * 60 * 24 * 90
 HARDCODED_OTP = "000000"
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
+LOGIN_PROFILES_PAGE_SIZE = 10
 
 
 def _get_jwt_secret():
@@ -178,7 +179,7 @@ def _fetch_mentor_details(mentor_ref, mentor_type):
     try:
         if mentor_type == "Teacher":
             row = frappe.db.sql(
-                "SELECT first_name, last_name, school_id, district, state FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
+                "SELECT first_name, last_name, school_id, district, state, language FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
                 mentor_ref,
                 as_dict=True,
             )
@@ -189,11 +190,12 @@ def _fetch_mentor_details(mentor_ref, mentor_type):
             return {
                 "mentor_name": name,
                 "school_id": row[0].school_id,
-                "district": row[0].district,
-                "state": row[0].state,
+                "district_id": row[0].district,
+                "state_id": row[0].state,
+                "language": row[0].language,
             }
         row = frappe.db.sql(
-            "SELECT name1, district, state FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
+            "SELECT name1, district, state, language FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
             mentor_ref,
             as_dict=True,
         )
@@ -201,8 +203,9 @@ def _fetch_mentor_details(mentor_ref, mentor_type):
             return {"mentor_name": None}
         return {
             "mentor_name": row[0].name1,
-            "district": row[0].district,
-            "state": row[0].state,
+            "district_id": row[0].district,
+            "state_id": row[0].state,
+            "language": row[0].language,
         }
     except Exception:
         return {"mentor_name": None}
@@ -312,7 +315,7 @@ def login_with_password(phone=None, password=None):
         return {"success": False, "error": "invalid_credentials"}
 
     r = row[0]
-    profiles, has_more = _fetch_profiles_sql(phone)
+    profiles, has_more = _fetch_profiles_sql(phone, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE)
     result = {
         "success": True,
         "token": _generate_access_token(phone),
@@ -320,6 +323,8 @@ def login_with_password(phone=None, password=None):
         "mentor_type": r.mentor_type,
         "profiles": profiles,
         "profiles_has_more": has_more,
+        "page": 1,
+        "page_size": LOGIN_PROFILES_PAGE_SIZE,
     }
     result.update(_fetch_mentor_details(r.mentor, r.mentor_type))
     if r.mentor:
@@ -357,6 +362,63 @@ def get_profiles(phone=None):
     if new_token:
         result["token"] = new_token
     return result
+
+
+@frappe.whitelist(allow_guest=True)
+def search_profiles(phone=None):
+    phone = phone or frappe.form_dict.get("phone", "")
+    fd = frappe.form_dict
+    grade = fd.get("grade")
+    roll_number = fd.get("roll_number")
+    query = fd.get("query")
+    page = int(fd.get("page", 1))
+    page_size = min(int(fd.get("page_size", 20)), 50)
+    offset = (page - 1) * page_size
+
+    _require_access_token(phone)
+
+    conditions = ["parent = %s"]
+    params = [phone]
+    if grade:
+        conditions.append("grade = %s")
+        params.append(grade)
+    if roll_number:
+        conditions.append("roll_number = %s")
+        params.append(roll_number)
+    if query:
+        conditions.append("student_name LIKE %s")
+        params.append(f"%{query}%")
+
+    where_clause = " AND ".join(conditions)
+    rows = frappe.db.sql(
+        f"""
+        SELECT citizenship_learner, student_name, roll_number, grade, avatar, student
+        FROM "tabCitizenship Auth Profile"
+        WHERE {where_clause}
+        ORDER BY idx ASC
+        LIMIT %s OFFSET %s
+        """,
+        (*params, page_size + 1, offset),
+        as_dict=True,
+    )
+    has_more = len(rows) > page_size
+    profiles = [
+        {
+            "learner_id": r.citizenship_learner,
+            "student_name": r.student_name,
+            "grade": r.grade,
+            "avatar": r.avatar,
+            "roll_number": r.roll_number,
+        }
+        for r in rows[:page_size]
+    ]
+    return {
+        "phone": phone,
+        "profiles": profiles,
+        "profiles_has_more": has_more,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 @frappe.whitelist(allow_guest=True)
