@@ -70,6 +70,14 @@ def _update_streak(learner_id: str):
                             THEN streak + 1
                             ELSE 1
                         END,
+               longest_streak = GREATEST(
+                                    longest_streak,
+                                    CASE
+                                        WHEN last_activity_date = CURRENT_DATE - INTERVAL '1 day'
+                                        THEN streak + 1
+                                        ELSE 1
+                                    END
+                                ),
                last_activity_date = CURRENT_DATE
          WHERE name = %s
            AND (last_activity_date IS NULL OR last_activity_date < CURRENT_DATE)
@@ -81,8 +89,10 @@ def _update_streak(learner_id: str):
 
 def _queue_xp(learner_id: str, xp: int):
     cache = frappe.cache()
-    if (cache.llen(XP_QUEUE_KEY) or 0) < XP_QUEUE_MAX_SIZE:
-        cache.rpush(XP_QUEUE_KEY, json.dumps({"learner_id": learner_id, "xp": xp}))
+    queue_key = cache.make_key(XP_QUEUE_KEY)
+    current_len = cache.llen(queue_key) or 0
+    if current_len < XP_QUEUE_MAX_SIZE:
+        cache.rpush(queue_key, json.dumps({"learner_id": learner_id, "xp": xp}))
     else:
         frappe.log_error(title="XP Queue Full", message=f"Dropped xp={xp} for learner={learner_id}")
 
@@ -90,13 +100,8 @@ def _queue_xp(learner_id: str, xp: int):
 def flush_xp_queue():
     cache = frappe.cache()
 
-    redis = cache.redis_client
-    acquired = redis.set(
-        cache.make_key(XP_FLUSH_LOCK_KEY),
-        "1",
-        nx=True,
-        ex=XP_FLUSH_LOCK_TTL,
-    )
+    lock_key = cache.make_key(XP_FLUSH_LOCK_KEY)
+    acquired = cache.set(lock_key, "1", nx=True, ex=XP_FLUSH_LOCK_TTL)
     if not acquired:
         return
 
@@ -104,10 +109,10 @@ def flush_xp_queue():
         raw_items = []
         queue_key = cache.make_key(XP_QUEUE_KEY)
         while True:
-            batch = redis.lpop(queue_key, XP_LPOP_BATCH)
-            if not batch:
+            item = cache.lpop(queue_key)
+            if not item:
                 break
-            raw_items.extend(batch)
+            raw_items.append(item)
 
         if not raw_items:
             return
@@ -135,7 +140,7 @@ def flush_xp_queue():
             )
         frappe.db.commit()
     finally:
-        redis.delete(cache.make_key(XP_FLUSH_LOCK_KEY))
+        cache.delete(lock_key)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -214,7 +219,7 @@ def enroll_course(learner_id=None, course=None):
              %s, CURRENT_DATE, 'active',
              0, 0,
              NOW(), NOW(), 'Administrator', 'Administrator')
-        ON CONFLICT (parent, course) DO NOTHING
+        ON CONFLICT DO NOTHING
         """,
         (frappe.generate_hash(length=10), learner_id, course),
     )
