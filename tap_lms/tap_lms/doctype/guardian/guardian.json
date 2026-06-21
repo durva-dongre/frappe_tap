@@ -12,6 +12,7 @@
   "name1",
   "phone",
   "gender",
+  "language",
   "state",
   "district"
  ],
@@ -38,6 +39,12 @@
    "options": "Select\nMale\nFemale\nOthers\nNot Available"
   },
   {
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "label": "Language",
+   "options": "TAP Language"
+  },
+  {
    "fieldname": "state",
    "fieldtype": "Link",
    "label": "State",
@@ -52,7 +59,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-06-20 00:00:00.000000",
+ "modified": "2026-06-21 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Guardian",

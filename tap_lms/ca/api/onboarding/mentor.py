@@ -13,6 +13,7 @@ from tap_lms.ca.api.onboarding.student import (
     _insert_learner,
     _append_profile_row,
     _sync_leaderboard_async,
+    _resolve_language,
 )
 
 
@@ -55,22 +56,31 @@ def _get_mentor_school_geo(mentor_ref, mentor_type):
 def _mentor_school_context(mentor_ref, mentor_type):
     if mentor_type == "Teacher":
         row = frappe.db.sql(
-            "SELECT school_id, district, state FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
+            "SELECT school_id, district, state, language FROM \"tabTeacher\" WHERE name=%s LIMIT 1",
             mentor_ref,
             as_dict=True,
         )
         if not row:
             return {}
-        return {"school_id": row[0].school_id, "district": row[0].district, "state": row[0].state}
+        return {
+            "school_id": row[0].school_id,
+            "district": row[0].district,
+            "state": row[0].state,
+            "language": row[0].language,
+        }
     if mentor_type == "Guardian":
         row = frappe.db.sql(
-            "SELECT district, state FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
+            "SELECT district, state, language FROM \"tabGuardian\" WHERE name=%s LIMIT 1",
             mentor_ref,
             as_dict=True,
         )
         if not row:
             return {}
-        return {"district": row[0].district, "state": row[0].state}
+        return {
+            "district": row[0].district,
+            "state": row[0].state,
+            "language": row[0].language,
+        }
     return {}
 
 
@@ -78,7 +88,7 @@ def _mentor_school_context(mentor_ref, mentor_type):
 def create_mentor_profile(
     display_name=None, mentor_type=None, avatar=None,
     password=None, admin_code=None, school_id=None,
-    gender=None, state=None, district=None,
+    gender=None, state=None, district=None, language=None,
 ):
     fd = frappe.form_dict
     display_name = display_name or fd.get("display_name")
@@ -91,6 +101,7 @@ def create_mentor_profile(
     gender = gender or fd.get("gender")
     state = state or fd.get("state")
     district = district or fd.get("district")
+    language = language or fd.get("language")
 
     token = _bearer_token()
     if not token:
@@ -110,6 +121,10 @@ def create_mentor_profile(
         frappe.throw("school_id is required", frappe.ValidationError)
     if mentor_type == "Guardian" and (not state or not district):
         frappe.throw("state and district are required", frappe.ValidationError)
+    if mentor_type == "Guardian" and not language:
+        frappe.throw("language is required", frappe.ValidationError)
+
+    language_name = _resolve_language(language) if language else None
 
     _ensure_citizenship_auth(phone, password)
 
@@ -127,6 +142,8 @@ def create_mentor_profile(
             doc_data["last_name"] = last_name
         if gender:
             doc_data["gender"] = gender
+        if language_name:
+            doc_data["language"] = language_name
         doc = frappe.get_doc(doc_data)
         doc.insert(ignore_permissions=True)
         mentor_ref = doc.name
@@ -137,6 +154,7 @@ def create_mentor_profile(
             "phone": phone,
             "state": state,
             "district": district,
+            "language": language_name,
         }
         if gender:
             doc_data["gender"] = gender
@@ -376,7 +394,7 @@ def get_student_profiles_bulk(phone=None, learner_ids=None):
     rows = frappe.db.sql(
         f"""
         SELECT cl.name AS learner_id, cl.student_name, cl.xp, cl.weekly_xp,
-               cl.streak, cl.level, cl.school,
+               cl.streak, cl.level, cl.school, cl.language,
                sap.avatar, sap.grade, sap.roll_number
         FROM "tabCitizenship Learner" cl
         LEFT JOIN LATERAL (

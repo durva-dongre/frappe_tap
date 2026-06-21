@@ -208,9 +208,10 @@ def select_profile(phone=None, learner_id=None):
 
     row = frappe.db.sql(
         """
-        SELECT citizenship_learner, student_name, grade, avatar
-        FROM "tabCitizenship Auth Profile"
-        WHERE parent=%s AND citizenship_learner=%s
+        SELECT cap.citizenship_learner, cap.student_name, cap.grade, cap.avatar, cl.language
+        FROM "tabCitizenship Auth Profile" cap
+        LEFT JOIN "tabCitizenship Learner" cl ON cl.name = cap.citizenship_learner
+        WHERE cap.parent=%s AND cap.citizenship_learner=%s
         LIMIT 1
         """,
         (phone, learner_id),
