@@ -21,6 +21,32 @@ def _get_enrollment_row(learner_id: str, course: str):
     return rows[0] if rows else None
 
 
+def _ensure_enrollment(learner_id: str, course: str):
+    existing = _get_enrollment_row(learner_id, course)
+    if existing:
+        return existing
+
+    frappe.db.sql(
+        """
+        INSERT INTO "tabCitizenship Enrollment"
+            (name, parent, parenttype, parentfield,
+             course, enrolled_on, status,
+             videos_completed, quizzes_completed,
+             creation, modified, modified_by, owner)
+        VALUES
+            (%s, %s, 'Citizenship Learner', 'enrollments',
+             %s, CURRENT_DATE, 'active',
+             0, 0,
+             NOW(), NOW(), 'Administrator', 'Administrator')
+        ON CONFLICT (parent, course) DO NOTHING
+        """,
+        (frappe.generate_hash(length=10), learner_id, course),
+    )
+    frappe.db.commit()
+
+    return _get_enrollment_row(learner_id, course)
+
+
 @frappe.whitelist(allow_guest=True)
 def update_content_progress(
     learner_id=None, course=None, video_index=None,
@@ -48,12 +74,15 @@ def update_content_progress(
     xp = int(xp or 10)
     fetch_next_flag = str(fetch_next).lower() in ("true", "1", "yes") if fetch_next else False
 
+    if xp <= 0:
+        frappe.throw("xp must be positive", frappe.ValidationError)
+
     optional = _parse_optional(fields)
     include_daily = optional is None or "xp_daily" in optional
 
-    enrollment = _get_enrollment_row(learner_id, course)
+    enrollment = _ensure_enrollment(learner_id, course)
     if not enrollment:
-        frappe.throw("Not enrolled in this course", frappe.ValidationError)
+        frappe.throw("Could not create or find enrollment for this learner and course", frappe.ValidationError)
 
     current_videos = enrollment.videos_completed or 0
     current_quizzes = enrollment.quizzes_completed or 0
@@ -63,9 +92,9 @@ def update_content_progress(
 
     video_advanced = has_video and new_videos > current_videos
     quiz_advanced = has_quiz and new_quizzes > current_quizzes
-    needs_update = video_advanced or quiz_advanced
+    progress_moved = video_advanced or quiz_advanced
 
-    if needs_update:
+    if progress_moved:
         frappe.db.sql(
             """
             UPDATE "tabCitizenship Enrollment"
@@ -77,11 +106,12 @@ def update_content_progress(
             (new_videos, new_quizzes, enrollment.name),
         )
         frappe.db.commit()
-        _update_streak(learner_id)
-        _queue_xp(learner_id, xp)
+
+    _update_streak(learner_id)
+    _queue_xp(learner_id, xp)
 
     result = {
-        "updated": needs_update,
+        "updated": progress_moved,
         "video_updated": video_advanced,
         "quiz_updated": quiz_advanced,
         "videos_completed": new_videos,
