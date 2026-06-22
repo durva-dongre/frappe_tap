@@ -1,6 +1,6 @@
 {
   "actions": [],
-  "autoname": "format:CC{########}",
+  "autoname": "prompt",
   "creation": "2026-06-22 00:00:00.000000",
   "doctype": "DocType",
   "editable_grid": 1,
@@ -105,7 +105,7 @@
   "modified_by": "Administrator",
   "module": "Tap Lms",
   "name": "Citizenship Content",
-  "naming_rule": "Expression",
+  "naming_rule": "Prompt",
   "owner": "Administrator",
   "permissions": [
     {
