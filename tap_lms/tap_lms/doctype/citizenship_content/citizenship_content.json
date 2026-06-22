@@ -49,7 +49,7 @@
     },
     {
       "fieldname": "authors",
-      "fieldtype": "Data",
+      "fieldtype": "Small Text",
       "label": "Authors (JSON)"
     },
     {
