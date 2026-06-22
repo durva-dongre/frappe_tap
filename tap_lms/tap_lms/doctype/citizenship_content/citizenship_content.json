@@ -1,0 +1,129 @@
+{
+  "actions": [],
+  "autoname": "format:CC{########}",
+  "creation": "2026-06-22 00:00:00.000000",
+  "doctype": "DocType",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "title",
+    "type",
+    "image_url",
+    "published_date",
+    "authors",
+    "content_section",
+    "content",
+    "event_section",
+    "location",
+    "event_start",
+    "event_end",
+    "speakers",
+    "event_content_items"
+  ],
+  "fields": [
+    {
+      "fieldname": "title",
+      "fieldtype": "Data",
+      "in_list_view": 1,
+      "label": "Title",
+      "reqd": 1
+    },
+    {
+      "fieldname": "type",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "label": "Type",
+      "options": "\nEvent\nProject\nKnowledge Center",
+      "reqd": 1
+    },
+    {
+      "fieldname": "image_url",
+      "fieldtype": "Data",
+      "label": "Image URL"
+    },
+    {
+      "fieldname": "published_date",
+      "fieldtype": "Date",
+      "in_list_view": 1,
+      "label": "Published Date"
+    },
+    {
+      "fieldname": "authors",
+      "fieldtype": "Data",
+      "label": "Authors (JSON)"
+    },
+    {
+      "fieldname": "content_section",
+      "fieldtype": "Section Break",
+      "label": "Content"
+    },
+    {
+      "fieldname": "content",
+      "fieldtype": "Markdown Editor",
+      "label": "Content"
+    },
+    {
+      "fieldname": "event_section",
+      "fieldtype": "Section Break",
+      "label": "Event Details",
+      "depends_on": "eval:doc.type == 'Event'"
+    },
+    {
+      "fieldname": "location",
+      "fieldtype": "Data",
+      "label": "Location",
+      "depends_on": "eval:doc.type == 'Event'"
+    },
+    {
+      "fieldname": "event_start",
+      "fieldtype": "Datetime",
+      "label": "Event Start",
+      "depends_on": "eval:doc.type == 'Event'"
+    },
+    {
+      "fieldname": "event_end",
+      "fieldtype": "Datetime",
+      "label": "Event End",
+      "depends_on": "eval:doc.type == 'Event'"
+    },
+    {
+      "fieldname": "speakers",
+      "fieldtype": "Data",
+      "label": "Speakers (JSON)",
+      "depends_on": "eval:doc.type == 'Event'"
+    },
+    {
+      "fieldname": "event_content_items",
+      "fieldtype": "Data",
+      "label": "Event Content Items (JSON)",
+      "depends_on": "eval:doc.type == 'Event'"
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "links": [],
+  "modified": "2026-06-22 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Tap Lms",
+  "name": "Citizenship Content",
+  "naming_rule": "Expression",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    }
+  ],
+  "sort_field": "published_date",
+  "sort_order": "DESC",
+  "states": [],
+  "title_field": "title",
+  "track_changes": 0
+}
