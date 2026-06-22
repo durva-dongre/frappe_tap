@@ -88,13 +88,13 @@
     },
     {
       "fieldname": "speakers",
-      "fieldtype": "Data",
+      "fieldtype": "Small Text",
       "label": "Speakers (JSON)",
       "depends_on": "eval:doc.type == 'Event'"
     },
     {
       "fieldname": "event_content_items",
-      "fieldtype": "Data",
+      "fieldtype": "Small Text",
       "label": "Event Content Items (JSON)",
       "depends_on": "eval:doc.type == 'Event'"
     }
