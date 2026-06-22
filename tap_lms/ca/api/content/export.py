@@ -1,4 +1,5 @@
 import frappe
+import json
 import re
 
 _YT_RE = re.compile(
@@ -52,7 +53,8 @@ def _build_quiz(quiz_name, lang_name, counters):
 
     if lang_name:
         tr = frappe.db.sql(
-            'SELECT translated_name FROM "tabQuizTranslation" WHERE parent = %s AND language = %s LIMIT 1',
+            'SELECT translated_name FROM "tabQuizTranslation"'
+            ' WHERE parent = %s AND language = %s LIMIT 1',
             (quiz_name, lang_name),
             as_dict=True,
         )
@@ -77,7 +79,8 @@ def _build_quiz(quiz_name, lang_name, counters):
         if lang_name:
             qtr = frappe.db.sql(
                 'SELECT translated_question, translated_explanation, translated_hint'
-                ' FROM "tabQuizQuestionTranslation" WHERE parent = %s AND language = %s LIMIT 1',
+                ' FROM "tabQuizQuestionTranslation"'
+                ' WHERE parent = %s AND language = %s LIMIT 1',
                 (qr.q_name, lang_name),
                 as_dict=True,
             )
@@ -87,7 +90,7 @@ def _build_quiz(quiz_name, lang_name, counters):
                 hint = qtr[0].translated_hint or hint
 
         opts_raw = frappe.db.sql(
-            'SELECT qo.name AS opt_name, qo.option_text, qo.option_number'
+            'SELECT CAST(qo.name AS VARCHAR) AS opt_name, qo.option_text, qo.option_number'
             ' FROM "tabQuizOptionList" ol'
             ' JOIN "tabQuizOption" qo ON CAST(qo.name AS VARCHAR) = ol.options'
             ' WHERE ol.parent = %s ORDER BY qo.option_number ASC',
@@ -102,8 +105,8 @@ def _build_quiz(quiz_name, lang_name, counters):
             if lang_name:
                 otr = frappe.db.sql(
                     'SELECT translated_option FROM "tabQuizOptionTranslation"'
-                    ' WHERE parent = %s AND language = %s LIMIT 1',
-                    (str(o.opt_name), lang_name),
+                    ' WHERE parent = %s AND parenttype = %s AND language = %s LIMIT 1',
+                    (o.opt_name, "QuizOption", lang_name),
                     as_dict=True,
                 )
                 if otr and otr[0].translated_option:
@@ -395,6 +398,33 @@ def _build_districts():
     return by_state
 
 
+def _parse_json_field(value):
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+def _build_content_item(row):
+    return _c({
+        "id": row.name,
+        "title": row.title,
+        "type": row.type,
+        "image_url": row.image_url,
+        "published_date": str(row.published_date) if row.published_date else None,
+        "authors": _parse_json_field(row.authors),
+        "content": row.content,
+        "location": row.location,
+        "event_start": str(row.event_start) if row.event_start else None,
+        "event_end": str(row.event_end) if row.event_end else None,
+        "speakers": _parse_json_field(row.speakers),
+        "event_content_items": _parse_json_field(row.event_content_items),
+    })
+
+
 @frappe.whitelist()
 def export_program_content(program_id=None, include_r2=False, langs=None):
     fd = frappe.form_dict
@@ -451,3 +481,18 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
         payload["langs"][lang] = {"index": {"courses": index_courses}, "courses": courses}
 
     return {"success": True, "program": program_id, "payload": payload}
+
+
+@frappe.whitelist()
+def export_content():
+    rows = frappe.db.sql(
+        'SELECT name, title, type, image_url, published_date, authors, content,'
+        ' location, event_start, event_end, speakers, event_content_items'
+        ' FROM "tabCitizenship Content"'
+        ' ORDER BY published_date DESC',
+        as_dict=True,
+    )
+
+    content = [_build_content_item(r) for r in rows]
+
+    return {"success": True, "payload": {"content": content}}
