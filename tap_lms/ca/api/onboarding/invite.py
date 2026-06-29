@@ -1,7 +1,7 @@
 import frappe
 from tap_lms.ca.api.auth.citizenship_auth import (
     _require_access_token,
-    _validate_registration_token,
+    _decode_token,
     _generate_access_token,
     _fetch_profiles_sql,
     _ensure_citizenship_auth,
@@ -28,6 +28,15 @@ def _require_teacher(phone):
     if not row or row[0].mentor_type != "Teacher":
         frappe.throw("Teacher account required", frappe.AuthenticationError)
     return row[0].mentor
+
+
+def _require_registration_token(phone, token):
+    payload = _decode_token(token, "registration")
+    if not payload:
+        frappe.throw("Invalid or expired registration token", frappe.AuthenticationError)
+    if payload.get("phone") != phone:
+        frappe.throw("Token phone mismatch", frappe.AuthenticationError)
+    return payload
 
 
 @frappe.whitelist(allow_guest=True)
@@ -78,7 +87,7 @@ def finalize_join(
         frappe.throw("phone, display_name, grade, school_id, language are required", frappe.ValidationError)
 
     if registration_token:
-        _validate_registration_token(phone, registration_token)
+        _require_registration_token(phone, registration_token)
     else:
         _require_access_token(phone)
 
