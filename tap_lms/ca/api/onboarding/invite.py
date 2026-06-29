@@ -1,6 +1,7 @@
 import frappe
 from tap_lms.ca.api.auth.citizenship_auth import (
     _require_access_token,
+    _validate_registration_token,
     _generate_access_token,
     _fetch_profiles_sql,
     _ensure_citizenship_auth,
@@ -59,6 +60,7 @@ def finalize_join(
     phone=None, display_name=None, grade=None,
     school_id=None, language=None, avatar=None,
     password=None, dob=None, roll_number=None,
+    registration_token=None,
 ):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
@@ -70,11 +72,15 @@ def finalize_join(
     password = password or fd.get("password")
     dob = dob or fd.get("dob")
     roll_number = roll_number or fd.get("roll_number")
+    registration_token = registration_token or fd.get("registration_token")
 
     if not phone or not display_name or not grade or not school_id or not language:
         frappe.throw("phone, display_name, grade, school_id, language are required", frappe.ValidationError)
 
-    _require_access_token(phone)
+    if registration_token:
+        _validate_registration_token(phone, registration_token)
+    else:
+        _require_access_token(phone)
 
     _ensure_citizenship_auth(phone, password if password and len(password) >= 6 else None)
 
