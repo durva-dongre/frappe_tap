@@ -309,7 +309,7 @@ def _build_course(cl_name, lang_name, counters):
 
 def _build_index_entry(cl_name, lang_name):
     row = frappe.db.sql(
-        'SELECT name, name1, level, vertical, stage, kit_less, course_description, course_summary'
+        'SELECT name, name1, level, vertical, stage, kit_less, course_summary'
         ' FROM "tabCourse Level" WHERE name = %s LIMIT 1',
         cl_name,
         as_dict=True,
@@ -319,12 +319,11 @@ def _build_index_entry(cl_name, lang_name):
 
     cl = row[0]
     nm = cl.name1
-    desc = _strip_html(cl.course_description)
     summary = cl.course_summary
 
     if lang_name:
         tr = frappe.db.sql(
-            'SELECT translated_name, translated_course_description, translated_course_summary'
+            'SELECT translated_name, translated_course_summary'
             ' FROM "tabCourse_LevelTranslation" WHERE parent = %s AND language = %s LIMIT 1',
             (cl_name, lang_name),
             as_dict=True,
@@ -332,7 +331,6 @@ def _build_index_entry(cl_name, lang_name):
         if tr:
             t = tr[0]
             nm = t.translated_name or nm
-            desc = _strip_html(t.translated_course_description) or desc
             summary = t.translated_course_summary or summary
 
     unit_count = frappe.db.count(
@@ -346,7 +344,6 @@ def _build_index_entry(cl_name, lang_name):
         "vrt": cl.vertical,
         "stage": cl.stage,
         "kit_less": bool(cl.kit_less),
-        "desc": desc,
         "sum": summary,
         "units_count": unit_count,
     })
