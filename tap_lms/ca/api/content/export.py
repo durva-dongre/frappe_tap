@@ -335,6 +335,10 @@ def _build_index_entry(cl_name, lang_name):
             desc = _strip_html(t.translated_course_description) or desc
             summary = t.translated_course_summary or summary
 
+    unit_count = frappe.db.count(
+        "LearningUnitList", {"parent": cl_name, "parenttype": "Course Level"}
+    )
+
     return _c({
         "id": cl.name.replace(" ", "-"),
         "nm": nm,
@@ -344,6 +348,7 @@ def _build_index_entry(cl_name, lang_name):
         "kit_less": bool(cl.kit_less),
         "desc": desc,
         "sum": summary,
+        "units_count": unit_count,
     })
 
 
