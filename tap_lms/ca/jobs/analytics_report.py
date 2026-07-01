@@ -609,7 +609,7 @@ def run_analytics_report():
         )
     except Exception as e:
         _mark(tracker, "Failed", time.time() - t0, str(e)[:5000])
-        frappe.log_error(str(e), "CA Analytics report failed")
+        frappe.log_error(title="CA Analytics report failed", message=str(e))
     finally:
         cache.delete_value(JOB_LOCK_KEY)
         cache.delete_value(JOB_START_KEY)

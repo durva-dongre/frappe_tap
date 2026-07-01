@@ -149,7 +149,7 @@ def run_xp_window_rotate():
         frappe.logger().info(f"CA XP window rotate done in {round(time.time() - t0, 1)}s. FreeMB={_free_mb()}")
     except Exception as e:
         _mark(tracker, "Failed", time.time() - t0, str(e)[:5000])
-        frappe.log_error(str(e), "CA XP Rotate failed")
+        frappe.log_error(title="CA XP Rotate failed", message=str(e))
     finally:
         cache.delete_value(JOB_LOCK_KEY)
         cache.delete_value(JOB_START_KEY)
