@@ -66,7 +66,7 @@ doc_events = {
 #   - 0 0 * * 1    — auto_advance_batch_week: weekly Monday sweep that bumps
 #                    Batch.current_calendar_week and unblocks max_allowed_week
 #                    on each PE
-#   - 30 21 * * *  — run_leaderboard_batch: nightly 03:00 IST leaderboard job.
+#   - 30 21 * * *  — run_leaderboard_build: nightly 03:00 IST leaderboard job.
 #                    Flushes XP queue, rotates 7-day XP window, rebuilds and
 #                    uploads school/district/state/national JSON files to R2.
 #                  — run_analytics_report: nightly 03:00 IST analytics job.
@@ -143,7 +143,7 @@ scheduler_events = {
         #     "tap_lms.summer_program.scheduler.periodic_glific_reconcile",
         # ],
         "30 21 * * *": [
-            "tap_lms.ca.jobs.leaderboard.run_leaderboard_batch",
+            "tap_lms.ca.jobs.leaderboard_build.run_leaderboard_build",
             "tap_lms.ca.jobs.analytics_report.run_analytics_report",
         ],
     },
