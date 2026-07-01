@@ -526,13 +526,12 @@ def _compute_all_metrics() -> dict:
 def _send_to_apps_script(payload: dict):
     webapp_url = frappe.get_doc("Secrets", "appsheet_webapp_url").get_password("value")
     webapp_secret = frappe.get_doc("Secrets", "appsheet_webapp_secret").get_password("value")
-    body = json.dumps({"tabs": payload}).encode()
+    body = json.dumps({"tabs": payload, "__secret": webapp_secret}).encode()
     req = urllib.request.Request(
         webapp_url,
         data=body,
         headers={
             "Content-Type": "application/json",
-            "X-CA-Secret": webapp_secret,
         },
         method="POST",
     )
