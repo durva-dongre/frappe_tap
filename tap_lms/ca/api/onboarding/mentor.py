@@ -508,9 +508,9 @@ def get_student_profiles_bulk(phone=None, learner_ids=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def select_profile(phone=None, learner_id=None):
+def select_profile(phone=None, learner_id=None, include_enrollments=None, page=None, page_size=None):
     from tap_lms.ca.api.onboarding.student import select_profile as _select
-    return _select(phone=phone, learner_id=learner_id)
+    return _select(phone=phone, learner_id=learner_id, include_enrollments=include_enrollments, page=page, page_size=page_size)
 
 
 @frappe.whitelist(allow_guest=True)

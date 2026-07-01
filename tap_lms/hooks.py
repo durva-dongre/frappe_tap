@@ -69,6 +69,14 @@ doc_events = {
 #   - 30 21 * * *  — run_leaderboard_batch: nightly 03:00 IST leaderboard job.
 #                    Flushes XP queue, rotates 7-day XP window, rebuilds and
 #                    uploads school/district/state/national JSON files to R2.
+#                  — run_analytics_report: nightly 03:00 IST analytics job.
+#                    Computes 26 engagement/progress/retention/geography/
+#                    cohort/achievement metrics and writes them to Google
+#                    Sheets via the Apps Script web app. Waits for the XP
+#                    rotate lock to clear (same-tick race with the job
+#                    above), then requires xp_window_rotate's last_success_at
+#                    to be today; if not, marks itself Failed with no partial
+#                    writes and exits — no retry.
 scheduler_events = {
     "daily": [
         "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages",
@@ -136,6 +144,7 @@ scheduler_events = {
         # ],
         "30 21 * * *": [
             "tap_lms.ca.jobs.leaderboard.run_leaderboard_batch",
+            "tap_lms.ca.jobs.analytics_report.run_analytics_report",
         ],
     },
 }

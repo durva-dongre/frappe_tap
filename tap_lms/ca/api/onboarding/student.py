@@ -137,6 +137,37 @@ def _sync_leaderboard(student_id, display_name, school_id):
         frappe.log_error(title="Leaderboard Sync Error", message=frappe.get_traceback())
 
 
+def _fetch_enrollments_sql(learner_id, page=1, page_size=20):
+    offset = (page - 1) * page_size
+    rows = frappe.db.sql(
+        """
+        SELECT course, status, videos_completed, quizzes_completed, enrolled_on
+        FROM "tabCitizenship Enrollment"
+        WHERE parent=%s
+        ORDER BY enrolled_on DESC
+        LIMIT %s OFFSET %s
+        """,
+        (learner_id, page_size + 1, offset),
+        as_dict=True,
+    )
+    has_more = len(rows) > page_size
+    enrollments = [
+        {
+            "course": r.course,
+            "status": r.status,
+            "videos_completed": r.videos_completed or 0,
+            "quizzes_completed": r.quizzes_completed or 0,
+            "enrolled_on": str(r.enrolled_on) if r.enrolled_on else None,
+        }
+        for r in rows[:page_size]
+    ]
+    return enrollments, has_more
+
+
+def _truthy(value):
+    return str(value).lower() in ("true", "1", "yes")
+
+
 @frappe.whitelist(allow_guest=True)
 def create_first_profile(
     display_name=None, grade=None, school_id=None,
@@ -217,9 +248,13 @@ def add_profile(
 
 
 @frappe.whitelist(allow_guest=True)
-def select_profile(phone=None, learner_id=None):
-    phone = phone or frappe.form_dict.get("phone", "")
-    learner_id = learner_id or frappe.form_dict.get("learner_id")
+def select_profile(phone=None, learner_id=None, include_enrollments=None, page=None, page_size=None):
+    fd = frappe.form_dict
+    phone = phone or fd.get("phone", "")
+    learner_id = learner_id or fd.get("learner_id")
+    include_enrollments = include_enrollments if include_enrollments is not None else fd.get("include_enrollments")
+    page = int(page or fd.get("page", 1))
+    page_size = min(int(page_size or fd.get("page_size", 20)), 100)
 
     payload, new_token = _require_access_token_with_refresh(phone)
 
@@ -241,6 +276,12 @@ def select_profile(phone=None, learner_id=None):
     from tap_lms.ca.api.progress.learner import _learner_xp_state
     state = _learner_xp_state(learner_id)
     result = {"success": True, "learner_id": learner_id, "profile": row[0], **state}
+
+    if _truthy(include_enrollments):
+        enrollments, has_more = _fetch_enrollments_sql(learner_id, page=page, page_size=page_size)
+        result["enrollments"] = enrollments
+        result["enrollments_has_more"] = has_more
+
     if new_token:
         result["token"] = new_token
     return result
