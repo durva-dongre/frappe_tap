@@ -1,0 +1,205 @@
+{
+  "actions": [],
+  "allow_rename": 0,
+  "autoname": "format:TL{########}",
+  "creation": "2026-06-30 00:00:00.000000",
+  "default_view": "List",
+  "doctype": "DocType",
+  "editable_grid": 1,
+  "engine": "InnoDB",
+  "field_order": [
+    "student_name",
+    "language",
+    "district",
+    "state",
+    "school",
+    "birthdate",
+    "xp",
+    "last_activity_xp",
+    "level",
+    "streak",
+    "longest_streak",
+    "last_activity_date",
+    "activity_limit_section",
+    "activities_watched_this_week",
+    "max_weekly_activities",
+    "window_start_date",
+    "is_bingeing",
+    "enrollments_section",
+    "enrollments",
+    "achievements_section",
+    "achievements"
+  ],
+  "fields": [
+    {
+      "fieldname": "student_name",
+      "fieldtype": "Data",
+      "in_list_view": 1,
+      "label": "Name",
+      "reqd": 1
+    },
+    {
+      "fieldname": "language",
+      "fieldtype": "Link",
+      "label": "Language",
+      "options": "TAP Language"
+    },
+    {
+      "fieldname": "district",
+      "fieldtype": "Link",
+      "label": "District",
+      "options": "District"
+    },
+    {
+      "fieldname": "state",
+      "fieldtype": "Link",
+      "label": "State",
+      "options": "State"
+    },
+    {
+      "fieldname": "school",
+      "fieldtype": "Link",
+      "label": "School",
+      "options": "School"
+    },
+    {
+      "fieldname": "birthdate",
+      "fieldtype": "Date",
+      "label": "Birthdate"
+    },
+    {
+      "fieldname": "xp",
+      "fieldtype": "Int",
+      "in_list_view": 1,
+      "label": "Total XP",
+      "default": "0"
+    },
+    {
+      "description": "XP earned from the student's most recent activity. Overwritten each time an activity is completed; no daily/weekly breakdown is kept.",
+      "fieldname": "last_activity_xp",
+      "fieldtype": "Int",
+      "label": "Last Activity XP",
+      "default": "0",
+      "read_only": 1
+    },
+    {
+      "fieldname": "level",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "label": "Level",
+      "options": "Level 1\nLevel 2\nLevel 2A\nLevel 3\nLevel 3A\nLevel 3K\nLevel 3AK\nLevel 4\nLevel 4K"
+    },
+    {
+      "description": "Number of consecutive activity windows (weeks) in which the student completed at least one activity. Increments when an activity is completed in a new window immediately following the last one; resets to 1 if a window was skipped.",
+      "fieldname": "streak",
+      "fieldtype": "Int",
+      "in_list_view": 1,
+      "label": "Current Streak (Weeks)",
+      "default": "0"
+    },
+    {
+      "fieldname": "longest_streak",
+      "fieldtype": "Int",
+      "label": "Longest Streak (Weeks)",
+      "default": "0",
+      "read_only": 1
+    },
+    {
+      "description": "Date of the student's most recent completed activity. Compared against window_start_date to determine whether the streak continues, resets, or stays flat.",
+      "fieldname": "last_activity_date",
+      "fieldtype": "Date",
+      "label": "Last Activity Date"
+    },
+    {
+      "fieldname": "activity_limit_section",
+      "fieldtype": "Section Break",
+      "label": "Weekly Activity Limit"
+    },
+    {
+      "description": "Count of activities watched since window_start_date. Capped at max_weekly_activities. Reset to 0 only when the 7-day window has elapsed.",
+      "fieldname": "activities_watched_this_week",
+      "fieldtype": "Int",
+      "label": "Activities Watched This Window",
+      "default": "0",
+      "in_list_view": 1
+    },
+    {
+      "description": "Maximum number of activities a student is allowed to watch within a rolling 7-day window.",
+      "fieldname": "max_weekly_activities",
+      "fieldtype": "Int",
+      "label": "Max Weekly Activities",
+      "default": "2",
+      "read_only": 1
+    },
+    {
+      "description": "Date the student's current 7-day counting window started, set on their first activity in the window. The window resets (window_start_date moves forward, count goes to 0) only once today >= window_start_date + 7 days, not on a fixed calendar day.",
+      "fieldname": "window_start_date",
+      "fieldtype": "Date",
+      "label": "Window Start Date"
+    },
+    {
+      "description": "Flagged true when the student hits max_weekly_activities early in the window, indicating bingeing rather than spaced-out usage.",
+      "fieldname": "is_bingeing",
+      "fieldtype": "Check",
+      "label": "Is Bingeing",
+      "default": "0",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "enrollments_section",
+      "fieldtype": "Section Break",
+      "label": "Enrollments"
+    },
+    {
+      "fieldname": "enrollments",
+      "fieldtype": "Table",
+      "label": "Enrollments",
+      "options": "Tapapp Enroll"
+    },
+    {
+      "fieldname": "achievements_section",
+      "fieldtype": "Section Break",
+      "label": "Achievements"
+    },
+    {
+      "fieldname": "achievements",
+      "fieldtype": "Table",
+      "label": "Achievements",
+      "options": "Tapapp Learner Achievements"
+    }
+  ],
+  "index_web_pages_for_search": 0,
+  "links": [],
+  "modified": "2026-06-30 00:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Tap Lms",
+  "name": "Tapapp Learner",
+  "naming_rule": "Expression",
+  "owner": "Administrator",
+  "permissions": [
+    {
+      "create": 1,
+      "delete": 1,
+      "email": 1,
+      "export": 1,
+      "print": 1,
+      "read": 1,
+      "report": 1,
+      "role": "System Manager",
+      "share": 1,
+      "write": 1
+    },
+    {
+      "create": 0,
+      "delete": 0,
+      "read": 1,
+      "role": "Student",
+      "write": 0
+    }
+  ],
+  "sort_field": "modified",
+  "sort_order": "DESC",
+  "states": [],
+  "title_field": "student_name",
+  "track_changes": 1
+}
