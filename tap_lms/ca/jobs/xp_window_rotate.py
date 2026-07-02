@@ -4,6 +4,7 @@ import psutil
 from datetime import datetime
 
 from tap_lms.ca.api.progress.learner import flush_xp_queue
+from tap_lms.ca.jobs._shared import send_job_log
 
 JOB_KEY = "XP Window Rotate"
 JOB_LABEL = "XP Window Rotate"
@@ -142,13 +143,19 @@ def run_xp_window_rotate():
     frappe.db.commit()
 
     t0 = time.time()
+    records = 0
     try:
         flush_xp_queue()
+        records = frappe.db.sql('SELECT COUNT(*) AS n FROM "tabCitizenship Learner"', as_dict=True)[0].n or 0
         _rotate_xp_window()
-        _mark(tracker, "Success", time.time() - t0)
-        frappe.logger().info(f"CA XP window rotate done in {round(time.time() - t0, 1)}s. FreeMB={_free_mb()}")
+        duration = time.time() - t0
+        _mark(tracker, "Success", duration)
+        send_job_log(JOB_KEY, "Success", records, duration)
+        frappe.logger().info(f"CA XP window rotate done in {round(duration, 1)}s. FreeMB={_free_mb()}")
     except Exception as e:
-        _mark(tracker, "Failed", time.time() - t0, str(e)[:5000])
+        duration = time.time() - t0
+        _mark(tracker, "Failed", duration, str(e)[:5000])
+        send_job_log(JOB_KEY, "Failed", records, duration, str(e)[:1000])
         frappe.log_error(title="CA XP Rotate failed", message=str(e))
     finally:
         cache.delete_value(JOB_LOCK_KEY)

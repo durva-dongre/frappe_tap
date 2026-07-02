@@ -7,7 +7,7 @@ from botocore.client import Config
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from tap_lms.ca.jobs._shared import rotation_succeeded_today
+from tap_lms.ca.jobs._shared import rotation_succeeded_today, send_job_log
 
 JOB_KEY = "Leaderboard Build"
 JOB_LABEL = "Leaderboard Build"
@@ -320,12 +320,14 @@ def run_leaderboard_build():
     frappe.db.commit()
 
     t0 = time.time()
+    records = 0
     try:
         if not rotation_succeeded_today():
             raise Exception("XP window rotation has not succeeded today; leaderboard build skipped")
 
         school_ids, district_ids, state_ids = _get_active_scope()
         schools_map, districts_map, states_map = _fetch_active_students_chunked(school_ids)
+        records = sum(len(v) for v in schools_map.values())
 
         district_scores: dict = {}
         state_scores: dict = {}
@@ -358,13 +360,17 @@ def run_leaderboard_build():
 
         _upload_streaming(client, r2_bucket, _gen_uploads(), workers)
 
-        _mark(tracker, "Success", time.time() - t0)
+        duration = time.time() - t0
+        _mark(tracker, "Success", duration)
+        send_job_log(JOB_KEY, "Success", records, duration)
         frappe.logger().info(
-            f"CA Leaderboard build done in {round(time.time() - t0, 1)}s. "
+            f"CA Leaderboard build done in {round(duration, 1)}s. "
             f"Schools={len(schools_map)} Districts={len(districts_map)} States={len(states_map)} FreeMB={_free_mb()}"
         )
     except Exception as e:
-        _mark(tracker, "Failed", time.time() - t0, str(e)[:5000])
+        duration = time.time() - t0
+        _mark(tracker, "Failed", duration, str(e)[:5000])
+        send_job_log(JOB_KEY, "Failed", records, duration, str(e)[:1000])
         frappe.log_error(title="CA Leaderboard build failed", message=str(e))
     finally:
         cache.delete_value(JOB_LOCK_KEY)
