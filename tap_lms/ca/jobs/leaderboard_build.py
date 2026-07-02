@@ -113,10 +113,9 @@ def _get_active_scope():
         """
         SELECT DISTINCT
                cl.school   AS school_id,
-               sc.district AS district_id,
-               sc.state    AS state_id
+               cl.district AS district_id,
+               cl.state    AS state_id
           FROM "tabCitizenship Learner" cl
-          JOIN "tabSchool" sc ON sc.name = cl.school
          WHERE cl.modified >= NOW() - INTERVAL '1 DAY'
         """,
         as_dict=True,
@@ -146,12 +145,10 @@ def _fetch_active_students_chunked(school_ids: list):
                    cl.student_name,
                    cl.weekly_xp,
                    cl.school       AS school_id,
-                   sc.district     AS district_id,
-                   sc.state        AS state_id,
+                   cl.district     AS district_id,
+                   cl.state        AS state_id,
                    COALESCE(sap.avatar, '1') AS avatar
               FROM "tabCitizenship Learner" cl
-              JOIN "tabSchool" sc
-                ON sc.name = cl.school
          LEFT JOIN LATERAL (
                    SELECT avatar
                      FROM "tabCitizenship Auth Profile"
@@ -192,10 +189,9 @@ def _stream_bucket_data(district_scores: dict, state_scores: dict, national_scor
             """
             SELECT cl.name       AS learner_id,
                    cl.weekly_xp,
-                   sc.district   AS district_id,
-                   sc.state      AS state_id
+                   cl.district   AS district_id,
+                   cl.state      AS state_id
               FROM "tabCitizenship Learner" cl
-              JOIN "tabSchool" sc ON sc.name = cl.school
              WHERE cl.name > %s
              ORDER BY cl.name
              LIMIT %s
