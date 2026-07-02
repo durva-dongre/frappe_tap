@@ -29,6 +29,7 @@ _LOCK_TTL_PER_MILLION_SEC = 900
 _TOP_N_SCHOOL = 100
 _TOP_N_GEO = 100
 _TOP_N_NATIONAL = 100
+_EDGE_CACHE_SECONDS = 86400
 
 
 def _now_utc_iso():
@@ -86,7 +87,13 @@ def _get_r2_client():
 
 def _upload(client, bucket, key, data: dict):
     body = json.dumps(data, separators=(",", ":")).encode()
-    client.put_object(Bucket=bucket, Key=key, Body=body, ContentType="application/json")
+    client.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=body,
+        ContentType="application/json",
+        CacheControl=f"public, max-age={_EDGE_CACHE_SECONDS}",
+    )
 
 
 def _percentile_thresholds(sorted_scores: list, intervals: int = BUCKET_INTERVALS):
