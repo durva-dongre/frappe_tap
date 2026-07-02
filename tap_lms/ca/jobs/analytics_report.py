@@ -538,8 +538,9 @@ def _send_to_apps_script(payload: dict):
     with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SEC) as resp:
         resp_body = json.loads(resp.read().decode())
     failed = resp_body.get("failed") or []
+    version = resp_body.get("version", "NO_VERSION_FIELD_OLD_DEPLOYMENT")
     if failed:
-        raise Exception(f"Apps Script reported failed tabs: {failed}")
+        raise Exception(f"[deployed_version={version}] Apps Script reported failed tabs: {failed}")
     return resp_body
 
 
