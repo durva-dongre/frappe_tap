@@ -193,19 +193,20 @@ def _backfill_learner_geo_from_school(learner_id, school_id):
     if not school_id:
         return None, None
     district, state = _fetch_school_geo(school_id)
-    if district or state:
+    if district and state:
         frappe.db.sql(
             """
             UPDATE "tabCitizenship Learner"
-               SET district = COALESCE(district, %s),
-                   state    = COALESCE(state, %s),
+               SET district = %s,
+                   state    = %s,
                    modified = NOW()
              WHERE name = %s
             """,
             (district, state, learner_id),
         )
         frappe.db.commit()
-    return district, state
+        return district, state
+    return None, None
 
 
 @frappe.whitelist(allow_guest=True)
@@ -300,8 +301,11 @@ def select_profile(phone=None, learner_id=None, include_enrollments=None, page=N
 
     row = frappe.db.sql(
         """
-        SELECT cap.citizenship_learner, cap.student_name, cap.grade, cap.avatar
+        SELECT cap.citizenship_learner,
+               COALESCE(cap.student_name, cl.student_name) AS student_name,
+               cap.grade, cap.avatar
         FROM "tabCitizenship Auth Profile" cap
+        JOIN "tabCitizenship Learner" cl ON cl.name = cap.citizenship_learner
         WHERE cap.parent=%s AND cap.citizenship_learner=%s
         LIMIT 1
         """,
@@ -314,10 +318,11 @@ def select_profile(phone=None, learner_id=None, include_enrollments=None, page=N
     profile = dict(row[0])
     geo = _fetch_learner_geo(learner_id)
 
-    if not geo["district_id"] and not geo["state_id"] and geo["school_id"]:
+    if (not geo["district_id"] or not geo["state_id"]) and geo["school_id"]:
         district, state = _backfill_learner_geo_from_school(learner_id, geo["school_id"])
-        geo["district_id"] = geo["district_id"] or district
-        geo["state_id"] = geo["state_id"] or state
+        if district and state:
+            geo["district_id"] = district
+            geo["state_id"] = state
 
     profile.update(geo)
 
