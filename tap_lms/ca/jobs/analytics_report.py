@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
 
-from tap_lms.ca.jobs._shared import rotation_succeeded_today
+from tap_lms.ca.jobs._shared import rotation_succeeded_today, send_job_log
 
 JOB_KEY = "Analytics Report"
 JOB_LABEL = "Analytics Report"
@@ -28,6 +28,24 @@ _IST_OFFSET = timedelta(hours=5, minutes=30)
 _ROTATE_LOCK_KEY = "ca:xp_rotate:running"
 _ROTATE_WAIT_MAX_SEC = 1800
 _ROTATE_WAIT_POLL_SEC = 10
+
+_LEVEL_OPTIONS = (
+    "Level 1", "Level 2", "Level 2A", "Level 3", "Level 3A",
+    "Level 3K", "Level 3AK", "Level 4", "Level 4K", "Unset",
+)
+
+_WEEKLY_XP_BUCKETS = (0, 50, 100, 250, 500, 1000, 2500, 99999999)
+_WEEKLY_XP_LABELS = ("0-49", "50-99", "100-249", "250-499", "500-999", "1000-2499", "2500+")
+
+_STREAK_BUCKETS = (0, 1, 3, 7, 14, 30, 60, 99999999)
+_STREAK_LABELS = ("0", "1-2", "3-6", "7-13", "14-29", "30-59", "60+")
+
+_ENROLLMENT_BUCKET_LABELS = ("0", "1", "2", "3", "4", "5+")
+
+_AGE_BANDS = ("Under 10", "10-12", "13-15", "16-18", "19+", "Unset")
+
+_ACHIEVEMENT_TOP_N = 40
+_ACHIEVEMENT_COL_MAX_LEN = 60
 
 
 def _free_mb() -> int:
@@ -94,7 +112,21 @@ def _percentiles(sorted_vals: list, points=(50, 75, 90, 95, 99)):
     return out
 
 
-def _metric_dal(date_str):
+def _total_learner_count() -> int:
+    return frappe.db.sql(
+        'SELECT COUNT(*) AS n FROM "tabCitizenship Learner"', as_dict=True
+    )[0].n or 0
+
+
+def _clean_column_name(raw, fallback: str) -> str:
+    name = str(raw or fallback).strip().replace("\n", " ").replace("\r", " ")
+    name = " ".join(name.split())
+    if len(name) > _ACHIEVEMENT_COL_MAX_LEN:
+        name = name[:_ACHIEVEMENT_COL_MAX_LEN].rstrip()
+    return name or fallback
+
+
+def _metric_dal() -> dict:
     row = frappe.db.sql(
         """
         SELECT COUNT(*) AS n
@@ -103,10 +135,10 @@ def _metric_dal(date_str):
         """,
         as_dict=True,
     )[0]
-    return [[date_str, row.n or 0]]
+    return {"DAL": row.n or 0}
 
 
-def _metric_xp_per_weekday(date_str):
+def _metric_xp_per_weekday() -> dict:
     row = frappe.db.sql(
         """
         SELECT AVG(xp_d0)::float AS avg_xp
@@ -115,10 +147,10 @@ def _metric_xp_per_weekday(date_str):
         """,
         as_dict=True,
     )[0]
-    return [[date_str, round(row.avg_xp or 0, 2)]]
+    return {"Avg XP Today": round(row.avg_xp or 0, 2)}
 
 
-def _metric_weekly_xp_histogram(date_str):
+def _metric_weekly_xp_histogram() -> dict:
     vals = []
     for r in _scan_learners_chunked(
         """
@@ -130,19 +162,16 @@ def _metric_weekly_xp_histogram(date_str):
         """
     ):
         vals.append(r.weekly_xp or 0)
-    vals.sort()
-    buckets = [0, 50, 100, 250, 500, 1000, 2500, 99999999]
-    labels = ["0-49", "50-99", "100-249", "250-499", "500-999", "1000-2499", "2500+"]
-    counts = [0] * (len(buckets) - 1)
+    counts = [0] * len(_WEEKLY_XP_LABELS)
     for v in vals:
-        for i in range(len(buckets) - 1):
-            if buckets[i] <= v < buckets[i + 1]:
+        for i in range(len(_WEEKLY_XP_BUCKETS) - 1):
+            if _WEEKLY_XP_BUCKETS[i] <= v < _WEEKLY_XP_BUCKETS[i + 1]:
                 counts[i] += 1
                 break
-    return [[date_str, labels[i], counts[i]] for i in range(len(labels))]
+    return {label: counts[i] for i, label in enumerate(_WEEKLY_XP_LABELS)}
 
 
-def _metric_mal(date_str):
+def _metric_mal() -> dict:
     row = frappe.db.sql(
         """
         SELECT COUNT(*) AS n
@@ -151,10 +180,10 @@ def _metric_mal(date_str):
         """,
         as_dict=True,
     )[0]
-    return [[date_str, row.n or 0]]
+    return {"MAL": row.n or 0}
 
 
-def _metric_level_distribution(date_str):
+def _metric_level_distribution() -> dict:
     rows = frappe.db.sql(
         """
         SELECT level, COUNT(*) AS n
@@ -163,10 +192,11 @@ def _metric_level_distribution(date_str):
         """,
         as_dict=True,
     )
-    return [[date_str, r.level or "Unset", r.n] for r in rows]
+    counts = {(r.level or "Unset"): r.n for r in rows}
+    return {lvl: counts.get(lvl, 0) for lvl in _LEVEL_OPTIONS}
 
 
-def _metric_level_vs_xp_stats(date_str):
+def _metric_level_vs_xp_stats() -> dict:
     rows = frappe.db.sql(
         """
         SELECT level, AVG(xp)::float AS avg_xp, MIN(xp) AS min_xp, MAX(xp) AS max_xp
@@ -175,10 +205,17 @@ def _metric_level_vs_xp_stats(date_str):
         """,
         as_dict=True,
     )
-    return [[date_str, r.level or "Unset", round(r.avg_xp or 0, 2), r.min_xp or 0, r.max_xp or 0] for r in rows]
+    by_level = {(r.level or "Unset"): r for r in rows}
+    out = {}
+    for lvl in _LEVEL_OPTIONS:
+        r = by_level.get(lvl)
+        out[f"{lvl} Avg XP"] = round(r.avg_xp or 0, 2) if r else 0
+        out[f"{lvl} Min XP"] = (r.min_xp or 0) if r else 0
+        out[f"{lvl} Max XP"] = (r.max_xp or 0) if r else 0
+    return out
 
 
-def _metric_xp_velocity_by_level(date_str):
+def _metric_xp_velocity_by_level() -> dict:
     rows = frappe.db.sql(
         """
         SELECT level, AVG(xp_d0 + xp_d1 + xp_d2 + xp_d3 + xp_d4 + xp_d5 + xp_d6)::float AS avg_weekly
@@ -187,10 +224,11 @@ def _metric_xp_velocity_by_level(date_str):
         """,
         as_dict=True,
     )
-    return [[date_str, r.level or "Unset", round(r.avg_weekly or 0, 2)] for r in rows]
+    by_level = {(r.level or "Unset"): round(r.avg_weekly or 0, 2) for r in rows}
+    return {f"{lvl} Avg Weekly XP": by_level.get(lvl, 0) for lvl in _LEVEL_OPTIONS}
 
 
-def _metric_streak_length_histogram(date_str):
+def _metric_streak_length_histogram() -> dict:
     vals = []
     for r in _scan_learners_chunked(
         """
@@ -202,18 +240,16 @@ def _metric_streak_length_histogram(date_str):
         """
     ):
         vals.append(r.streak or 0)
-    buckets = [0, 1, 3, 7, 14, 30, 60, 99999999]
-    labels = ["0", "1-2", "3-6", "7-13", "14-29", "30-59", "60+"]
-    counts = [0] * (len(buckets) - 1)
+    counts = [0] * len(_STREAK_LABELS)
     for v in vals:
-        for i in range(len(buckets) - 1):
-            if buckets[i] <= v < buckets[i + 1]:
+        for i in range(len(_STREAK_BUCKETS) - 1):
+            if _STREAK_BUCKETS[i] <= v < _STREAK_BUCKETS[i + 1]:
                 counts[i] += 1
                 break
-    return [[date_str, labels[i], counts[i]] for i in range(len(labels))]
+    return {label: counts[i] for i, label in enumerate(_STREAK_LABELS)}
 
 
-def _metric_streak_gap_count(date_str):
+def _metric_streak_gap_count() -> dict:
     row = frappe.db.sql(
         """
         SELECT COUNT(*) AS n
@@ -223,11 +259,11 @@ def _metric_streak_gap_count(date_str):
         """,
         as_dict=True,
     )[0]
-    return [[date_str, row.n or 0]]
+    return {"Streak Gap Count": row.n or 0}
 
 
-def _metric_churn_risk_segments(date_str):
-    rows = frappe.db.sql(
+def _metric_churn_risk_segments() -> dict:
+    row = frappe.db.sql(
         """
         SELECT
           SUM(CASE WHEN last_activity_date >= CURRENT_DATE - INTERVAL '7 DAYS' THEN 1 ELSE 0 END) AS healthy,
@@ -239,14 +275,14 @@ def _metric_churn_risk_segments(date_str):
         """,
         as_dict=True,
     )[0]
-    return [
-        [date_str, "healthy", rows.healthy or 0],
-        [date_str, "at_risk", rows.at_risk or 0],
-        [date_str, "churned", rows.churned or 0],
-    ]
+    return {
+        "Healthy": row.healthy or 0,
+        "At Risk": row.at_risk or 0,
+        "Churned": row.churned or 0,
+    }
 
 
-def _metric_reengagement_after_gap(date_str):
+def _metric_reengagement_after_gap() -> dict:
     row = frappe.db.sql(
         """
         SELECT COUNT(*) AS n
@@ -257,13 +293,22 @@ def _metric_reengagement_after_gap(date_str):
         """,
         as_dict=True,
     )[0]
-    return [[date_str, row.n or 0]]
+    return {"Reengaged Count": row.n or 0}
 
 
-def _metric_enrollment_count_distribution(date_str):
+def _metric_enrollment_count_distribution() -> dict:
     rows = frappe.db.sql(
         """
-        SELECT enrollment_count, COUNT(*) AS n
+        SELECT
+          CASE
+            WHEN sub.enrollment_count = 0 THEN '0'
+            WHEN sub.enrollment_count = 1 THEN '1'
+            WHEN sub.enrollment_count = 2 THEN '2'
+            WHEN sub.enrollment_count = 3 THEN '3'
+            WHEN sub.enrollment_count = 4 THEN '4'
+            ELSE '5+'
+          END AS bucket,
+          COUNT(*) AS n
           FROM (
             SELECT cl.name, COUNT(ce.name) AS enrollment_count
               FROM "tabCitizenship Learner" cl
@@ -271,26 +316,33 @@ def _metric_enrollment_count_distribution(date_str):
                 ON ce.parent = cl.name
              GROUP BY cl.name
           ) sub
-         GROUP BY enrollment_count
-         ORDER BY enrollment_count
+         GROUP BY bucket
         """,
         as_dict=True,
     )
-    return [[date_str, str(r.enrollment_count), r.n] for r in rows]
+    counts = {r.bucket: r.n for r in rows}
+    return {label: counts.get(label, 0) for label in _ENROLLMENT_BUCKET_LABELS}
 
 
-def _metric_achievement_unlock_rates(date_str):
+def _metric_achievement_unlock_rates() -> dict:
     rows = frappe.db.sql(
         """
         SELECT cla.achievement, COUNT(DISTINCT cla.parent) AS n
           FROM "tabCitizenship Learner Achievement" cla
          GROUP BY cla.achievement
          ORDER BY n DESC
-         LIMIT 50
+         LIMIT %s
         """,
+        (_ACHIEVEMENT_TOP_N,),
         as_dict=True,
     )
-    return [[date_str, r.achievement or "Unknown", r.n] for r in rows]
+    out = {}
+    for i, r in enumerate(rows):
+        col = _clean_column_name(r.achievement, f"Achievement {i + 1}")
+        if col in out:
+            col = f"{col} ({i + 1})"
+        out[col] = r.n or 0
+    return out
 
 
 def _metric_achievements_vs_xp_correlation(date_str):
@@ -312,7 +364,7 @@ def _metric_achievements_vs_xp_correlation(date_str):
     return [[date_str, r.achievement_count, round(r.avg_xp or 0, 2)] for r in rows]
 
 
-def _metric_achievements_by_level(date_str):
+def _metric_achievements_by_level() -> dict:
     rows = frappe.db.sql(
         """
         SELECT cl.level, COUNT(cla.name) AS n
@@ -323,10 +375,11 @@ def _metric_achievements_by_level(date_str):
         """,
         as_dict=True,
     )
-    return [[date_str, r.level or "Unset", r.n or 0] for r in rows]
+    counts = {(r.level or "Unset"): (r.n or 0) for r in rows}
+    return {lvl: counts.get(lvl, 0) for lvl in _LEVEL_OPTIONS}
 
 
-def _metric_engagement_by_language(date_str):
+def _metric_engagement_by_language() -> dict:
     rows = frappe.db.sql(
         """
         SELECT language, COUNT(*) AS n,
@@ -336,10 +389,15 @@ def _metric_engagement_by_language(date_str):
         """,
         as_dict=True,
     )
-    return [[date_str, r.language or "Unset", r.n, r.active_7d or 0] for r in rows]
+    out = {}
+    for r in rows:
+        lang = _clean_column_name(r.language, "Unset")
+        out[f"{lang} Total"] = r.n or 0
+        out[f"{lang} Active 7d"] = r.active_7d or 0
+    return out
 
 
-def _metric_engagement_by_age_group(date_str):
+def _metric_engagement_by_age_group() -> dict:
     rows = frappe.db.sql(
         """
         SELECT
@@ -358,10 +416,16 @@ def _metric_engagement_by_age_group(date_str):
         """,
         as_dict=True,
     )
-    return [[date_str, r.age_band, r.n, r.active_7d or 0] for r in rows]
+    by_band = {r.age_band: r for r in rows}
+    out = {}
+    for band in _AGE_BANDS:
+        r = by_band.get(band)
+        out[f"{band} Total"] = (r.n or 0) if r else 0
+        out[f"{band} Active 7d"] = (r.active_7d or 0) if r else 0
+    return out
 
 
-def _metric_level_progression_by_language(date_str):
+def _metric_level_progression_by_language() -> dict:
     rows = frappe.db.sql(
         """
         SELECT language, level, COUNT(*) AS n
@@ -370,7 +434,24 @@ def _metric_level_progression_by_language(date_str):
         """,
         as_dict=True,
     )
-    return [[date_str, r.language or "Unset", r.level or "Unset", r.n] for r in rows]
+    out = {}
+    for r in rows:
+        lang = _clean_column_name(r.language, "Unset")
+        lvl = r.level or "Unset"
+        out[f"{lang} - {lvl}"] = r.n or 0
+    return out
+
+
+def _metric_new_enrollments() -> dict:
+    row = frappe.db.sql(
+        """
+        SELECT COUNT(*) AS n
+          FROM "tabCitizenship Enrollment"
+         WHERE enrolled_on = CURRENT_DATE
+        """,
+        as_dict=True,
+    )[0]
+    return {"New Enrollments": row.n or 0}
 
 
 def _metric_top_xp_earners_all_time():
@@ -480,7 +561,7 @@ def _metric_stuck_at_level_1():
     return [[row.n or 0]]
 
 
-_DAILY_HISTORY_METRICS = {
+_DAILY_ROW_METRICS = {
     "DAL": _metric_dal,
     "XP-per-weekday": _metric_xp_per_weekday,
     "Weekly-XP-histogram": _metric_weekly_xp_histogram,
@@ -494,11 +575,15 @@ _DAILY_HISTORY_METRICS = {
     "Reengagement-after-gap": _metric_reengagement_after_gap,
     "Enrollment-count-distribution": _metric_enrollment_count_distribution,
     "Achievement-unlock-rates": _metric_achievement_unlock_rates,
-    "Achievements-vs-XP-correlation": _metric_achievements_vs_xp_correlation,
     "Achievements-by-level": _metric_achievements_by_level,
     "Engagement-by-language": _metric_engagement_by_language,
     "Engagement-by-age-group": _metric_engagement_by_age_group,
     "Level-progression-by-language": _metric_level_progression_by_language,
+    "New-Enrollments": _metric_new_enrollments,
+}
+
+_LEGACY_APPEND_METRICS = {
+    "Achievements-vs-XP-correlation": _metric_achievements_vs_xp_correlation,
 }
 
 _CURRENT_ONLY_METRICS = {
@@ -516,7 +601,9 @@ _CURRENT_ONLY_METRICS = {
 def _compute_all_metrics() -> dict:
     date_str = _ist_date_str()
     payload = {}
-    for tab_name, fn in _DAILY_HISTORY_METRICS.items():
+    for tab_name, fn in _DAILY_ROW_METRICS.items():
+        payload[tab_name] = {"mode": "daily_row", "date": date_str, "columns": fn()}
+    for tab_name, fn in _LEGACY_APPEND_METRICS.items():
         payload[tab_name] = {"mode": "append", "rows": fn(date_str)}
     for tab_name, fn in _CURRENT_ONLY_METRICS.items():
         payload[tab_name] = {"mode": "replace", "rows": fn()}
@@ -596,20 +683,26 @@ def run_analytics_report():
     frappe.db.commit()
 
     t0 = time.time()
+    records = 0
     try:
         _wait_for_rotation_lock_clear()
         if not rotation_succeeded_today():
             raise Exception("XP window rotation has not succeeded today; analytics report skipped")
 
+        records = _total_learner_count()
         payload = _compute_all_metrics()
         _send_to_apps_script(payload)
 
-        _mark(tracker, "Success", time.time() - t0)
+        duration = time.time() - t0
+        _mark(tracker, "Success", duration)
+        send_job_log(JOB_KEY, "Success", records, duration)
         frappe.logger().info(
-            f"CA Analytics report done in {round(time.time() - t0, 1)}s. FreeMB={_free_mb()}"
+            f"CA Analytics report done in {round(duration, 1)}s. FreeMB={_free_mb()}"
         )
     except Exception as e:
-        _mark(tracker, "Failed", time.time() - t0, str(e)[:5000])
+        duration = time.time() - t0
+        _mark(tracker, "Failed", duration, str(e)[:5000])
+        send_job_log(JOB_KEY, "Failed", records, duration, str(e)[:1000])
         frappe.log_error(title="CA Analytics report failed", message=str(e))
     finally:
         cache.delete_value(JOB_LOCK_KEY)
