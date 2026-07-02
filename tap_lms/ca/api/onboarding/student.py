@@ -168,6 +168,46 @@ def _truthy(value):
     return str(value).lower() in ("true", "1", "yes")
 
 
+def _fetch_learner_geo(learner_id):
+    row = frappe.db.sql(
+        """
+        SELECT school AS school_id, district AS district_id, state AS state_id, language
+        FROM "tabCitizenship Learner"
+        WHERE name=%s
+        LIMIT 1
+        """,
+        learner_id,
+        as_dict=True,
+    )
+    if not row:
+        return {"school_id": None, "district_id": None, "state_id": None, "language": None}
+    return {
+        "school_id": row[0].school_id,
+        "district_id": row[0].district_id,
+        "state_id": row[0].state_id,
+        "language": row[0].language,
+    }
+
+
+def _backfill_learner_geo_from_school(learner_id, school_id):
+    if not school_id:
+        return None, None
+    district, state = _fetch_school_geo(school_id)
+    if district or state:
+        frappe.db.sql(
+            """
+            UPDATE "tabCitizenship Learner"
+               SET district = COALESCE(district, %s),
+                   state    = COALESCE(state, %s),
+                   modified = NOW()
+             WHERE name = %s
+            """,
+            (district, state, learner_id),
+        )
+        frappe.db.commit()
+    return district, state
+
+
 @frappe.whitelist(allow_guest=True)
 def create_first_profile(
     display_name=None, grade=None, school_id=None,
@@ -260,10 +300,8 @@ def select_profile(phone=None, learner_id=None, include_enrollments=None, page=N
 
     row = frappe.db.sql(
         """
-        SELECT cap.citizenship_learner, cap.student_name, cap.grade, cap.avatar, cl.language,
-               cl.district AS district_id, cl.state AS state_id, cl.school AS school_id
+        SELECT cap.citizenship_learner, cap.student_name, cap.grade, cap.avatar
         FROM "tabCitizenship Auth Profile" cap
-        LEFT JOIN "tabCitizenship Learner" cl ON cl.name = cap.citizenship_learner
         WHERE cap.parent=%s AND cap.citizenship_learner=%s
         LIMIT 1
         """,
@@ -273,9 +311,19 @@ def select_profile(phone=None, learner_id=None, include_enrollments=None, page=N
     if not row:
         frappe.throw("Profile not linked to this account", frappe.AuthenticationError)
 
+    profile = dict(row[0])
+    geo = _fetch_learner_geo(learner_id)
+
+    if not geo["district_id"] and not geo["state_id"] and geo["school_id"]:
+        district, state = _backfill_learner_geo_from_school(learner_id, geo["school_id"])
+        geo["district_id"] = geo["district_id"] or district
+        geo["state_id"] = geo["state_id"] or state
+
+    profile.update(geo)
+
     from tap_lms.ca.api.progress.learner import _learner_xp_state
     state = _learner_xp_state(learner_id)
-    result = {"success": True, "learner_id": learner_id, "profile": row[0], **state}
+    result = {"success": True, "learner_id": learner_id, "profile": profile, **state}
 
     if _truthy(include_enrollments):
         enrollments, has_more = _fetch_enrollments_sql(learner_id, page=page, page_size=page_size)
