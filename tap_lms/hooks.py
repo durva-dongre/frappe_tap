@@ -46,6 +46,17 @@ doc_events = {
 #   - check_auto_activate: SP — auto-activates BPRs whose batch.start_date has
 #                          arrived; seeds next_action_at on PEs so the per-PE
 #                          dispatcher has work. See task #19 for details.
+#   - run_window_rollover: Citizenship Academy (Tapapp) — bulk rollover of
+#                          any student's expired 7-day activity window.
+#                          record_activity() already rolls a single student's
+#                          window forward lazily on their next activity, so
+#                          this job isn't required for the binge-lock itself;
+#                          it exists to decay `streak` back to 0 for students
+#                          who go silent (never call record_activity again,
+#                          so their streak would otherwise stay frozen), and
+#                          to keep `is_bingeing` from going stale once a
+#                          window closes. See tap_lms.ca_api.jobs.window_rollover
+#                          for full rationale.
 #
 # Cron:
 #   - */1 * * * *  — pe_dispatcher: per-PE event-driven dispatcher (task #15);
@@ -82,6 +93,7 @@ scheduler_events = {
         "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages",
         "tap_lms.summer_program.scheduler.run_daily_actions",
         "tap_lms.summer_program.batch_activation.check_auto_activate",
+        "tap_lms.ca_api.jobs.window_rollover.run_window_rollover",
     ],
     "cron": {
         "*/1 * * * *": [
