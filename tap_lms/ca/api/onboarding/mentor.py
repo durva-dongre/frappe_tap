@@ -101,6 +101,47 @@ def _mentor_school_id(phone):
     return school_row[0].school_id if school_row else None
 
 
+def _row_to_student_dict(r):
+    return {
+        "learner_id": r.learner_id,
+        "student_name": r.student_name,
+        "grade": r.grade,
+        "avatar": r.avatar,
+        "roll_number": r.roll_number,
+    }
+
+
+def _fetch_owned_students(phone, grade=None, query=None, page=1, page_size=50):
+    conditions = ["cap.parent = %s"]
+    params = [phone]
+    if grade:
+        conditions.append("cap.grade = %s")
+        params.append(grade)
+    if query:
+        conditions.append("cap.student_name ILIKE %s")
+        params.append(f"%{query}%")
+
+    where_clause = " AND ".join(conditions)
+    offset = (page - 1) * page_size
+
+    rows = frappe.db.sql(
+        f"""
+        SELECT citizenship_learner AS learner_id,
+               student_name, grade, avatar, roll_number
+        FROM "tabCitizenship Auth Profile" cap
+        WHERE {where_clause}
+        ORDER BY cap.grade ASC, cap.idx ASC
+        LIMIT %s OFFSET %s
+        """,
+        (*params, page_size + 1, offset),
+        as_dict=True,
+    )
+
+    has_more = len(rows) > page_size
+    data = [_row_to_student_dict(r) for r in rows[:page_size]]
+    return data, has_more
+
+
 @frappe.whitelist(allow_guest=True)
 def create_mentor_profile(
     display_name=None, mentor_type=None, avatar=None,
@@ -210,42 +251,14 @@ def get_class_roster(phone=None, grade=None):
     grade = grade or fd.get("grade")
     page = int(fd.get("page", 1))
     page_size = min(int(fd.get("page_size", 50)), 100)
-    offset = (page - 1) * page_size
 
     _require_access_token(phone)
-    mentor_row = _require_mentor(phone)
+    _require_mentor(phone)
 
-    if mentor_row.mentor_type != "Teacher":
-        frappe.throw("Class roster is only available for teachers", frappe.AuthenticationError)
+    if not grade:
+        frappe.throw("grade is required", frappe.ValidationError)
 
-    school_id = _mentor_school_id(phone)
-    if not school_id:
-        frappe.throw("Could not determine school for this teacher", frappe.ValidationError)
-
-    rows = frappe.db.sql(
-        """
-        SELECT cap.citizenship_learner AS learner_id,
-               cap.student_name, cap.grade, cap.avatar, cap.roll_number
-        FROM "tabCitizenship Auth Profile" cap
-        JOIN "tabCitizenship Learner" cl ON cl.name = cap.citizenship_learner
-        WHERE cl.school = %s AND cap.grade = %s
-        ORDER BY cap.roll_number ASC, cap.student_name ASC
-        LIMIT %s OFFSET %s
-        """,
-        (school_id, grade, page_size + 1, offset),
-        as_dict=True,
-    )
-    has_more = len(rows) > page_size
-    data = [
-        {
-            "learner_id": r.learner_id,
-            "student_name": r.student_name,
-            "grade": r.grade,
-            "avatar": r.avatar,
-            "roll_number": r.roll_number,
-        }
-        for r in rows[:page_size]
-    ]
+    data, has_more = _fetch_owned_students(phone, grade=grade, page=page, page_size=page_size)
     return {"data": data, "has_more": has_more, "page": page, "page_size": page_size}
 
 
@@ -256,69 +269,11 @@ def get_all_students(phone=None, grade=None):
     grade = grade or fd.get("grade")
     page = int(fd.get("page", 1))
     page_size = min(int(fd.get("page_size", 50)), 100)
-    offset = (page - 1) * page_size
 
     _require_access_token(phone)
-    mentor_row = _require_mentor(phone)
-    mentor_type = mentor_row.mentor_type
+    _require_mentor(phone)
 
-    if mentor_type == "Teacher":
-        school_id = _mentor_school_id(phone)
-        if not school_id:
-            frappe.throw("Could not determine school for this teacher", frappe.ValidationError)
-
-        conditions = ["cl.school = %s"]
-        params = [school_id]
-        if grade:
-            conditions.append("cap.grade = %s")
-            params.append(grade)
-
-        where_clause = " AND ".join(conditions)
-        rows = frappe.db.sql(
-            f"""
-            SELECT cap.citizenship_learner AS learner_id,
-                   cap.student_name, cap.grade, cap.avatar, cap.roll_number
-            FROM "tabCitizenship Auth Profile" cap
-            JOIN "tabCitizenship Learner" cl ON cl.name = cap.citizenship_learner
-            WHERE {where_clause}
-            ORDER BY cap.grade ASC, cap.roll_number ASC, cap.student_name ASC
-            LIMIT %s OFFSET %s
-            """,
-            (*params, page_size + 1, offset),
-            as_dict=True,
-        )
-    else:
-        conditions = ["cap.parent = %s"]
-        params = [phone]
-        if grade:
-            conditions.append("cap.grade = %s")
-            params.append(grade)
-
-        where_clause = " AND ".join(conditions)
-        rows = frappe.db.sql(
-            f"""
-            SELECT cap.citizenship_learner AS learner_id,
-                   cap.student_name, cap.grade, cap.avatar, cap.roll_number
-            FROM "tabCitizenship Auth Profile" cap
-            WHERE {where_clause}
-            ORDER BY cap.grade ASC, cap.idx ASC
-            LIMIT %s OFFSET %s
-            """,
-            (*params, page_size + 1, offset),
-            as_dict=True,
-        )
-
-    has_more = len(rows) > page_size
-    data = [
-        {
-            "learner_id": r.learner_id,
-            "student_name": r.student_name,
-            "grade": r.grade,
-            "avatar": r.avatar,
-            "roll_number": r.roll_number,
-        }
-        for r in rows[:page_size]
-    ]
+    data, has_more = _fetch_owned_students(phone, grade=grade, page=page, page_size=page_size)
     return {"data": data, "has_more": has_more, "page": page, "page_size": page_size}
 
 
@@ -335,6 +290,13 @@ def get_student_detail(phone=None, learner_id=None, fields=None):
     _require_access_token(phone)
     _require_mentor(phone)
 
+    owned = frappe.db.sql(
+        "SELECT 1 FROM \"tabCitizenship Auth Profile\" WHERE parent=%s AND citizenship_learner=%s LIMIT 1",
+        (phone, learner_id),
+    )
+    if not owned:
+        frappe.throw("Student not linked to this account", frappe.AuthenticationError)
+
     from tap_lms.ca.api.progress.learner import _learner_xp_state, _parse_optional
     optional = _parse_optional(fields)
     include_daily = optional is None or "xp_daily" in optional
@@ -349,75 +311,11 @@ def search_students(phone=None, query=None, grade=None):
     grade = grade or fd.get("grade")
     page = int(fd.get("page", 1))
     page_size = min(int(fd.get("page_size", 50)), 100)
-    offset = (page - 1) * page_size
 
     _require_access_token(phone)
-    mentor_row = _require_mentor(phone)
-    mentor_type = mentor_row.mentor_type
+    _require_mentor(phone)
 
-    if mentor_type == "Teacher":
-        school_id = _mentor_school_id(phone)
-        if not school_id:
-            frappe.throw("Could not determine school for this teacher", frappe.ValidationError)
-
-        conditions = ["cl.school = %s"]
-        params = [school_id]
-        if grade:
-            conditions.append("cap.grade = %s")
-            params.append(grade)
-        if query:
-            conditions.append("cap.student_name ILIKE %s")
-            params.append(f"%{query}%")
-
-        where_clause = " AND ".join(conditions)
-        rows = frappe.db.sql(
-            f"""
-            SELECT cap.citizenship_learner AS learner_id,
-                   cap.student_name, cap.grade, cap.avatar, cap.roll_number
-            FROM "tabCitizenship Auth Profile" cap
-            JOIN "tabCitizenship Learner" cl ON cl.name = cap.citizenship_learner
-            WHERE {where_clause}
-            ORDER BY cap.grade ASC, cap.roll_number ASC, cap.student_name ASC
-            LIMIT %s OFFSET %s
-            """,
-            (*params, page_size + 1, offset),
-            as_dict=True,
-        )
-    else:
-        conditions = ["cap.parent = %s"]
-        params = [phone]
-        if grade:
-            conditions.append("cap.grade = %s")
-            params.append(grade)
-        if query:
-            conditions.append("cap.student_name ILIKE %s")
-            params.append(f"%{query}%")
-
-        where_clause = " AND ".join(conditions)
-        rows = frappe.db.sql(
-            f"""
-            SELECT cap.citizenship_learner AS learner_id,
-                   cap.student_name, cap.grade, cap.avatar, cap.roll_number
-            FROM "tabCitizenship Auth Profile" cap
-            WHERE {where_clause}
-            ORDER BY cap.grade ASC, cap.idx ASC
-            LIMIT %s OFFSET %s
-            """,
-            (*params, page_size + 1, offset),
-            as_dict=True,
-        )
-
-    has_more = len(rows) > page_size
-    data = [
-        {
-            "learner_id": r.learner_id,
-            "student_name": r.student_name,
-            "grade": r.grade,
-            "avatar": r.avatar,
-            "roll_number": r.roll_number,
-        }
-        for r in rows[:page_size]
-    ]
+    data, has_more = _fetch_owned_students(phone, grade=grade, query=query, page=page, page_size=page_size)
     return {"data": data, "has_more": has_more, "page": page, "page_size": page_size}
 
 
@@ -507,11 +405,17 @@ def get_student_profiles_bulk(phone=None, learner_ids=None):
     return {"data": rows}
 
 
-@frappe.whitelist(allow_guest=True)
-def select_profile(phone=None, learner_id=None, include_enrollments=None, page=None, page_size=None):
+@frappe.whitelist(allow_guest=True) 
+def select_profile(phone=None, learner_id=None, include_enrollments=None, page=None, page_size=None, fields=None):
     from tap_lms.ca.api.onboarding.student import select_profile as _select
-    return _select(phone=phone, learner_id=learner_id, include_enrollments=include_enrollments, page=page, page_size=page_size)
-
+    return _select(
+        phone=phone,
+        learner_id=learner_id,
+        include_enrollments=include_enrollments,
+        page=page,
+        page_size=page_size,
+        fields=fields,
+    )
 
 @frappe.whitelist(allow_guest=True)
 def update_avatar(phone=None, learner_id=None, avatar=None):

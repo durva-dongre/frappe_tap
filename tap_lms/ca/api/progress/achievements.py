@@ -1,4 +1,67 @@
 import frappe
+import json
+
+
+def _award_achievement_row(learner_id, achievement, level):
+    level = int(level)
+    frappe.db.sql(
+        """
+        INSERT INTO "tabCitizenship Learner Achievement"
+            (name, parent, parenttype, parentfield,
+             achievement, level,
+             creation, modified, modified_by, owner)
+        VALUES
+            (%s, %s, 'Citizenship Learner', 'achievements',
+             %s, %s,
+             NOW(), NOW(), 'Administrator', 'Administrator')
+        ON CONFLICT (parent, achievement)
+        DO UPDATE
+           SET level    = EXCLUDED.level,
+               modified = NOW()
+         WHERE "tabCitizenship Learner Achievement".level < EXCLUDED.level
+        """,
+        (frappe.generate_hash(length=10), learner_id, achievement, level),
+    )
+
+    current = frappe.db.sql(
+        "SELECT level FROM \"tabCitizenship Learner Achievement\" WHERE parent=%s AND achievement=%s LIMIT 1",
+        (learner_id, achievement),
+        as_dict=True,
+    )
+    current_level = current[0].level if current else level
+    return {"awarded": current_level == level, "achievement": achievement, "level": current_level}
+
+
+def _parse_achievements_payload(achievements_param):
+    if not achievements_param:
+        return []
+
+    if isinstance(achievements_param, str):
+        try:
+            parsed = json.loads(achievements_param)
+        except Exception:
+            return []
+    else:
+        parsed = achievements_param
+
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list):
+        return []
+
+    result = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        achievement = item.get("achievement")
+        level = item.get("level")
+        if not achievement or level is None:
+            continue
+        try:
+            result.append((achievement, int(level)))
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 @frappe.whitelist(allow_guest=True)
@@ -32,32 +95,6 @@ def award_achievement(learner_id=None, achievement=None, level=None):
     if not learner_id or not achievement or level is None:
         frappe.throw("learner_id, achievement, and level are required", frappe.ValidationError)
 
-    level = int(level)
-
-    frappe.db.sql(
-        """
-        INSERT INTO "tabCitizenship Learner Achievement"
-            (name, parent, parenttype, parentfield,
-             achievement, level,
-             creation, modified, modified_by, owner)
-        VALUES
-            (%s, %s, 'Citizenship Learner', 'achievements',
-             %s, %s,
-             NOW(), NOW(), 'Administrator', 'Administrator')
-        ON CONFLICT (parent, achievement)
-        DO UPDATE
-           SET level    = EXCLUDED.level,
-               modified = NOW()
-         WHERE "tabCitizenship Learner Achievement".level < EXCLUDED.level
-        """,
-        (frappe.generate_hash(length=10), learner_id, achievement, level),
-    )
+    result = _award_achievement_row(learner_id, achievement, level)
     frappe.db.commit()
-
-    current = frappe.db.sql(
-        "SELECT level FROM \"tabCitizenship Learner Achievement\" WHERE parent=%s AND achievement=%s LIMIT 1",
-        (learner_id, achievement),
-        as_dict=True,
-    )
-    current_level = current[0].level if current else level
-    return {"awarded": current_level == level, "achievement": achievement, "level": current_level}
+    return result

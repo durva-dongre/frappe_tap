@@ -5,6 +5,10 @@ from .learner import (
     _queue_xp,
     _parse_optional,
 )
+from .achievements import (
+    _award_achievement_row,
+    _parse_achievements_payload,
+)
 
 
 def _get_enrollment_row(learner_id: str, course: str):
@@ -51,6 +55,7 @@ def _ensure_enrollment(learner_id: str, course: str):
 def update_content_progress(
     learner_id=None, course=None, video_index=None,
     quiz_index=None, xp=None, fetch_next=False, fields=None,
+    achievements=None,
 ):
     fd = frappe.form_dict
     learner_id = learner_id or fd.get("learner_id")
@@ -60,6 +65,7 @@ def update_content_progress(
     xp = xp if xp is not None else fd.get("xp")
     fetch_next = fetch_next if fetch_next is not False else fd.get("fetch_next", False)
     fields = fields or fd.get("fields")
+    achievements = achievements if achievements is not None else fd.get("achievements")
 
     if not learner_id or not course:
         frappe.throw("learner_id and course are required", frappe.ValidationError)
@@ -79,6 +85,8 @@ def update_content_progress(
 
     optional = _parse_optional(fields)
     include_daily = optional is None or "xp_daily" in optional
+
+    parsed_achievements = _parse_achievements_payload(achievements)
 
     enrollment = _ensure_enrollment(learner_id, course)
     if not enrollment:
@@ -110,6 +118,12 @@ def update_content_progress(
     _update_streak(learner_id)
     _queue_xp(learner_id, xp)
 
+    awarded_achievements = []
+    for achievement, level in parsed_achievements:
+        awarded_achievements.append(_award_achievement_row(learner_id, achievement, level))
+    if awarded_achievements:
+        frappe.db.commit()
+
     result = {
         "updated": progress_moved,
         "video_updated": video_advanced,
@@ -118,6 +132,9 @@ def update_content_progress(
         "quizzes_completed": new_quizzes,
         **_learner_xp_state(learner_id, include_daily=include_daily),
     }
+
+    if awarded_achievements:
+        result["achievements_awarded"] = awarded_achievements
 
     if fetch_next_flag:
         result["next_video_index"] = new_videos + 1 if has_video else None

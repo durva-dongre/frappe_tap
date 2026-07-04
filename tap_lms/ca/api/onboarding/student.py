@@ -289,13 +289,14 @@ def add_profile(
 
 
 @frappe.whitelist(allow_guest=True)
-def select_profile(phone=None, learner_id=None, include_enrollments=None, page=None, page_size=None):
+def select_profile(phone=None, learner_id=None, include_enrollments=None, page=None, page_size=None, fields=None):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
     learner_id = learner_id or fd.get("learner_id")
     include_enrollments = include_enrollments if include_enrollments is not None else fd.get("include_enrollments")
     page = int(page or fd.get("page", 1))
     page_size = min(int(page_size or fd.get("page_size", 20)), 100)
+    fields = fields or fd.get("fields")
 
     payload, new_token = _require_access_token_with_refresh(phone)
 
@@ -326,8 +327,10 @@ def select_profile(phone=None, learner_id=None, include_enrollments=None, page=N
 
     profile.update(geo)
 
-    from tap_lms.ca.api.progress.learner import _learner_xp_state
-    state = _learner_xp_state(learner_id)
+    from tap_lms.ca.api.progress.learner import _learner_xp_state, _parse_optional
+    optional = _parse_optional(fields)
+    include_daily = optional is None or "xp_daily" in optional
+    state = _learner_xp_state(learner_id, include_daily=include_daily)
     result = {"success": True, "learner_id": learner_id, "profile": profile, **state}
 
     if _truthy(include_enrollments):
