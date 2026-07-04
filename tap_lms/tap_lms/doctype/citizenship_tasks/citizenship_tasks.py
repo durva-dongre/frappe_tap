@@ -5,7 +5,6 @@ JOB_DISPATCH = {
     "XP Window Rotate": "tap_lms.ca.jobs.xp_window_rotate.run_xp_window_rotate",
     "Leaderboard Build": "tap_lms.ca.jobs.leaderboard_build.run_leaderboard_build",
     "Analytics Report": "tap_lms.ca.jobs.analytics_report.run_analytics_report",
-    "Window Rollover": "tap_lms.ca.jobs.window_rollover.run_window_rollover",
 }
 
 

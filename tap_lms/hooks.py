@@ -55,7 +55,7 @@ doc_events = {
 #                          who go silent (never call record_activity again,
 #                          so their streak would otherwise stay frozen), and
 #                          to keep `is_bingeing` from going stale once a
-#                          window closes. See tap_lms.ca.jobs.window_rollover
+#                          window closes. See tap_lms.tapapp.jobs.window_rollover
 #                          for full rationale.
 #
 # Cron:
@@ -93,7 +93,7 @@ scheduler_events = {
         "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages",
         "tap_lms.summer_program.scheduler.run_daily_actions",
         "tap_lms.summer_program.batch_activation.check_auto_activate",
-        "tap_lms.ca.jobs.window_rollover.run_window_rollover",
+        "tap_lms.tapapp.jobs.window_rollover.run_window_rollover",
     ],
     "cron": {
         "*/1 * * * *": [
