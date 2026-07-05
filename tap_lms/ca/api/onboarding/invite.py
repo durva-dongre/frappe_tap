@@ -39,6 +39,16 @@ def _require_registration_token(phone, token):
     return payload
 
 
+def _link_learner_to_teacher(teacher_phone, learner_id, student_id, display_name, grade, avatar, roll_number=None):
+    already_linked = frappe.db.sql(
+        "SELECT 1 FROM \"tabCitizenship Auth Profile\" WHERE parent=%s AND citizenship_learner=%s LIMIT 1",
+        (teacher_phone, learner_id),
+    )
+    if already_linked:
+        return
+    _append_profile_row(teacher_phone, learner_id, student_id, display_name, grade, avatar, roll_number)
+
+
 @frappe.whitelist(allow_guest=True)
 def get_school_meta(school_id=None):
     school_id = school_id or frappe.form_dict.get("school_id")
@@ -69,7 +79,7 @@ def finalize_join(
     phone=None, display_name=None, grade=None,
     school_id=None, language=None, avatar=None,
     password=None, dob=None, roll_number=None,
-    registration_token=None,
+    registration_token=None, invite_token=None,
 ):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
@@ -82,6 +92,7 @@ def finalize_join(
     dob = dob or fd.get("dob")
     roll_number = roll_number or fd.get("roll_number")
     registration_token = registration_token or fd.get("registration_token")
+    invite_token = invite_token or fd.get("invite_token")
 
     if not phone or not display_name or not grade or not school_id or not language:
         frappe.throw("phone, display_name, grade, school_id, language are required", frappe.ValidationError)
@@ -91,15 +102,26 @@ def finalize_join(
     else:
         _require_access_token(phone)
 
+    invite_payload = _decode_token(invite_token, "invite") if invite_token else None
+    if invite_token and not invite_payload:
+        frappe.throw("Invalid or expired invite token", frappe.AuthenticationError)
+
     _ensure_citizenship_auth(phone, password if password and len(password) >= 6 else None)
 
     student_id = _insert_student(display_name, phone, grade, school_id, language, dob)
     learner_id = _insert_learner(student_id, display_name, grade, school_id, language)
     _append_profile_row(phone, learner_id, student_id, display_name, grade, avatar, roll_number)
+
+    if invite_payload:
+        _link_learner_to_teacher(
+            invite_payload["teacher_auth_name"], learner_id, student_id,
+            display_name, grade, avatar, roll_number,
+        )
+
     _sync_leaderboard_async(student_id, display_name, school_id)
 
     profiles, has_more = _fetch_profiles_sql(phone)
-    return {
+    result = {
         "success": True,
         "token": _generate_access_token(phone),
         "phone": phone,
@@ -108,3 +130,6 @@ def finalize_join(
         "profiles_has_more": has_more,
         "school_id": school_id,
     }
+    if invite_payload:
+        result["linked_teacher"] = invite_payload["teacher_auth_name"]
+    return result
