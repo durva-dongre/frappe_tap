@@ -1,7 +1,7 @@
 import frappe
 
 
-def _fetch_achievements_sql(learner_id):
+def fetch_achievements(learner_id):
     rows = frappe.db.sql(
         """
         SELECT achievement, level
@@ -20,17 +20,11 @@ def get_learner_achievements(learner_id=None):
     learner_id = learner_id or frappe.form_dict.get("learner_id")
     if not learner_id:
         frappe.throw("learner_id is required", frappe.ValidationError)
-    return {"learner_id": learner_id, "achievements": _fetch_achievements_sql(learner_id)}
+    return {"learner_id": learner_id, "achievements": fetch_achievements(learner_id)}
 
 
 @frappe.whitelist()
 def award_achievement(learner_id=None, achievement=None, level=None):
-    """
-    Tapapp Learner Achievements has no unique constraint defined in the
-    doctype json (unlike a hypothetical (parent, achievement) unique key),
-    so we look the row up manually and update-or-insert rather than relying
-    on ON CONFLICT, to stay strictly compatible with the schema as given.
-    """
     learner_id = learner_id or frappe.form_dict.get("learner_id")
     achievement = achievement or frappe.form_dict.get("achievement")
     level = level if level is not None else frappe.form_dict.get("level")
@@ -47,7 +41,6 @@ def award_achievement(learner_id=None, achievement=None, level=None):
     )
 
     if existing:
-        # Only "upgrade" — never downgrade an achievement level.
         if str(existing[0].level) < level:
             frappe.db.sql(
                 'UPDATE "tabTapapp Learner Achievements" SET level=%s, modified=NOW() WHERE name=%s',

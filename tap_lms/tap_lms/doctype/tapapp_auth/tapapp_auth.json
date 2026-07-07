@@ -1,17 +1,12 @@
 {
  "actions": [],
  "autoname": "field:phone",
- "creation": "2026-06-30 00:00:00.000000",
+ "creation": "2026-07-08 00:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
   "phone",
-  "admin_code",
-  "mentor_section",
-  "mentor_type",
-  "mentor",
-  "mentor_avatar",
   "students"
  ],
  "fields": [
@@ -24,38 +19,6 @@
    "unique": 1
   },
   {
-   "fieldname": "admin_code",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Admin Code",
-   "length": 6
-  },
-  {
-   "fieldname": "mentor_section",
-   "fieldtype": "Section Break",
-   "label": "Mentor"
-  },
-  {
-   "fieldname": "mentor_type",
-   "fieldtype": "Select",
-   "in_list_view": 1,
-   "label": "Mentor Type",
-   "options": "\nTeacher\nGuardian"
-  },
-  {
-   "fieldname": "mentor",
-   "fieldtype": "Dynamic Link",
-   "label": "Mentor",
-   "options": "mentor_type",
-   "in_list_view": 1
-  },
-  {
-   "fieldname": "mentor_avatar",
-   "fieldtype": "Data",
-   "label": "Avatar",
-   "length": 2
-  },
-  {
    "fieldname": "students",
    "fieldtype": "Table",
    "label": "Linked Students",
@@ -64,7 +27,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-06-30 00:00:00.000000",
+ "modified": "2026-07-08 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Tapapp Auth",

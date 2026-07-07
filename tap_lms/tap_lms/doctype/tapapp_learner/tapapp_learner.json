@@ -2,7 +2,7 @@
   "actions": [],
   "allow_rename": 0,
   "autoname": "format:TL{########}",
-  "creation": "2026-06-30 00:00:00.000000",
+  "creation": "2026-07-08 00:00:00.000000",
   "default_view": "List",
   "doctype": "DocType",
   "editable_grid": 1,
@@ -14,12 +14,24 @@
     "state",
     "school",
     "birthdate",
+    "archetype",
+    "xp_section",
     "xp",
-    "last_activity_xp",
+    "xp_d0",
+    "xp_d1",
+    "xp_d2",
+    "xp_d3",
+    "xp_d4",
+    "xp_d5",
+    "xp_d6",
+    "weekly_xp",
     "level",
     "streak",
     "longest_streak",
     "last_activity_date",
+    "submission_section",
+    "submission_gems",
+    "submission_index",
     "activity_limit_section",
     "activities_watched_this_week",
     "max_weekly_activities",
@@ -68,6 +80,19 @@
       "label": "Birthdate"
     },
     {
+      "fieldname": "archetype",
+      "fieldtype": "Select",
+      "in_list_view": 1,
+      "label": "Archetype",
+      "options": "dormant\nfence_sitter\nirregular_submitter\nsubmitter",
+      "default": "dormant"
+    },
+    {
+      "fieldname": "xp_section",
+      "fieldtype": "Section Break",
+      "label": "XP"
+    },
+    {
       "fieldname": "xp",
       "fieldtype": "Int",
       "in_list_view": 1,
@@ -75,10 +100,51 @@
       "default": "0"
     },
     {
-      "description": "XP earned from the student's most recent activity. Overwritten each time an activity is completed; no daily/weekly breakdown is kept.",
-      "fieldname": "last_activity_xp",
+      "fieldname": "xp_d0",
       "fieldtype": "Int",
-      "label": "Last Activity XP",
+      "label": "XP Day 0 (Today)",
+      "default": "0"
+    },
+    {
+      "fieldname": "xp_d1",
+      "fieldtype": "Int",
+      "label": "XP Day 1",
+      "default": "0"
+    },
+    {
+      "fieldname": "xp_d2",
+      "fieldtype": "Int",
+      "label": "XP Day 2",
+      "default": "0"
+    },
+    {
+      "fieldname": "xp_d3",
+      "fieldtype": "Int",
+      "label": "XP Day 3",
+      "default": "0"
+    },
+    {
+      "fieldname": "xp_d4",
+      "fieldtype": "Int",
+      "label": "XP Day 4",
+      "default": "0"
+    },
+    {
+      "fieldname": "xp_d5",
+      "fieldtype": "Int",
+      "label": "XP Day 5",
+      "default": "0"
+    },
+    {
+      "fieldname": "xp_d6",
+      "fieldtype": "Int",
+      "label": "XP Day 6",
+      "default": "0"
+    },
+    {
+      "fieldname": "weekly_xp",
+      "fieldtype": "Int",
+      "label": "Weekly XP",
       "default": "0",
       "read_only": 1
     },
@@ -90,25 +156,42 @@
       "options": "Level 1\nLevel 2\nLevel 2A\nLevel 3\nLevel 3A\nLevel 3K\nLevel 3AK\nLevel 4\nLevel 4K"
     },
     {
-      "description": "Number of consecutive activity windows (weeks) in which the student completed at least one activity. Increments when an activity is completed in a new window immediately following the last one; resets to 1 if a window was skipped.",
       "fieldname": "streak",
       "fieldtype": "Int",
       "in_list_view": 1,
-      "label": "Current Streak (Weeks)",
+      "label": "Current Streak (Days)",
       "default": "0"
     },
     {
       "fieldname": "longest_streak",
       "fieldtype": "Int",
-      "label": "Longest Streak (Weeks)",
+      "label": "Longest Streak (Days)",
       "default": "0",
       "read_only": 1
     },
     {
-      "description": "Date of the student's most recent completed activity. Compared against window_start_date to determine whether the streak continues, resets, or stays flat.",
       "fieldname": "last_activity_date",
       "fieldtype": "Date",
       "label": "Last Activity Date"
+    },
+    {
+      "fieldname": "submission_section",
+      "fieldtype": "Section Break",
+      "label": "Submissions"
+    },
+    {
+      "fieldname": "submission_gems",
+      "fieldtype": "Int",
+      "in_list_view": 1,
+      "label": "Submission Gems",
+      "default": "0"
+    },
+    {
+      "fieldname": "submission_index",
+      "fieldtype": "Int",
+      "label": "Verified Submission Index",
+      "default": "0",
+      "read_only": 1
     },
     {
       "fieldname": "activity_limit_section",
@@ -116,7 +199,6 @@
       "label": "Weekly Activity Limit"
     },
     {
-      "description": "Count of activities watched since window_start_date. Capped at max_weekly_activities. Reset to 0 only when the 7-day window has elapsed.",
       "fieldname": "activities_watched_this_week",
       "fieldtype": "Int",
       "label": "Activities Watched This Window",
@@ -124,7 +206,6 @@
       "in_list_view": 1
     },
     {
-      "description": "Maximum number of activities a student is allowed to watch within a rolling 7-day window.",
       "fieldname": "max_weekly_activities",
       "fieldtype": "Int",
       "label": "Max Weekly Activities",
@@ -132,13 +213,11 @@
       "read_only": 1
     },
     {
-      "description": "Date the student's current 7-day counting window started, set on their first activity in the window. The window resets (window_start_date moves forward, count goes to 0) only once today >= window_start_date + 7 days, not on a fixed calendar day.",
       "fieldname": "window_start_date",
       "fieldtype": "Date",
       "label": "Window Start Date"
     },
     {
-      "description": "Flagged true when the student hits max_weekly_activities early in the window, indicating bingeing rather than spaced-out usage.",
       "fieldname": "is_bingeing",
       "fieldtype": "Check",
       "label": "Is Bingeing",
@@ -170,7 +249,7 @@
   ],
   "index_web_pages_for_search": 0,
   "links": [],
-  "modified": "2026-06-30 00:00:00.000000",
+  "modified": "2026-07-08 00:00:00.000000",
   "modified_by": "Administrator",
   "module": "Tap Lms",
   "name": "Tapapp Learner",

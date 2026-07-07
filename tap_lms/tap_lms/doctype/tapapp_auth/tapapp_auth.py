@@ -1,4 +1,6 @@
 import frappe
+from frappe.model.document import Document
 
-class TapappAuth(frappe.model.document.Document):
-	pass
+
+class TapappAuth(Document):
+    pass

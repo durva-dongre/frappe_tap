@@ -3,16 +3,7 @@ import jwt
 import datetime
 import uuid
 from frappe.utils.password import check_password, update_password
-
-# ---------------------------------------------------------------------------
-# Citizenship / Tapapp Academy — Auth layer
-#
-# No mentor concept anywhere in this app. Tapapp Auth.phone is simply the
-# login identity (could be a student's own phone, or a parent/guardian
-# phone shared across siblings). Tapapp Auth.students (child table of
-# Tapapp Auth Profile rows) links that phone to one or more Tapapp Learner
-# records. There is no role/permission distinction between profiles.
-# ---------------------------------------------------------------------------
+from tap_lms.tapapp.api.progress.learner import learner_full_state
 
 OTP_EXPIRY_SECONDS = 600
 REGISTRATION_TOKEN_EXPIRY_SECONDS = 1800
@@ -22,8 +13,6 @@ HARDCODED_OTP = "000000"
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
 LOGIN_PROFILES_PAGE_SIZE = 10
 
-
-# --- secrets / jwt -----------------------------------------------------
 
 def _get_jwt_secret():
     cache = frappe.cache()
@@ -154,9 +143,7 @@ def _ensure_tapapp_auth(phone, password=None):
         frappe.db.commit()
 
 
-# --- profile fetch (child table: Tapapp Auth Profile) ------------------
-
-def _fetch_profiles_sql(phone, page=1, page_size=50):
+def _fetch_profiles_with_state(phone, page=1, page_size=50):
     offset = (page - 1) * page_size
     rows = frappe.db.sql(
         """
@@ -170,20 +157,19 @@ def _fetch_profiles_sql(phone, page=1, page_size=50):
         as_dict=True,
     )
     has_more = len(rows) > page_size
-    profiles = [
-        {
+    profiles = []
+    for r in rows[:page_size]:
+        state = learner_full_state(r.tapapp_learner) if r.tapapp_learner else None
+        profiles.append({
             "learner_id": r.tapapp_learner,
             "student_name": r.student_name,
             "grade": r.grade,
             "avatar": r.avatar,
             "roll_number": r.roll_number,
-        }
-        for r in rows[:page_size]
-    ]
+            "state": state,
+        })
     return profiles, has_more
 
-
-# --- whitelisted endpoints ----------------------------------------------
 
 @frappe.whitelist(allow_guest=True)
 def check_phone(phone=None):
@@ -261,7 +247,7 @@ def login_with_password(phone=None, password=None):
     except frappe.AuthenticationError:
         return {"success": False, "error": "invalid_credentials"}
 
-    profiles, has_more = _fetch_profiles_sql(phone, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE)
+    profiles, has_more = _fetch_profiles_with_state(phone, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE)
     return {
         "success": True,
         "token": _generate_access_token(phone),
@@ -285,7 +271,7 @@ def get_profiles(phone=None):
     if not frappe.db.sql("SELECT 1 FROM \"tabTapapp Auth\" WHERE phone=%s LIMIT 1", phone):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
 
-    profiles, has_more = _fetch_profiles_sql(phone, page=page, page_size=page_size)
+    profiles, has_more = _fetch_profiles_with_state(phone, page=page, page_size=page_size)
     result = {
         "phone": phone,
         "profiles": profiles,
@@ -300,7 +286,6 @@ def get_profiles(phone=None):
 
 @frappe.whitelist(allow_guest=True)
 def search_profiles(phone=None):
-    """Search within the profiles linked to this phone (siblings, etc)."""
     phone = phone or frappe.form_dict.get("phone", "")
     fd = frappe.form_dict
     grade = fd.get("grade")
@@ -401,7 +386,7 @@ def reset_password(phone=None, password=None):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
     update_password(phone, password, doctype="Tapapp Auth", fieldname="password")
     frappe.db.commit()
-    profiles, has_more = _fetch_profiles_sql(phone)
+    profiles, has_more = _fetch_profiles_with_state(phone)
     return {
         "success": True,
         "token": _generate_access_token(phone),

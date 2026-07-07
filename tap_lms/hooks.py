@@ -57,6 +57,16 @@ doc_events = {
 #                          to keep `is_bingeing` from going stale once a
 #                          window closes. See tap_lms.tapapp.jobs.window_rollover
 #                          for full rationale.
+#   - run_xp_window_rotate (tapapp): rotates the Tapapp Learner 7-day XP
+#                          store (xp_d0..xp_d6 -> weekly_xp), same shape as
+#                          the CA rotation job below but scoped to Tapapp
+#                          Learner. See tap_lms.tapapp.jobs.xp_window_rotate.
+#   - run_analytics_report (tapapp): computes Tapapp Learner engagement
+#                          metrics (DAL, archetype distribution, level
+#                          distribution, submission gem totals, bingeing
+#                          count) and writes them out via the Apps Script
+#                          web app, same pattern as the CA analytics job.
+#                          See tap_lms.tapapp.jobs.analytics_report.
 #
 # Cron:
 #   - */1 * * * *  — pe_dispatcher: per-PE event-driven dispatcher (task #15);
@@ -77,9 +87,17 @@ doc_events = {
 #   - 0 0 * * 1    — auto_advance_batch_week: weekly Monday sweep that bumps
 #                    Batch.current_calendar_week and unblocks max_allowed_week
 #                    on each PE
-#   - 30 21 * * *  — run_leaderboard_build: nightly 03:00 IST leaderboard job.
-#                    Flushes XP queue, rotates 7-day XP window, rebuilds and
-#                    uploads school/district/state/national JSON files to R2.
+#   - 30 21 * * *  — run_xp_window_rotate (CA): nightly 03:00 IST job that
+#                    flushes the CA Redis XP queue and rotates the 7-day XP
+#                    window (xp_d0..xp_d6 -> weekly_xp) on tabCitizenship
+#                    Learner. Both run_leaderboard_build and
+#                    run_analytics_report below gate on this job's tracker
+#                    (Citizenship Tasks "XP Window Rotate") having
+#                    last_success_at == today before they'll proceed, so it
+#                    must run in this same nightly window ahead of them.
+#                  — run_leaderboard_build: nightly 03:00 IST leaderboard job.
+#                    Rebuilds and uploads school/district/state/national JSON
+#                    files to R2 once XP rotation has succeeded for the day.
 #                  — run_analytics_report: nightly 03:00 IST analytics job.
 #                    Computes 26 engagement/progress/retention/geography/
 #                    cohort/achievement metrics and writes them to Google
@@ -94,6 +112,8 @@ scheduler_events = {
         "tap_lms.summer_program.scheduler.run_daily_actions",
         "tap_lms.summer_program.batch_activation.check_auto_activate",
         "tap_lms.tapapp.jobs.window_rollover.run_window_rollover",
+        "tap_lms.tapapp.jobs.xp_window_rotate.run_xp_window_rotate",
+        "tap_lms.tapapp.jobs.analytics_report.run_analytics_report",
     ],
     "cron": {
         "*/1 * * * *": [
@@ -155,6 +175,7 @@ scheduler_events = {
         #     "tap_lms.summer_program.scheduler.periodic_glific_reconcile",
         # ],
         "30 21 * * *": [
+            "tap_lms.ca.jobs.xp_window_rotate.run_xp_window_rotate",
             "tap_lms.ca.jobs.leaderboard_build.run_leaderboard_build",
             "tap_lms.ca.jobs.analytics_report.run_analytics_report",
         ],
