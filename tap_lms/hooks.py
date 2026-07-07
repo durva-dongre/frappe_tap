@@ -57,16 +57,28 @@ doc_events = {
 #                          to keep `is_bingeing` from going stale once a
 #                          window closes. See tap_lms.tapapp.jobs.window_rollover
 #                          for full rationale.
-#   - run_xp_window_rotate (tapapp): rotates the Tapapp Learner 7-day XP
+#   - run_tapapp_xp_window_rotate: rotates the Tapapp Learner 7-day XP
 #                          store (xp_d0..xp_d6 -> weekly_xp), same shape as
 #                          the CA rotation job below but scoped to Tapapp
-#                          Learner. See tap_lms.tapapp.jobs.xp_window_rotate.
-#   - run_analytics_report (tapapp): computes Tapapp Learner engagement
+#                          Learner. Named run_tapapp_xp_window_rotate (not
+#                          run_xp_window_rotate) because Frappe's Scheduled
+#                          Job Type registry keys jobs by the trailing
+#                          "module.function" segment of the hook path, and
+#                          the CA job below already owns
+#                          "xp_window_rotate.run_xp_window_rotate" — an
+#                          identical trailing pair here would collide with
+#                          it in the Scheduled Job Type table and break
+#                          `bench migrate`. See
+#                          tap_lms.tapapp.jobs.tapapp_xp_window_rotate.
+#   - run_tapapp_analytics_report: computes Tapapp Learner engagement
 #                          metrics (DAL, archetype distribution, level
 #                          distribution, submission gem totals, bingeing
 #                          count) and writes them out via the Apps Script
 #                          web app, same pattern as the CA analytics job.
-#                          See tap_lms.tapapp.jobs.analytics_report.
+#                          Named run_tapapp_analytics_report for the same
+#                          Scheduled Job Type collision reason as above —
+#                          the CA job owns "analytics_report.run_analytics_report".
+#                          See tap_lms.tapapp.jobs.tapapp_analytics_report.
 #
 # Cron:
 #   - */1 * * * *  — pe_dispatcher: per-PE event-driven dispatcher (task #15);
@@ -112,8 +124,8 @@ scheduler_events = {
         "tap_lms.summer_program.scheduler.run_daily_actions",
         "tap_lms.summer_program.batch_activation.check_auto_activate",
         "tap_lms.tapapp.jobs.window_rollover.run_window_rollover",
-        "tap_lms.tapapp.jobs.xp_window_rotate.run_xp_window_rotate",
-        "tap_lms.tapapp.jobs.analytics_report.run_analytics_report",
+        "tap_lms.tapapp.jobs.tapapp_xp_window_rotate.run_tapapp_xp_window_rotate",
+        "tap_lms.tapapp.jobs.tapapp_analytics_report.run_tapapp_analytics_report",
     ],
     "cron": {
         "*/1 * * * *": [

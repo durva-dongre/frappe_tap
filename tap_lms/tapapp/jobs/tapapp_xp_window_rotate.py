@@ -65,7 +65,7 @@ def _rotate_xp_window():
     return updated
 
 
-def run_xp_window_rotate():
+def run_tapapp_xp_window_rotate():
     tracker = get_or_create_tracker(JOB_KEY, JOB_LABEL)
     if tracker.paused:
         tracker.status = "Paused"

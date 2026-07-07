@@ -108,7 +108,7 @@ def _send_to_apps_script(payload: dict):
     return resp_body
 
 
-def run_analytics_report():
+def run_tapapp_analytics_report():
     tracker = get_or_create_tracker(JOB_KEY, JOB_LABEL)
     if tracker.paused:
         tracker.status = "Paused"
