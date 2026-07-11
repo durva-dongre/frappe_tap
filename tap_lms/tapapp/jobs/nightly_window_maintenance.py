@@ -1,5 +1,6 @@
 import frappe
 import time
+from datetime import timedelta
 from tap_lms.tapapp.jobs._shared import (
     free_mb,
     dynamic_batch,
@@ -8,19 +9,21 @@ from tap_lms.tapapp.jobs._shared import (
     mark_tracker,
 )
 
-JOB_KEY = "XP Window Rotate"
-JOB_LABEL = "XP Window Rotate"
-JOB_LOCK_KEY = "tapapp:xp_rotate:running"
-JOB_START_KEY = "tapapp:xp_rotate:started_at"
+JOB_KEY = "Nightly Window Maintenance"
+JOB_LABEL = "Nightly Window Maintenance"
+JOB_LOCK_KEY = "tapapp:nightly_maintenance:running"
+JOB_START_KEY = "tapapp:nightly_maintenance:started_at"
 
-_ROTATE_BATCH_MIN = 2000
-_ROTATE_BATCH_MAX = 25000
+_BATCH_MIN = 2000
+_BATCH_MAX = 25000
 _SLEEP_BETWEEN_CHUNKS = 0.05
 _LOCK_TTL_BASE_SEC = 600
 _LOCK_TTL_PER_MILLION_SEC = 900
 
+WINDOW_DAYS = 7
 
-def _rotate_chunk(names: list):
+
+def _process_chunk(names: list, today, cutoff):
     placeholders = ",".join(["%s"] * len(names))
     frappe.db.sql(
         f"""
@@ -32,19 +35,39 @@ def _rotate_chunk(names: list):
                xp_d3 = xp_d2,
                xp_d2 = xp_d1,
                xp_d1 = xp_d0,
-               xp_d0 = 0
+               xp_d0 = 0,
+               window_start_date = CASE
+                   WHEN window_start_date IS NOT NULL AND window_start_date <= %s THEN %s
+                   ELSE window_start_date
+               END,
+               activities_watched_this_week = CASE
+                   WHEN window_start_date IS NOT NULL AND window_start_date <= %s THEN 0
+                   ELSE activities_watched_this_week
+               END,
+               is_bingeing = CASE
+                   WHEN window_start_date IS NOT NULL AND window_start_date <= %s THEN 0
+                   ELSE is_bingeing
+               END,
+               streak = CASE
+                   WHEN window_start_date IS NOT NULL AND window_start_date <= %s
+                        AND (last_activity_date IS NULL OR last_activity_date < window_start_date)
+                   THEN 0
+                   ELSE streak
+               END,
+               modified = NOW()
          WHERE name IN ({placeholders})
         """,
-        tuple(names),
+        (cutoff, today, cutoff, cutoff, cutoff, *names),
     )
     frappe.db.commit()
 
 
-def _rotate_xp_window():
+def _run_maintenance(today) -> int:
+    cutoff = today - timedelta(days=WINDOW_DAYS)
     last_name = ""
     updated = 0
     while True:
-        batch_size = dynamic_batch(_ROTATE_BATCH_MIN, _ROTATE_BATCH_MAX)
+        batch_size = dynamic_batch(_BATCH_MIN, _BATCH_MAX)
         rows = frappe.db.sql(
             """
             SELECT name FROM "tabTapapp Learner"
@@ -59,13 +82,13 @@ def _rotate_xp_window():
             break
         names = [r.name for r in rows]
         last_name = names[-1]
-        _rotate_chunk(names)
+        _process_chunk(names, today, cutoff)
         updated += len(names)
         time.sleep(0.2 if free_mb() < 512 else _SLEEP_BETWEEN_CHUNKS)
     return updated
 
 
-def run_tapapp_xp_window_rotate():
+def run_nightly_window_maintenance():
     tracker = get_or_create_tracker(JOB_KEY, JOB_LABEL)
     if tracker.paused:
         tracker.status = "Paused"
@@ -75,7 +98,7 @@ def run_tapapp_xp_window_rotate():
 
     cache = frappe.cache()
     if cache.get_value(JOB_LOCK_KEY):
-        frappe.logger().warning("Tapapp XP window rotate already running, skipping.")
+        frappe.logger().warning("Tapapp nightly window maintenance already running, skipping.")
         return
     lock_ttl = dynamic_lock_ttl(_LOCK_TTL_BASE_SEC, _LOCK_TTL_PER_MILLION_SEC)
     cache.set_value(JOB_LOCK_KEY, "1", expires_in_sec=lock_ttl)
@@ -87,14 +110,15 @@ def run_tapapp_xp_window_rotate():
 
     t0 = time.time()
     try:
-        updated = _rotate_xp_window()
+        today = frappe.utils.getdate(frappe.utils.now_datetime())
+        updated = _run_maintenance(today)
         duration = time.time() - t0
         mark_tracker(tracker, "Success", duration)
-        frappe.logger().info(f"Tapapp XP window rotate done in {round(duration, 1)}s. Rows updated={updated} FreeMB={free_mb()}")
+        frappe.logger().info(f"Tapapp nightly window maintenance done in {round(duration, 1)}s. Rows updated={updated} FreeMB={free_mb()}")
     except Exception as e:
         duration = time.time() - t0
         mark_tracker(tracker, "Failed", duration, str(e)[:5000])
-        frappe.log_error(title="Tapapp XP window rotate failed", message=frappe.get_traceback())
+        frappe.log_error(title="Tapapp nightly window maintenance failed", message=frappe.get_traceback())
     finally:
         cache.delete_value(JOB_LOCK_KEY)
         cache.delete_value(JOB_START_KEY)

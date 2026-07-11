@@ -41,19 +41,24 @@ def _clean_division(value):
     return value
 
 
-def _apply_updates(phone, learner_id, updates):
+def _validate_updates(updates):
     if "school" in updates or "school_id" in updates:
         frappe.throw("school cannot be edited", frappe.ValidationError)
 
     if "division" in updates and updates["division"]:
         updates["division"] = _clean_division(str(updates["division"]))
 
-    learner_set = {k: v for k, v in updates.items() if k in EDITABLE_LEARNER_FIELDS}
-    profile_set = {k: v for k, v in updates.items() if k in EDITABLE_PROFILE_FIELDS}
-
     unknown = set(updates.keys()) - EDITABLE_LEARNER_FIELDS - EDITABLE_PROFILE_FIELDS
     if unknown:
         frappe.throw(f"These fields cannot be edited: {', '.join(sorted(unknown))}", frappe.ValidationError)
+
+    learner_set = {k: v for k, v in updates.items() if k in EDITABLE_LEARNER_FIELDS}
+    profile_set = {k: v for k, v in updates.items() if k in EDITABLE_PROFILE_FIELDS}
+    return learner_set, profile_set
+
+
+def _apply_updates(phone, learner_id, updates):
+    learner_set, profile_set = _validate_updates(updates)
 
     if learner_set:
         set_clause = ", ".join(f"{k}=%s" for k in learner_set)
@@ -287,12 +292,131 @@ def update_student(phone=None, learner_id=None, updates=None):
     return {"success": True, **learner_full_state(learner_id, fields="profile,level")}
 
 
+def _dedupe_changes(changes):
+    valid_by_learner = {}
+    row_results = [None] * len(changes)
+    first_row_index = {}
+
+    for i, change in enumerate(changes):
+        learner_id = change.get("learner_id") if isinstance(change, dict) else None
+        updates = change.get("updates") if isinstance(change, dict) else None
+
+        if not learner_id or not isinstance(updates, dict) or not updates:
+            row_results[i] = {"learner_id": learner_id, "success": False, "error": "invalid_change"}
+            continue
+
+        if learner_id in valid_by_learner:
+            merged_updates = dict(valid_by_learner[learner_id])
+            merged_updates.update(updates)
+            valid_by_learner[learner_id] = merged_updates
+            row_results[i] = {"learner_id": learner_id, "success": False, "error": "merged_with_duplicate_row"}
+        else:
+            valid_by_learner[learner_id] = dict(updates)
+            first_row_index[learner_id] = i
+            row_results[i] = None
+
+    return valid_by_learner, row_results, first_row_index
+
+
+def _batch_update_learner_table(valid_rows, phone):
+    fieldsets = {}
+    for learner_id, learner_set in valid_rows.items():
+        if not learner_set:
+            continue
+        key = tuple(sorted(learner_set.keys()))
+        fieldsets.setdefault(key, []).append((learner_id, learner_set))
+
+    name_synced_learners = []
+    for cols, rows in fieldsets.items():
+        set_clauses = ", ".join(f"{c} = v.{c}" for c in cols)
+        values_rows = []
+        params = []
+        for learner_id, learner_set in rows:
+            placeholders = ", ".join(["%s"] * (1 + len(cols)))
+            values_rows.append(f"({placeholders})")
+            params.append(learner_id)
+            params.extend(learner_set[c] for c in cols)
+            if "student_name" in cols:
+                name_synced_learners.append(learner_id)
+
+        values_sql = ", ".join(values_rows)
+        col_list = ", ".join(cols)
+        frappe.db.sql(
+            f"""
+            UPDATE "tabTapapp Learner" AS t
+               SET {set_clauses}, modified = NOW()
+              FROM (VALUES {values_sql}) AS v(id, {col_list})
+             WHERE t.name = v.id
+            """,
+            tuple(params),
+        )
+
+    if name_synced_learners:
+        _batch_update_student_name_sync(valid_rows, name_synced_learners, phone)
+
+    return name_synced_learners
+
+
+def _batch_update_student_name_sync(valid_rows, learner_ids, phone):
+    values_rows = []
+    params = []
+    for learner_id in learner_ids:
+        values_rows.append("(%s, %s)")
+        params.append(learner_id)
+        params.append(valid_rows[learner_id]["student_name"])
+    values_sql = ", ".join(values_rows)
+    params.append(phone)
+    frappe.db.sql(
+        f"""
+        UPDATE "tabTapapp Auth Profile" AS t
+           SET student_name = v.student_name, modified = NOW()
+          FROM (VALUES {values_sql}) AS v(id, student_name)
+         WHERE t.tapapp_learner = v.id AND t.parent = %s
+        """,
+        tuple(params),
+    )
+
+
+def _batch_update_profile_table(valid_rows, phone):
+    fieldsets = {}
+    for learner_id, learner_set in valid_rows.items():
+        if not learner_set:
+            continue
+        key = tuple(sorted(learner_set.keys()))
+        fieldsets.setdefault(key, []).append((learner_id, learner_set))
+
+    for cols, rows in fieldsets.items():
+        set_clauses = ", ".join(f"{c} = v.{c}" for c in cols)
+        values_rows = []
+        params = []
+        for learner_id, profile_set in rows:
+            placeholders = ", ".join(["%s"] * (1 + len(cols)))
+            values_rows.append(f"({placeholders})")
+            params.append(learner_id)
+            params.extend(profile_set[c] for c in cols)
+
+        values_sql = ", ".join(values_rows)
+        col_list = ", ".join(cols)
+        params.append(phone)
+        frappe.db.sql(
+            f"""
+            UPDATE "tabTapapp Auth Profile" AS t
+               SET {set_clauses}, modified = NOW()
+              FROM (VALUES {values_sql}) AS v(id, {col_list})
+             WHERE t.tapapp_learner = v.id AND t.parent = %s
+            """,
+            tuple(params),
+        )
+
+
 @frappe.whitelist(allow_guest=True)
-def bulk_update_students(phone=None, changes=None, admin_code=None):
+def bulk_update_students(phone=None, changes=None, admin_code=None, atomic=None):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
     changes = changes or fd.get("changes")
     admin_code = admin_code if admin_code is not None else fd.get("admin_code")
+    atomic = atomic if atomic is not None else fd.get("atomic")
+    atomic = str(atomic).lower() in ("1", "true", "yes") if atomic is not None else False
 
     _require_admin_unlocked(phone)
 
@@ -308,37 +432,67 @@ def bulk_update_students(phone=None, changes=None, admin_code=None):
     if len(changes) > BULK_EDIT_MAX_ROWS:
         frappe.throw(f"Cannot update more than {BULK_EDIT_MAX_ROWS} students in one request", frappe.ValidationError)
 
-    requested_ids = [c.get("learner_id") for c in changes if c.get("learner_id")]
+    requested_ids = [c.get("learner_id") for c in changes if isinstance(c, dict) and c.get("learner_id")]
     owned_ids = _owned_learner_ids(phone, requested_ids)
 
-    results = []
-    applied_any = False
-    for change in changes:
-        learner_id = change.get("learner_id")
-        updates = change.get("updates")
+    valid_by_learner, row_results, first_row_index = _dedupe_changes(changes)
 
-        if not learner_id or not isinstance(updates, dict) or not updates:
-            results.append({"learner_id": learner_id, "success": False, "error": "invalid_change"})
-            continue
-
+    validated_rows = {}
+    for learner_id, updates in valid_by_learner.items():
+        i = first_row_index[learner_id]
         if learner_id not in owned_ids:
-            results.append({"learner_id": learner_id, "success": False, "error": "not_owned"})
+            row_results[i] = {"learner_id": learner_id, "success": False, "error": "not_owned"}
             continue
-
         try:
-            applied = _apply_updates(phone, learner_id, dict(updates))
-            applied_any = applied_any or applied
-            results.append({"learner_id": learner_id, "success": True})
+            learner_set, profile_set = _validate_updates(dict(updates))
+            validated_rows[learner_id] = (learner_set, profile_set)
         except Exception as e:
-            results.append({"learner_id": learner_id, "success": False, "error": str(e)})
+            row_results[i] = {"learner_id": learner_id, "success": False, "error": str(e)}
 
-    if applied_any:
-        frappe.db.commit()
+    if atomic and any(r is not None and not r["success"] for r in row_results):
+        return {
+            "success": False,
+            "total": len(changes),
+            "succeeded": 0,
+            "failed": len(changes),
+            "results": [
+                r or {"learner_id": None, "success": False, "error": "not_processed"}
+                for r in row_results
+            ],
+        }
+
+    if validated_rows:
+        savepoint = "bulk_update_students_sp"
+        frappe.db.sql(f"SAVEPOINT {savepoint}")
+        try:
+            learner_rows = {lid: ls for lid, (ls, _) in validated_rows.items() if ls}
+            profile_rows = {lid: ps for lid, (_, ps) in validated_rows.items() if ps}
+
+            if learner_rows:
+                _batch_update_learner_table(learner_rows, phone)
+            if profile_rows:
+                _batch_update_profile_table(profile_rows, phone)
+
+            for learner_id in validated_rows:
+                i = first_row_index[learner_id]
+                row_results[i] = {"learner_id": learner_id, "success": True}
+        except Exception as e:
+            frappe.db.sql(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            for learner_id in validated_rows:
+                i = first_row_index[learner_id]
+                row_results[i] = {"learner_id": learner_id, "success": False, "error": str(e)}
+
+    frappe.db.commit()
+
+    final_results = [
+        r or {"learner_id": None, "success": False, "error": "invalid_change"}
+        for r in row_results
+    ]
 
     return {
         "success": True,
         "total": len(changes),
-        "succeeded": sum(1 for r in results if r["success"]),
-        "failed": sum(1 for r in results if not r["success"]),
-        "results": results,
+        "succeeded": sum(1 for r in final_results if r["success"]),
+        "failed": sum(1 for r in final_results if not r["success"]),
+        "results": final_results,
     }

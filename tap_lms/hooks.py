@@ -46,30 +46,26 @@ doc_events = {
 #   - check_auto_activate: SP — auto-activates BPRs whose batch.start_date has
 #                          arrived; seeds next_action_at on PEs so the per-PE
 #                          dispatcher has work. See task #19 for details.
-#   - run_window_rollover: Citizenship Academy (Tapapp) — bulk rollover of
-#                          any student's expired 7-day activity window.
-#                          record_activity() already rolls a single student's
-#                          window forward lazily on their next activity, so
-#                          this job isn't required for the binge-lock itself;
-#                          it exists to decay `streak` back to 0 for students
-#                          who go silent (never call record_activity again,
-#                          so their streak would otherwise stay frozen), and
-#                          to keep `is_bingeing` from going stale once a
-#                          window closes. See tap_lms.tapapp.jobs.window_rollover
-#                          for full rationale.
-#   - run_tapapp_xp_window_rotate: rotates the Tapapp Learner 7-day XP
-#                          store (xp_d0..xp_d6 -> weekly_xp), same shape as
-#                          the CA rotation job below but scoped to Tapapp
-#                          Learner. Named run_tapapp_xp_window_rotate (not
-#                          run_xp_window_rotate) because Frappe's Scheduled
-#                          Job Type registry keys jobs by the trailing
-#                          "module.function" segment of the hook path, and
-#                          the CA job below already owns
-#                          "xp_window_rotate.run_xp_window_rotate" — an
-#                          identical trailing pair here would collide with
-#                          it in the Scheduled Job Type table and break
-#                          `bench migrate`. See
-#                          tap_lms.tapapp.jobs.tapapp_xp_window_rotate.
+#   - run_nightly_window_maintenance: Citizenship Academy (Tapapp) — merged
+#                          replacement for the former run_window_rollover +
+#                          run_tapapp_xp_window_rotate pair. Both jobs touched
+#                          overlapping Tapapp Learner columns (window_start_date,
+#                          streak, xp rotation) with no shared guard, so a cron
+#                          overlap or manual retrigger could race the two
+#                          against each other. This single job takes one lock,
+#                          makes one pass over the table, and applies both the
+#                          7-day activity-window rollover and the xp_d0..xp_d6
+#                          rotation to each row in one UPDATE per chunk via
+#                          CASE expressions — a given row is only ever written
+#                          once per night. record_activity() still rolls a
+#                          single student's window forward lazily on their
+#                          next activity, so this job isn't required for the
+#                          binge-lock itself; it exists to decay `streak` back
+#                          to 0 for students who go silent, to keep
+#                          `is_bingeing` from going stale once a window
+#                          closes, and to rotate the weekly XP store. See
+#                          tap_lms.tapapp.jobs.nightly_window_maintenance for
+#                          full rationale.
 #   - run_tapapp_analytics_report: computes Tapapp Learner engagement
 #                          metrics (DAL, archetype distribution, level
 #                          distribution, submission gem totals, bingeing
@@ -123,8 +119,7 @@ scheduler_events = {
         "tap_lms.tap_lms.page.onboarding_flow_trigger.onboarding_flow_trigger.update_incomplete_stages",
         "tap_lms.summer_program.scheduler.run_daily_actions",
         "tap_lms.summer_program.batch_activation.check_auto_activate",
-        "tap_lms.tapapp.jobs.window_rollover.run_window_rollover",
-        "tap_lms.tapapp.jobs.tapapp_xp_window_rotate.run_tapapp_xp_window_rotate",
+        "tap_lms.tapapp.jobs.nightly_window_maintenance.run_nightly_window_maintenance",
         "tap_lms.tapapp.jobs.tapapp_analytics_report.run_tapapp_analytics_report",
     ],
     "cron": {

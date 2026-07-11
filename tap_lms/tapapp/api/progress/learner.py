@@ -107,38 +107,20 @@ def _sync_archetypes_bulk(rows_by_id, today):
         )
 
 
-def _roll_window_if_expired(r, today):
+def _window_view(r, today):
     window_start = _parse_date(r.window_start_date)
     watched = r.activities_watched_this_week or 0
     cap = r.max_weekly_activities or 2
 
-    if window_start is None:
-        return today, 0, False, True
-
-    if today >= window_start + timedelta(days=WINDOW_DAYS):
+    if window_start is None or today >= window_start + timedelta(days=WINDOW_DAYS):
         return today, 0, False, True
 
     return window_start, watched, watched >= cap, False
 
 
-def _compute_streak(r, window_started_fresh, today):
-    if not window_started_fresh:
-        return r.streak or 0, r.longest_streak or 0
-
-    old_window_start = _parse_date(r.window_start_date)
-    if old_window_start is None:
-        new_streak = 1
-    else:
-        gap_days = (today - old_window_start).days
-        new_streak = (r.streak or 0) + 1 if gap_days == WINDOW_DAYS else 1
-
-    new_longest = max(r.longest_streak or 0, new_streak)
-    return new_streak, new_longest
-
-
 def _window_status(r, today=None):
     today = today or _today()
-    window_start, watched, is_bingeing, _rolled = _roll_window_if_expired(r, today)
+    window_start, watched, is_bingeing, _rolled = _window_view(r, today)
     cap = r.max_weekly_activities or 2
     resets_on = window_start + timedelta(days=WINDOW_DAYS) if window_start else None
     return {
@@ -352,17 +334,15 @@ def enroll_course(learner_id=None, course=None):
     if not learner_id or not course:
         frappe.throw("learner_id and course are required", frappe.ValidationError)
 
-    existing = _get_enrollment_row(learner_id)
-    if existing:
-        frappe.db.sql(
-            """
-            UPDATE "tabTapapp Enroll"
-               SET course=%s, status='active', modified=NOW()
-             WHERE name=%s
-            """,
-            (course, existing.name),
-        )
-    else:
+    frappe.db.sql(
+        """
+        UPDATE "tabTapapp Enroll"
+           SET course=%s, status='active', modified=NOW()
+         WHERE parent=%s
+        """,
+        (course, learner_id),
+    )
+    if frappe.db.rowcount == 0:
         frappe.db.sql(
             """
             INSERT INTO "tabTapapp Enroll"
@@ -422,25 +402,24 @@ def submit_progress(
         frappe.throw("Learner not found", frappe.DoesNotExistError)
 
     today = _today()
-    window_start, watched, is_bingeing, window_started_fresh = _roll_window_if_expired(r, today)
-
+    window_start, watched, is_bingeing, window_started_fresh = _window_view(r, today)
     cap = r.max_weekly_activities or 2
+
     if watched >= cap:
         frappe.throw(
             f"Weekly activity limit reached ({cap} activities). Try again after the window resets.",
             frappe.ValidationError,
         )
 
-    current_submission_index = r.submission_index or 0
+    expected_submission_index = r.submission_index or 0
+    expected_watched = watched
+
     submission_processed = False
     submission_reason = None
-
     if has_submission:
-        if submission_count <= current_submission_index:
-            submission_processed = False
+        if submission_count <= expected_submission_index:
             submission_reason = "already_processed"
-        elif submission_count != current_submission_index + 1:
-            submission_processed = False
+        elif submission_count != expected_submission_index + 1:
             submission_reason = "out_of_sequence"
         else:
             submission_processed = True
@@ -449,39 +428,69 @@ def submit_progress(
     if (has_video or has_quiz or submission_processed) and not enrollment:
         frappe.throw("Learner has no active enrollment", frappe.ValidationError)
 
-    new_streak, new_longest = _compute_streak(r, window_started_fresh, today)
-    new_watched = watched + 1
+    if window_started_fresh:
+        old_window_start = _parse_date(r.window_start_date)
+        if old_window_start is None:
+            new_streak = 1
+        else:
+            gap_days = (today - old_window_start).days
+            new_streak = (r.streak or 0) + 1 if gap_days == WINDOW_DAYS else 1
+        new_longest = max(r.longest_streak or 0, new_streak)
+        new_window_start = today
+    else:
+        new_streak = r.streak or 0
+        new_longest = r.longest_streak or 0
+        new_window_start = window_start
+
+    new_watched = expected_watched + 1
     new_is_bingeing = new_watched >= cap
 
     total_xp = xp + (SUBMISSION_XP if submission_processed else 0)
     submission_gems_delta = SUBMISSION_GEMS if submission_processed else 0
-    new_submission_index = submission_count if submission_processed else current_submission_index
+    new_submission_index = submission_count if submission_processed else expected_submission_index
 
     frappe.db.sql(
         """
         UPDATE "tabTapapp Learner"
-           SET xp = xp + %s,
-               xp_d0 = xp_d0 + %s,
-               weekly_xp = weekly_xp + %s,
-               submission_gems = submission_gems + %s,
-               submission_index = %s,
-               last_activity_date = %s,
-               window_start_date = %s,
-               activities_watched_this_week = %s,
-               is_bingeing = %s,
-               streak = %s,
-               longest_streak = %s,
+           SET xp = xp + %(total_xp)s,
+               xp_d0 = xp_d0 + %(total_xp)s,
+               weekly_xp = weekly_xp + %(total_xp)s,
+               submission_gems = submission_gems + %(gems)s,
+               submission_index = %(new_submission_index)s,
+               last_activity_date = %(today)s,
+               window_start_date = %(new_window_start)s,
+               activities_watched_this_week = %(new_watched)s,
+               is_bingeing = %(new_is_bingeing)s,
+               streak = %(new_streak)s,
+               longest_streak = %(new_longest)s,
                modified = NOW()
-         WHERE name = %s
+         WHERE name = %(learner_id)s
+           AND submission_index = %(expected_submission_index)s
+           AND activities_watched_this_week = %(expected_watched)s
         """,
-        (
-            total_xp, total_xp, total_xp,
-            submission_gems_delta, new_submission_index, today,
-            window_start, new_watched, 1 if new_is_bingeing else 0,
-            new_streak, new_longest,
-            learner_id,
-        ),
+        {
+            "total_xp": total_xp,
+            "gems": submission_gems_delta,
+            "new_submission_index": new_submission_index,
+            "today": today,
+            "new_window_start": new_window_start,
+            "new_watched": new_watched,
+            "new_is_bingeing": 1 if new_is_bingeing else 0,
+            "new_streak": new_streak,
+            "new_longest": new_longest,
+            "learner_id": learner_id,
+            "expected_submission_index": expected_submission_index,
+            "expected_watched": expected_watched,
+        },
     )
+
+    if frappe.db.rowcount == 0:
+        frappe.db.rollback()
+        return {
+            "progress_recorded": False,
+            "conflict": True,
+            **learner_full_state(learner_id, fields=fields),
+        }
 
     enrollment_updated = False
     if enrollment and (has_video or has_quiz or submission_processed):
@@ -489,8 +498,8 @@ def submit_progress(
         current_quizzes = enrollment.quizzes_completed or 0
         current_enroll_submission = enrollment.submission_index or 0
 
-        new_videos = max(current_videos, video_count) if has_video else current_videos
-        new_quizzes = max(current_quizzes, quiz_count) if has_quiz else current_quizzes
+        new_videos = max(current_videos, video_count) if has_video and video_count is not None else current_videos
+        new_quizzes = max(current_quizzes, quiz_count) if has_quiz and quiz_count is not None else current_quizzes
         new_enroll_submission = (
             max(current_enroll_submission, new_submission_index)
             if submission_processed
@@ -520,6 +529,7 @@ def submit_progress(
 
     result = {
         "progress_recorded": True,
+        "conflict": False,
         "activity_type": activity_type,
         "xp_awarded": total_xp,
         "submission_processed": submission_processed,
@@ -528,6 +538,6 @@ def submit_progress(
     }
     if has_submission and not submission_processed:
         result["submission_reason"] = submission_reason
-        result["expected_submission_index"] = current_submission_index + 1
+        result["expected_submission_index"] = expected_submission_index + 1
 
     return {**result, **learner_full_state(learner_id, fields=fields)}

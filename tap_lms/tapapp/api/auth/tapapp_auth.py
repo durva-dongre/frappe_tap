@@ -1,7 +1,6 @@
 import frappe
 import jwt
 import datetime
-import uuid
 from frappe.utils.password import check_password, update_password
 from tap_lms.tapapp.api.progress.learner import learner_bulk_state
 
@@ -30,7 +29,6 @@ def _generate_access_token(phone, admin_unlocked=False):
         {
             "phone": phone,
             "type": "access",
-            "jti": str(uuid.uuid4()),
             "admin": bool(admin_unlocked),
             "iat": now,
             "exp": now + datetime.timedelta(seconds=ACCESS_TOKEN_EXPIRY_SECONDS),

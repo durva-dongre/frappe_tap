@@ -52,41 +52,39 @@ def award_achievement(learner_id=None, achievement=None, level=None):
     if not learner_id or not achievement or level is None:
         frappe.throw("learner_id, achievement, and level are required", frappe.ValidationError)
 
-    level = frappe.utils.cstr(level)
+    level_str = frappe.utils.cstr(level)
+    try:
+        level_int = int(level_str)
+    except (TypeError, ValueError):
+        frappe.throw("level must be numeric", frappe.ValidationError)
 
-    existing = frappe.db.sql(
-        'SELECT name, level FROM "tabTapapp Learner Achievements" WHERE parent=%s AND achievement=%s LIMIT 1',
-        (learner_id, achievement),
+    row = frappe.db.sql(
+        """
+        INSERT INTO "tabTapapp Learner Achievements"
+            (name, parent, parenttype, parentfield, achievement, level,
+             creation, modified, modified_by, owner, idx)
+        VALUES
+            (%(name)s, %(parent)s, 'Tapapp Learner', 'achievements', %(achievement)s, %(level)s,
+             NOW(), NOW(), 'Administrator', 'Administrator',
+             COALESCE((SELECT MAX(idx) FROM "tabTapapp Learner Achievements" WHERE parent=%(parent)s), 0) + 1)
+        ON CONFLICT (parent, achievement) DO UPDATE
+           SET level = GREATEST(
+                   CAST("tabTapapp Learner Achievements".level AS INTEGER),
+                   CAST(EXCLUDED.level AS INTEGER)
+               )::text,
+               modified = NOW()
+        RETURNING level, (xmax = 0) AS inserted
+        """,
+        {
+            "name": frappe.generate_hash(length=10),
+            "parent": learner_id,
+            "achievement": achievement,
+            "level": level_str,
+        },
         as_dict=True,
-    )
+    )[0]
 
-    if existing:
-        if str(existing[0].level) < level:
-            frappe.db.sql(
-                'UPDATE "tabTapapp Learner Achievements" SET level=%s, modified=NOW() WHERE name=%s',
-                (level, existing[0].name),
-            )
-            frappe.db.commit()
-            current_level = level
-            awarded = True
-        else:
-            current_level = existing[0].level
-            awarded = False
-    else:
-        frappe.db.sql(
-            """
-            INSERT INTO "tabTapapp Learner Achievements"
-                (name, parent, parenttype, parentfield, achievement, level,
-                 creation, modified, modified_by, owner, idx)
-            VALUES
-                (%s, %s, 'Tapapp Learner', 'achievements', %s, %s,
-                 NOW(), NOW(), 'Administrator', 'Administrator',
-                 COALESCE((SELECT MAX(idx) FROM "tabTapapp Learner Achievements" WHERE parent=%s), 0) + 1)
-            """,
-            (frappe.generate_hash(length=10), learner_id, achievement, level, learner_id),
-        )
-        frappe.db.commit()
-        current_level = level
-        awarded = True
+    current_level = row.level
+    awarded = row.inserted or int(current_level) == level_int
 
     return {"awarded": awarded, "achievement": achievement, "level": current_level}
