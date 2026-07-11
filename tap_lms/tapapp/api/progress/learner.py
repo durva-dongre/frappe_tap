@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 WINDOW_DAYS = 7
 SUBMISSION_XP = 25
 SUBMISSION_GEMS = 1
+DEFAULT_ACTIVITY_XP = 10
 
 ARCHETYPE_DORMANT = "dormant"
 ARCHETYPE_FENCE_SITTER = "fence_sitter"
@@ -31,22 +32,35 @@ def _parse_optional(fields_param):
     return {f.strip().lower() for f in fields_param.split(",") if f.strip()}
 
 
+_LEARNER_ROW_COLUMNS = """
+    name, student_name, language, district, state, school, birthdate, archetype,
+    xp, xp_d0, xp_d1, xp_d2, xp_d3, xp_d4, xp_d5, xp_d6, weekly_xp,
+    level, streak, longest_streak, last_activity_date,
+    submission_gems, submission_index,
+    activities_watched_this_week, max_weekly_activities,
+    window_start_date, is_bingeing
+"""
+
+
 def _get_learner_row(learner_id):
     row = frappe.db.sql(
-        """
-        SELECT student_name, language, district, state, school, birthdate, archetype,
-               xp, xp_d0, xp_d1, xp_d2, xp_d3, xp_d4, xp_d5, xp_d6, weekly_xp,
-               level, streak, longest_streak, last_activity_date,
-               submission_gems, submission_index,
-               activities_watched_this_week, max_weekly_activities,
-               window_start_date, is_bingeing
-        FROM "tabTapapp Learner"
-        WHERE name=%s LIMIT 1
-        """,
+        f'SELECT {_LEARNER_ROW_COLUMNS} FROM "tabTapapp Learner" WHERE name=%s LIMIT 1',
         learner_id,
         as_dict=True,
     )
     return row[0] if row else None
+
+
+def _get_learner_rows_bulk(learner_ids):
+    if not learner_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(learner_ids))
+    rows = frappe.db.sql(
+        f'SELECT {_LEARNER_ROW_COLUMNS} FROM "tabTapapp Learner" WHERE name IN ({placeholders})',
+        tuple(learner_ids),
+        as_dict=True,
+    )
+    return {r.name: r for r in rows}
 
 
 def _compute_archetype(streak, submission_index, last_activity_date, today):
@@ -73,6 +87,24 @@ def _sync_archetype(learner_id, r, today):
         )
         r.archetype = computed
     return computed
+
+
+def _sync_archetypes_bulk(rows_by_id, today):
+    to_update = {}
+    for learner_id, r in rows_by_id.items():
+        computed = _compute_archetype(
+            r.streak or 0, r.submission_index or 0, _parse_date(r.last_activity_date), today
+        )
+        if computed != r.archetype:
+            r.archetype = computed
+            to_update.setdefault(computed, []).append(learner_id)
+
+    for archetype, ids in to_update.items():
+        placeholders = ",".join(["%s"] * len(ids))
+        frappe.db.sql(
+            f'UPDATE "tabTapapp Learner" SET archetype=%s, modified=NOW() WHERE name IN ({placeholders})',
+            (archetype, *ids),
+        )
 
 
 def _roll_window_if_expired(r, today):
@@ -119,24 +151,9 @@ def _window_status(r, today=None):
     }
 
 
-_ALL_SECTIONS = {"xp", "streak", "window", "level", "archetype", "submission", "enrollment", "achievements"}
-
-
-def learner_full_state(learner_id, fields=None, include_achievements=False, sync_archetype=True):
-    wanted = _parse_optional(fields)
-    want_all = wanted is None
-
+def _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements):
     def _want(section):
         return want_all or section in wanted
-
-    r = _get_learner_row(learner_id)
-    if not r:
-        return None
-
-    today = _today()
-
-    if sync_archetype and (want_all or _want("archetype")):
-        _sync_archetype(learner_id, r, today)
 
     result = {"learner_id": learner_id}
 
@@ -186,6 +203,61 @@ def learner_full_state(learner_id, fields=None, include_achievements=False, sync
     return result
 
 
+def learner_full_state(learner_id, fields=None, include_achievements=False, sync_archetype=True):
+    wanted = _parse_optional(fields)
+    want_all = wanted is None
+
+    r = _get_learner_row(learner_id)
+    if not r:
+        return None
+
+    today = _today()
+
+    if sync_archetype and (want_all or "archetype" in (wanted or set())):
+        _sync_archetype(learner_id, r, today)
+
+    return _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements)
+
+
+def learner_bulk_state(learner_ids, fields=None, include_achievements=False, sync_archetype=True):
+    unique_ids = list(dict.fromkeys(lid for lid in learner_ids if lid))
+    if not unique_ids:
+        return {}
+
+    wanted = _parse_optional(fields)
+    want_all = wanted is None
+    today = _today()
+
+    rows_by_id = _get_learner_rows_bulk(unique_ids)
+
+    if sync_archetype and (want_all or "archetype" in (wanted or set())):
+        _sync_archetypes_bulk(rows_by_id, today)
+
+    achievements_by_learner = {}
+    if include_achievements or want_all or "achievements" in (wanted or set()):
+        from tap_lms.tapapp.api.progress.achievements import fetch_achievements_bulk
+        achievements_by_learner = fetch_achievements_bulk(unique_ids)
+
+    enrollments_by_learner = {}
+    if want_all or "enrollment" in (wanted or set()):
+        enrollments_by_learner = _fetch_current_enrollments_bulk(unique_ids)
+
+    states = {}
+    for learner_id in unique_ids:
+        r = rows_by_id.get(learner_id)
+        if not r:
+            states[learner_id] = None
+            continue
+        state = _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements=False)
+        if include_achievements or want_all or "achievements" in (wanted or set()):
+            state["achievements"] = achievements_by_learner.get(learner_id, [])
+        if want_all or "enrollment" in (wanted or set()):
+            state["enrollment"] = enrollments_by_learner.get(learner_id)
+        states[learner_id] = state
+
+    return states
+
+
 def _fetch_current_enrollment(learner_id):
     row = frappe.db.sql(
         """
@@ -210,6 +282,34 @@ def _fetch_current_enrollment(learner_id):
         "submission_index": e.submission_index or 0,
         "enrolled_on": str(e.enrolled_on) if e.enrolled_on else None,
     }
+
+
+def _fetch_current_enrollments_bulk(learner_ids):
+    if not learner_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(learner_ids))
+    rows = frappe.db.sql(
+        f"""
+        SELECT DISTINCT ON (parent) parent, course, status, videos_completed,
+               quizzes_completed, submission_index, enrolled_on
+        FROM "tabTapapp Enroll"
+        WHERE parent IN ({placeholders})
+        ORDER BY parent, enrolled_on DESC
+        """,
+        tuple(learner_ids),
+        as_dict=True,
+    )
+    result = {}
+    for e in rows:
+        result[e.parent] = {
+            "course": e.course,
+            "status": e.status,
+            "videos_completed": e.videos_completed or 0,
+            "quizzes_completed": e.quizzes_completed or 0,
+            "submission_index": e.submission_index or 0,
+            "enrolled_on": str(e.enrolled_on) if e.enrolled_on else None,
+        }
+    return result
 
 
 def _get_enrollment_row(learner_id):
@@ -284,19 +384,38 @@ def enroll_course(learner_id=None, course=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def record_activity(learner_id=None, xp=None, activity_type=None, fields=None):
+def submit_progress(
+    learner_id=None,
+    xp=None,
+    activity_type=None,
+    video_index=None,
+    quiz_index=None,
+    submission_index=None,
+    fields=None,
+):
     fd = frappe.form_dict
     learner_id = learner_id or fd.get("learner_id")
     xp = xp if xp is not None else fd.get("xp")
     activity_type = activity_type or fd.get("activity_type")
+    video_index = video_index if video_index is not None else fd.get("video_index")
+    quiz_index = quiz_index if quiz_index is not None else fd.get("quiz_index")
+    submission_index = submission_index if submission_index is not None else fd.get("submission_index")
     fields = fields or fd.get("fields")
 
     if not learner_id:
         frappe.throw("learner_id is required", frappe.ValidationError)
 
-    xp = int(xp or 10)
-    if xp <= 0:
-        frappe.throw("xp must be positive", frappe.ValidationError)
+    xp = int(xp) if xp is not None else DEFAULT_ACTIVITY_XP
+    if xp < 0:
+        frappe.throw("xp cannot be negative", frappe.ValidationError)
+
+    has_video = video_index is not None
+    has_quiz = quiz_index is not None
+    has_submission = submission_index is not None
+
+    video_count = int(video_index) if has_video else None
+    quiz_count = int(quiz_index) if has_quiz else None
+    submission_count = int(submission_index) if has_submission else None
 
     r = _get_learner_row(learner_id)
     if not r:
@@ -312,147 +431,31 @@ def record_activity(learner_id=None, xp=None, activity_type=None, fields=None):
             frappe.ValidationError,
         )
 
+    current_submission_index = r.submission_index or 0
+    submission_processed = False
+    submission_reason = None
+
+    if has_submission:
+        if submission_count <= current_submission_index:
+            submission_processed = False
+            submission_reason = "already_processed"
+        elif submission_count != current_submission_index + 1:
+            submission_processed = False
+            submission_reason = "out_of_sequence"
+        else:
+            submission_processed = True
+
+    enrollment = _get_enrollment_row(learner_id)
+    if (has_video or has_quiz or submission_processed) and not enrollment:
+        frappe.throw("Learner has no active enrollment", frappe.ValidationError)
+
     new_streak, new_longest = _compute_streak(r, window_started_fresh, today)
     new_watched = watched + 1
     new_is_bingeing = new_watched >= cap
 
-    frappe.db.sql(
-        """
-        UPDATE "tabTapapp Learner"
-           SET xp = xp + %s,
-               xp_d0 = xp_d0 + %s,
-               weekly_xp = weekly_xp + %s,
-               last_activity_date = %s,
-               window_start_date = %s,
-               activities_watched_this_week = %s,
-               is_bingeing = %s,
-               streak = %s,
-               longest_streak = %s,
-               modified = NOW()
-         WHERE name = %s
-        """,
-        (
-            xp, xp, xp, today, window_start,
-            new_watched, 1 if new_is_bingeing else 0,
-            new_streak, new_longest,
-            learner_id,
-        ),
-    )
-    frappe.db.commit()
-
-    return {
-        "activity_recorded": True,
-        "activity_type": activity_type,
-        "xp_awarded": xp,
-        **learner_full_state(learner_id, fields=fields),
-    }
-
-
-@frappe.whitelist(allow_guest=True)
-def update_content_progress(
-    learner_id=None, video_index=None, quiz_index=None,
-    xp=None, activity_type=None, fields=None,
-):
-    fd = frappe.form_dict
-    learner_id = learner_id or fd.get("learner_id")
-    video_index = video_index if video_index is not None else fd.get("video_index")
-    quiz_index = quiz_index if quiz_index is not None else fd.get("quiz_index")
-    xp = xp if xp is not None else fd.get("xp")
-    activity_type = activity_type or fd.get("activity_type")
-    fields = fields or fd.get("fields")
-
-    if not learner_id:
-        frappe.throw("learner_id is required", frappe.ValidationError)
-
-    has_video = video_index is not None
-    has_quiz = quiz_index is not None
-    if not has_video and not has_quiz:
-        frappe.throw("At least one of video_index or quiz_index is required", frappe.ValidationError)
-
-    video_count = int(video_index) if has_video else None
-    quiz_count = int(quiz_index) if has_quiz else None
-
-    enrollment = _get_enrollment_row(learner_id)
-    if not enrollment:
-        frappe.throw("Learner has no active enrollment", frappe.ValidationError)
-
-    r = _get_learner_row(learner_id)
-    if not r:
-        frappe.throw("Learner not found", frappe.DoesNotExistError)
-
-    today = _today()
-    _window_start, watched, _is_bingeing, _fresh = _roll_window_if_expired(r, today)
-    cap = r.max_weekly_activities or 2
-    if watched >= cap:
-        frappe.throw(
-            f"Weekly activity limit reached ({cap} activities). Try again after the window resets.",
-            frappe.ValidationError,
-        )
-
-    current_videos = enrollment.videos_completed or 0
-    current_quizzes = enrollment.quizzes_completed or 0
-    new_videos = max(current_videos, video_count) if has_video else current_videos
-    new_quizzes = max(current_quizzes, quiz_count) if has_quiz else current_quizzes
-    progress_moved = new_videos > current_videos or new_quizzes > current_quizzes
-
-    if progress_moved:
-        frappe.db.sql(
-            """
-            UPDATE "tabTapapp Enroll"
-               SET videos_completed = GREATEST(videos_completed, %s),
-                   quizzes_completed = GREATEST(quizzes_completed, %s),
-                   modified = NOW()
-             WHERE name = %s
-            """,
-            (new_videos, new_quizzes, enrollment.name),
-        )
-        frappe.db.commit()
-
-    activity_result = record_activity(learner_id=learner_id, xp=xp, activity_type=activity_type, fields=fields)
-
-    return {
-        "updated": progress_moved,
-        "videos_completed": new_videos,
-        "quizzes_completed": new_quizzes,
-        **activity_result,
-    }
-
-
-@frappe.whitelist()
-def submission_verified_webhook(learner_id=None, submission_index=None):
-    fd = frappe.form_dict
-    learner_id = learner_id or fd.get("learner_id")
-    submission_index = submission_index if submission_index is not None else fd.get("submission_index")
-
-    if not learner_id or submission_index is None:
-        frappe.throw("learner_id and submission_index are required", frappe.ValidationError)
-
-    submission_index = int(submission_index)
-
-    r = _get_learner_row(learner_id)
-    if not r:
-        frappe.throw("Learner not found", frappe.DoesNotExistError)
-
-    current_index = r.submission_index or 0
-
-    if submission_index <= current_index:
-        return {
-            "processed": False,
-            "reason": "already_processed",
-            "submission_index": current_index,
-            "submission_gems": r.submission_gems or 0,
-        }
-
-    if submission_index != current_index + 1:
-        return {
-            "processed": False,
-            "reason": "out_of_sequence",
-            "expected_submission_index": current_index + 1,
-            "submission_index": current_index,
-            "submission_gems": r.submission_gems or 0,
-        }
-
-    today = _today()
+    total_xp = xp + (SUBMISSION_XP if submission_processed else 0)
+    submission_gems_delta = SUBMISSION_GEMS if submission_processed else 0
+    new_submission_index = submission_count if submission_processed else current_submission_index
 
     frappe.db.sql(
         """
@@ -463,34 +466,68 @@ def submission_verified_webhook(learner_id=None, submission_index=None):
                submission_gems = submission_gems + %s,
                submission_index = %s,
                last_activity_date = %s,
+               window_start_date = %s,
+               activities_watched_this_week = %s,
+               is_bingeing = %s,
+               streak = %s,
+               longest_streak = %s,
                modified = NOW()
          WHERE name = %s
         """,
         (
-            SUBMISSION_XP, SUBMISSION_XP, SUBMISSION_XP,
-            SUBMISSION_GEMS, submission_index, today,
+            total_xp, total_xp, total_xp,
+            submission_gems_delta, new_submission_index, today,
+            window_start, new_watched, 1 if new_is_bingeing else 0,
+            new_streak, new_longest,
             learner_id,
         ),
     )
 
-    enrollment = _get_enrollment_row(learner_id)
-    if enrollment:
-        frappe.db.sql(
-            """
-            UPDATE "tabTapapp Enroll"
-               SET submission_index = GREATEST(submission_index, %s),
-                   modified = NOW()
-             WHERE name = %s
-            """,
-            (submission_index, enrollment.name),
+    enrollment_updated = False
+    if enrollment and (has_video or has_quiz or submission_processed):
+        current_videos = enrollment.videos_completed or 0
+        current_quizzes = enrollment.quizzes_completed or 0
+        current_enroll_submission = enrollment.submission_index or 0
+
+        new_videos = max(current_videos, video_count) if has_video else current_videos
+        new_quizzes = max(current_quizzes, quiz_count) if has_quiz else current_quizzes
+        new_enroll_submission = (
+            max(current_enroll_submission, new_submission_index)
+            if submission_processed
+            else current_enroll_submission
         )
+
+        enrollment_updated = (
+            new_videos != current_videos
+            or new_quizzes != current_quizzes
+            or new_enroll_submission != current_enroll_submission
+        )
+
+        if enrollment_updated:
+            frappe.db.sql(
+                """
+                UPDATE "tabTapapp Enroll"
+                   SET videos_completed = %s,
+                       quizzes_completed = %s,
+                       submission_index = %s,
+                       modified = NOW()
+                 WHERE name = %s
+                """,
+                (new_videos, new_quizzes, new_enroll_submission, enrollment.name),
+            )
 
     frappe.db.commit()
 
-    return {
-        "processed": True,
-        "submission_index": submission_index,
-        "xp_awarded": SUBMISSION_XP,
-        "gems_awarded": SUBMISSION_GEMS,
-        **learner_full_state(learner_id, fields="xp,submission,archetype"),
+    result = {
+        "progress_recorded": True,
+        "activity_type": activity_type,
+        "xp_awarded": total_xp,
+        "submission_processed": submission_processed,
+        "gems_awarded": submission_gems_delta,
+        "enrollment_updated": enrollment_updated,
     }
+    if has_submission and not submission_processed:
+        result["submission_reason"] = submission_reason
+        result["expected_submission_index"] = current_submission_index + 1
+
+    return {**result, **learner_full_state(learner_id, fields=fields)}

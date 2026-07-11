@@ -15,6 +15,26 @@ def fetch_achievements(learner_id):
     return [{"achievement": r.achievement, "level": r.level} for r in rows]
 
 
+def fetch_achievements_bulk(learner_ids):
+    if not learner_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(learner_ids))
+    rows = frappe.db.sql(
+        f"""
+        SELECT parent, achievement, level
+        FROM "tabTapapp Learner Achievements"
+        WHERE parent IN ({placeholders})
+        ORDER BY parent, idx ASC
+        """,
+        tuple(learner_ids),
+        as_dict=True,
+    )
+    result = {lid: [] for lid in learner_ids}
+    for r in rows:
+        result[r.parent].append({"achievement": r.achievement, "level": r.level})
+    return result
+
+
 @frappe.whitelist(allow_guest=True)
 def get_learner_achievements(learner_id=None):
     learner_id = learner_id or frappe.form_dict.get("learner_id")
