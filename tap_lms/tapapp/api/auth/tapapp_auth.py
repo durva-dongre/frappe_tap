@@ -23,13 +23,12 @@ def _get_jwt_secret():
     return value
 
 
-def _generate_access_token(phone, admin_unlocked=False):
+def _generate_access_token(phone):
     now = datetime.datetime.utcnow()
     return jwt.encode(
         {
             "phone": phone,
             "type": "access",
-            "admin": bool(admin_unlocked),
             "iat": now,
             "exp": now + datetime.timedelta(seconds=ACCESS_TOKEN_EXPIRY_SECONDS),
         },
@@ -91,19 +90,8 @@ def _require_access_token(phone):
 
 def _require_access_token_with_refresh(phone):
     payload = _require_access_token(phone)
-    new_token = (
-        _generate_access_token(phone, admin_unlocked=payload.get("admin", False))
-        if _token_needs_refresh(payload)
-        else None
-    )
+    new_token = _generate_access_token(phone) if _token_needs_refresh(payload) else None
     return payload, new_token
-
-
-def _require_admin_unlocked(phone):
-    payload = _require_access_token(phone)
-    if not payload.get("admin"):
-        frappe.throw("Admin code required for this action", frappe.PermissionError)
-    return payload
 
 
 def _password_exists(phone):
@@ -157,15 +145,15 @@ def _fetch_profiles_page(phone, page=1, page_size=50):
     return profiles, has_more
 
 
-def _login_payload(auth_row, admin_unlocked, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE):
+def _login_payload(auth_row, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE):
     profiles, has_more = _fetch_profiles_page(auth_row.phone, page=page, page_size=page_size)
     return {
         "success": True,
-        "token": _generate_access_token(auth_row.phone, admin_unlocked=admin_unlocked),
+        "token": _generate_access_token(auth_row.phone),
         "phone": auth_row.phone,
         "teacher": auth_row.teacher,
         "school_id": auth_row.school_id,
-        "admin_unlocked": admin_unlocked,
+        "admin_code": auth_row.admin_code,
         "profiles": profiles,
         "profiles_has_more": has_more,
         "page": page,
@@ -186,14 +174,13 @@ def check_phone(phone=None):
     if _password_exists(phone):
         return {"exists": True, "has_password": True}
 
-    return {"exists": True, "has_password": False, **_login_payload(auth_row, admin_unlocked=False)}
+    return {"exists": True, "has_password": False, **_login_payload(auth_row)}
 
 
 @frappe.whitelist(allow_guest=True)
-def login_with_password(phone=None, password=None, admin_code=None):
+def login_with_password(phone=None, password=None):
     phone = phone or frappe.form_dict.get("phone", "")
     password = password or frappe.form_dict.get("password")
-    admin_code = admin_code if admin_code is not None else frappe.form_dict.get("admin_code")
 
     if not phone or not password:
         return {"success": False, "error": "invalid_credentials"}
@@ -213,25 +200,7 @@ def login_with_password(phone=None, password=None, admin_code=None):
         update_password(phone, password, doctype="Tapapp Auth", fieldname="password")
         frappe.db.commit()
 
-    admin_unlocked = bool(auth_row.admin_code) and admin_code == auth_row.admin_code
-    return _login_payload(auth_row, admin_unlocked=admin_unlocked)
-
-
-@frappe.whitelist(allow_guest=True)
-def unlock_admin(phone=None, admin_code=None):
-    phone = phone or frappe.form_dict.get("phone", "")
-    admin_code = admin_code or frappe.form_dict.get("admin_code")
-
-    _require_access_token(phone)
-    auth_row = _get_teacher_auth_row(phone)
-
-    if not auth_row or not auth_row.admin_code or admin_code != auth_row.admin_code:
-        return {"success": False, "error": "invalid_admin_code"}
-
-    return {
-        "success": True,
-        "token": _generate_access_token(phone, admin_unlocked=True),
-    }
+    return _login_payload(auth_row)
 
 
 @frappe.whitelist(allow_guest=True)
@@ -369,4 +338,4 @@ def reset_password(phone=None, password=None):
         frappe.throw("Phone not registered", frappe.DoesNotExistError)
     update_password(phone, password, doctype="Tapapp Auth", fieldname="password")
     frappe.db.commit()
-    return _login_payload(auth_row, admin_unlocked=False)
+    return _login_payload(auth_row)

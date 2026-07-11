@@ -3,7 +3,6 @@ import json
 from tap_lms.tapapp.api.auth.tapapp_auth import (
     _require_access_token,
     _require_access_token_with_refresh,
-    _require_admin_unlocked,
     _get_teacher_auth_row,
 )
 from tap_lms.tapapp.api.progress.learner import learner_full_state, learner_bulk_state
@@ -410,15 +409,14 @@ def _batch_update_profile_table(valid_rows, phone):
 
 
 @frappe.whitelist(allow_guest=True)
-def bulk_update_students(phone=None, changes=None, admin_code=None, atomic=None):
+def bulk_update_students(phone=None, changes=None, atomic=None):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
     changes = changes or fd.get("changes")
-    admin_code = admin_code if admin_code is not None else fd.get("admin_code")
     atomic = atomic if atomic is not None else fd.get("atomic")
     atomic = str(atomic).lower() in ("1", "true", "yes") if atomic is not None else False
 
-    _require_admin_unlocked(phone)
+    _require_access_token(phone)
 
     if isinstance(changes, str):
         try:
