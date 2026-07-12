@@ -178,16 +178,6 @@ def _build_video(vc_name, lang_name, lang_full_name, counters):
     if pq_row and pq_row[0].assessment:
         plio_quiz = _build_quiz(pq_row[0].assessment, lang_name, counters)
 
-    assignment = None
-    a_row = frappe.db.sql(
-        'SELECT assessment FROM "tabAssessmentList"'
-        ' WHERE parent = %s AND assessment_type = \'Assignment\' ORDER BY idx ASC LIMIT 1',
-        vc_name,
-        as_dict=True,
-    )
-    if a_row and a_row[0].assessment:
-        assignment = _build_assignment(a_row[0].assessment, lang_full_name, counters)
-
     counters["vid_seq"] += 1
     return _c({
         "id": counters["vid_seq"],
@@ -196,7 +186,6 @@ def _build_video(vc_name, lang_name, lang_full_name, counters):
         "yt": yt,
         "pts": pts,
         "pq": plio_quiz,
-        "assign": assignment,
     })
 
 
@@ -315,6 +304,7 @@ def _build_unit(lu_name, lang_name, lang_full_name, counters):
 
     videos = []
     unit_quiz = None
+    assignments = []
     for ci in content_items:
         ct = (ci.get("content_type") or "").strip().lower()
         content_ref = ci.get("content")
@@ -326,6 +316,10 @@ def _build_unit(lu_name, lang_name, lang_full_name, counters):
                 videos.append(vobj)
         elif ct == "quiz" and unit_quiz is None:
             unit_quiz = _build_quiz(content_ref, lang_name, counters)
+        elif ct == "assignment":
+            aobj = _build_assignment(content_ref, lang_full_name, counters)
+            if aobj:
+                assignments.append(aobj)
 
     vid_xp = sum(v.get("pts", 0) for v in videos)
     quiz_xp = (videos[-1].get("pts", 10) if videos else 10) if unit_quiz else 0
@@ -338,6 +332,7 @@ def _build_unit(lu_name, lang_name, lang_full_name, counters):
         "xp": vid_xp + quiz_xp,
         "vids": videos or None,
         "quiz": unit_quiz,
+        "assigns": assignments or None,
     })
 
 
