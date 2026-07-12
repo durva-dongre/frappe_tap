@@ -138,7 +138,7 @@ def _build_quiz(quiz_name, lang_name, counters):
     return _c({"id": counters["quiz_seq"], "nm": nm, "qs": questions})
 
 
-def _build_video(vc_name, lang_name, counters):
+def _build_video(vc_name, lang_name, lang_full_name, counters):
     row = frappe.db.sql(
         'SELECT name, video_name, description, video_youtube_url, points'
         ' FROM "tabVideoClass" WHERE name = %s LIMIT 1',
@@ -178,6 +178,16 @@ def _build_video(vc_name, lang_name, counters):
     if pq_row and pq_row[0].assessment:
         plio_quiz = _build_quiz(pq_row[0].assessment, lang_name, counters)
 
+    assignment = None
+    a_row = frappe.db.sql(
+        'SELECT assessment FROM "tabAssessmentList"'
+        ' WHERE parent = %s AND assessment_type = \'Assignment\' ORDER BY idx ASC LIMIT 1',
+        vc_name,
+        as_dict=True,
+    )
+    if a_row and a_row[0].assessment:
+        assignment = _build_assignment(a_row[0].assessment, lang_full_name, counters)
+
     counters["vid_seq"] += 1
     return _c({
         "id": counters["vid_seq"],
@@ -186,6 +196,7 @@ def _build_video(vc_name, lang_name, counters):
         "yt": yt,
         "pts": pts,
         "pq": plio_quiz,
+        "assign": assignment,
     })
 
 
@@ -265,7 +276,7 @@ def _build_assignment(a_name, lang_full_name, counters):
     })
 
 
-def _build_unit(lu_name, lang_name, counters):
+def _build_unit(lu_name, lang_name, lang_full_name, counters):
     row = frappe.db.sql(
         'SELECT name, unit_name, description, real_world_connection, difficulty_tier, status'
         ' FROM "tabLearningUnit" WHERE name = %s LIMIT 1',
@@ -310,7 +321,7 @@ def _build_unit(lu_name, lang_name, counters):
         if not content_ref:
             continue
         if ct == "videoclass":
-            vobj = _build_video(content_ref, lang_name, counters)
+            vobj = _build_video(content_ref, lang_name, lang_full_name, counters)
             if vobj:
                 videos.append(vobj)
         elif ct == "quiz" and unit_quiz is None:
@@ -330,7 +341,7 @@ def _build_unit(lu_name, lang_name, counters):
     })
 
 
-def _build_course(cl_name, lang_name, counters):
+def _build_course(cl_name, lang_name, lang_full_name, counters):
     row = frappe.db.sql(
         'SELECT name, name1, level, vertical, stage, kit_less,'
         ' course_description, course_summary, course_objectives, prerequisite_knowledge, download_url'
@@ -374,7 +385,7 @@ def _build_course(cl_name, lang_name, counters):
 
     units = []
     for r in lu_rows:
-        u = _build_unit(r.learning_unit, lang_name, counters)
+        u = _build_unit(r.learning_unit, lang_name, lang_full_name, counters)
         if u:
             units.append(u)
 
@@ -548,11 +559,6 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
     lang_name_cache = {lc: _lang_name(lc) for lc in lang_list}
     lang_full_name_cache = {lc: _lang_full_name(lc) for lc in lang_list}
 
-    assignment_ids = [
-        r.name
-        for r in frappe.db.sql('SELECT name FROM "tabAssignment" ORDER BY name ASC', as_dict=True)
-    ]
-
     payload = {
         "constants": _build_constants(program_id),
         "languages": _build_languages(),
@@ -570,28 +576,11 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
 
         courses = {}
         for cid in course_ids:
-            data = _build_course(cid, ln, counters)
+            data = _build_course(cid, ln, lfn, counters)
             if data:
                 courses[cid] = data
 
-        assignments = {}
-        assignment_index = []
-        for aid in assignment_ids:
-            data = _build_assignment(aid, lfn, counters)
-            if data:
-                assignments[data["id"]] = data
-                assignment_index.append(_c({
-                    "id": data["id"],
-                    "nm": data["nm"],
-                    "type": data.get("type"),
-                    "diff": data.get("diff"),
-                }))
-
-        payload["langs"][lang] = {
-            "index": {"courses": index_courses, "assignments": assignment_index},
-            "courses": courses,
-            "assignments": assignments,
-        }
+        payload["langs"][lang] = {"index": {"courses": index_courses}, "courses": courses}
 
     return {"success": True, "program": program_id, "payload": payload}
 
