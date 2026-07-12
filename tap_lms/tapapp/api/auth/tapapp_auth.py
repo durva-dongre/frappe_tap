@@ -18,7 +18,7 @@ def _get_jwt_secret():
     cached = cache.get_value("secret::tapapp_jwt_secret")
     if cached:
         return cached
-    value = frappe.get_doc("Secrets", "tapapp_jwt_secret").get_password("value")
+    value = frappe.get_doc("Secrets", "tapapp_jwt_secret", ignore_permissions=True).get_password("value")
     cache.set_value("secret::tapapp_jwt_secret", value, expires_in_sec=3600)
     return value
 
