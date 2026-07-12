@@ -103,7 +103,7 @@ def _password_exists(phone):
 
 def _get_teacher_auth_row(phone):
     rows = frappe.db.sql(
-        'SELECT phone, teacher, school_id, admin_code FROM "tabTapapp Auth" WHERE phone=%s LIMIT 1',
+        'SELECT phone, teacher, admin_code FROM "tabTapapp Auth" WHERE phone=%s LIMIT 1',
         phone,
         as_dict=True,
     )
@@ -128,7 +128,7 @@ def _fetch_profiles_page(phone, page=1, page_size=50):
     page_rows = rows[:page_size]
 
     learner_ids = [r.tapapp_learner for r in page_rows if r.tapapp_learner]
-    states_by_learner = learner_bulk_state(learner_ids)
+    states_by_learner = learner_bulk_state(learner_ids, fields="xp,streak,window,archetype")
 
     profiles = [
         {
@@ -152,7 +152,6 @@ def _login_payload(auth_row, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE):
         "token": _generate_access_token(auth_row.phone),
         "phone": auth_row.phone,
         "teacher": auth_row.teacher,
-        "school_id": auth_row.school_id,
         "admin_code": auth_row.admin_code,
         "profiles": profiles,
         "profiles_has_more": has_more,
@@ -171,10 +170,7 @@ def check_phone(phone=None):
     if not auth_row:
         return {"exists": False, "has_password": False}
 
-    if _password_exists(phone):
-        return {"exists": True, "has_password": True}
-
-    return {"exists": True, "has_password": False, **_login_payload(auth_row)}
+    return {"exists": True, "has_password": _password_exists(phone)}
 
 
 @frappe.whitelist(allow_guest=True)
@@ -270,7 +266,7 @@ def search_profiles(phone=None):
     page_rows = rows[:page_size]
 
     learner_ids = [r.tapapp_learner for r in page_rows if r.tapapp_learner]
-    states_by_learner = learner_bulk_state(learner_ids)
+    states_by_learner = learner_bulk_state(learner_ids, fields="xp,streak,window,archetype")
 
     profiles = [
         {

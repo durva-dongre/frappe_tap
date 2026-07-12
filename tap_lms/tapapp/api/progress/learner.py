@@ -63,6 +63,19 @@ def _get_learner_rows_bulk(learner_ids):
     return {r.name: r for r in rows}
 
 
+def _get_school_names(school_ids):
+    unique_ids = [s for s in dict.fromkeys(school_ids) if s]
+    if not unique_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(unique_ids))
+    rows = frappe.db.sql(
+        f'SELECT name, name1 FROM "tabSchool" WHERE name IN ({placeholders})',
+        tuple(unique_ids),
+        as_dict=True,
+    )
+    return {r.name: r.name1 for r in rows}
+
+
 def _compute_archetype(streak, submission_index, last_activity_date, today):
     if not last_activity_date:
         return ARCHETYPE_DORMANT
@@ -124,28 +137,30 @@ def _window_status(r, today=None):
     cap = r.max_weekly_activities or 2
     resets_on = window_start + timedelta(days=WINDOW_DAYS) if window_start else None
     return {
-        "activities_watched_this_week": watched,
-        "max_weekly_activities": cap,
+        "units_completed_this_week": watched,
+        "max_weekly_units": cap,
         "is_bingeing": bool(is_bingeing),
         "window_start_date": str(window_start) if window_start else None,
         "window_resets_on": str(resets_on) if resets_on else None,
-        "activities_remaining": max(cap - watched, 0),
+        "units_remaining": max(cap - watched, 0),
     }
 
 
-def _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements):
+def _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements, school_names=None):
     def _want(section):
         return want_all or section in wanted
 
     result = {"learner_id": learner_id}
 
     if _want("profile"):
+        school_names = school_names if school_names is not None else _get_school_names([r.school])
         result["profile"] = {
             "student_name": r.student_name,
             "language": r.language,
             "district": r.district,
             "state": r.state,
-            "school": r.school,
+            "school_id": r.school,
+            "school_name": school_names.get(r.school),
             "birthdate": str(r.birthdate) if r.birthdate else None,
         }
 
@@ -224,13 +239,19 @@ def learner_bulk_state(learner_ids, fields=None, include_achievements=False, syn
     if want_all or "enrollment" in (wanted or set()):
         enrollments_by_learner = _fetch_current_enrollments_bulk(unique_ids)
 
+    school_names = {}
+    if want_all or "profile" in (wanted or set()):
+        school_names = _get_school_names([r.school for r in rows_by_id.values()])
+
     states = {}
     for learner_id in unique_ids:
         r = rows_by_id.get(learner_id)
         if not r:
             states[learner_id] = None
             continue
-        state = _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements=False)
+        state = _build_state_from_row(
+            learner_id, r, wanted, want_all, today, include_achievements=False, school_names=school_names
+        )
         if include_achievements or want_all or "achievements" in (wanted or set()):
             state["achievements"] = achievements_by_learner.get(learner_id, [])
         if want_all or "enrollment" in (wanted or set()):
@@ -407,7 +428,7 @@ def submit_progress(
 
     if watched >= cap:
         frappe.throw(
-            f"Weekly activity limit reached ({cap} activities). Try again after the window resets.",
+            f"Weekly unit limit reached ({cap} units). Try again after the window resets.",
             frappe.ValidationError,
         )
 

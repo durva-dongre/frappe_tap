@@ -8,7 +8,6 @@
  "field_order": [
   "phone",
   "teacher",
-  "school_id",
   "admin_code",
   "students"
  ],
@@ -27,12 +26,6 @@
    "in_list_view": 1,
    "label": "Teacher",
    "options": "Teacher"
-  },
-  {
-   "fieldname": "school_id",
-   "fieldtype": "Link",
-   "label": "School",
-   "options": "School"
   },
   {
    "fieldname": "admin_code",
