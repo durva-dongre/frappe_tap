@@ -37,6 +37,17 @@ def _lang_name(lang_code):
     return row[0].name if row else None
 
 
+def _lang_full_name(lang_code):
+    row = frappe.db.sql(
+        'SELECT language_name FROM "tabTAP Language" WHERE language_code = %s LIMIT 1',
+        lang_code,
+        as_dict=True,
+    )
+    if row and row[0].language_name:
+        return row[0].language_name
+    return "English"
+
+
 def _build_quiz(quiz_name, lang_name, counters):
     if not quiz_name:
         return None
@@ -178,9 +189,44 @@ def _build_video(vc_name, lang_name, counters):
     })
 
 
-def _build_assignment(a_name, lang_code, lang_name, counters):
+def _build_submission_rules(a_name, lang_full_name):
+    rows = frappe.db.sql(
+        'SELECT submission_label, submission_title, allowed_submission_types,'
+        ' guided_text, unguided_text, valid_criteria, invalid_criteria, display_order'
+        ' FROM "tabAssignment Submission Rule"'
+        ' WHERE parent = %s AND language = %s ORDER BY display_order ASC',
+        (a_name, lang_full_name),
+        as_dict=True,
+    )
+    if not rows and lang_full_name != "English":
+        rows = frappe.db.sql(
+            'SELECT submission_label, submission_title, allowed_submission_types,'
+            ' guided_text, unguided_text, valid_criteria, invalid_criteria, display_order'
+            ' FROM "tabAssignment Submission Rule"'
+            ' WHERE parent = %s AND language = \'English\' ORDER BY display_order ASC',
+            a_name,
+            as_dict=True,
+        )
+
+    steps = []
+    for r in rows:
+        steps.append(_c({
+            "step": r.display_order,
+            "label": r.submission_label,
+            "sub_title": r.submission_title,
+            "sub_types": r.allowed_submission_types,
+            "guided_text": _strip_html(r.guided_text),
+            "unguided_text": _strip_html(r.unguided_text),
+            "valid_criteria": r.valid_criteria,
+            "invalid_criteria": r.invalid_criteria,
+        }))
+    return steps
+
+
+def _build_assignment(a_name, lang_full_name, counters):
     row = frappe.db.sql(
-        'SELECT name, assignment_name, description, assignment_type, max_score'
+        'SELECT name, assignment_name, description, assignment_type,'
+        ' difficulty_tier, estimated_duration, max_score'
         ' FROM "tabAssignment" WHERE name = %s LIMIT 1',
         a_name,
         as_dict=True,
@@ -191,57 +237,35 @@ def _build_assignment(a_name, lang_code, lang_name, counters):
     a = row[0]
     nm = a.assignment_name
     desc = _strip_html(a.description)
-    atype = a.assignment_type
 
-    if lang_name:
+    if lang_full_name and lang_full_name != "English":
         tr = frappe.db.sql(
-            'SELECT translated_name, translated_description'
+            'SELECT translated_title, translated_description'
             ' FROM "tabAssignmentTranslation" WHERE parent = %s AND language = %s LIMIT 1',
-            (a_name, lang_name),
+            (a_name, lang_full_name),
             as_dict=True,
         )
         if tr:
             t = tr[0]
-            nm = t.translated_name or nm
+            nm = t.translated_title or nm
             desc = _strip_html(t.translated_description) or desc
 
-    rule_row = frappe.db.sql(
-        'SELECT submission_title, guided_text, unguided_text, allowed_submission_types,'
-        ' valid_criteria, invalid_criteria'
-        ' FROM "tabAssignment Submission Rule"'
-        ' WHERE parent = %s AND language = %s ORDER BY display_order ASC LIMIT 1',
-        (a_name, lang_code),
-        as_dict=True,
-    )
-    if not rule_row and lang_code != "en":
-        rule_row = frappe.db.sql(
-            'SELECT submission_title, guided_text, unguided_text, allowed_submission_types,'
-            ' valid_criteria, invalid_criteria'
-            ' FROM "tabAssignment Submission Rule" asr'
-            ' JOIN "tabTAP Language" tl ON tl.name = asr.language'
-            ' WHERE asr.parent = %s AND tl.language_code = \'en\' ORDER BY asr.display_order ASC LIMIT 1',
-            a_name,
-            as_dict=True,
-        )
-
-    r = rule_row[0] if rule_row else {}
+    steps = _build_submission_rules(a_name, lang_full_name or "English")
 
     counters["assign_seq"] += 1
     return _c({
-        "id": counters["assign_seq"],
+        "id": a.name.replace(" ", "-"),
+        "seq": counters["assign_seq"],
         "nm": nm,
         "desc": desc,
-        "type": atype,
-        "sub_title": r.get("submission_title"),
-        "guided_text": _strip_html(r.get("guided_text")),
-        "unguided_text": _strip_html(r.get("unguided_text")),
-        "sub_types": r.get("allowed_submission_types"),
-        "valid_criteria": r.get("valid_criteria"),
-        "invalid_criteria": r.get("invalid_criteria"),
+        "type": a.assignment_type,
+        "diff": a.difficulty_tier,
+        "duration": a.estimated_duration,
+        "steps": steps or None,
     })
 
 
-def _build_unit(lu_name, lang_code, lang_name, counters):
+def _build_unit(lu_name, lang_name, counters):
     row = frappe.db.sql(
         'SELECT name, unit_name, description, real_world_connection, difficulty_tier, status'
         ' FROM "tabLearningUnit" WHERE name = %s LIMIT 1',
@@ -279,7 +303,6 @@ def _build_unit(lu_name, lang_code, lang_name, counters):
     )
 
     videos = []
-    assignments = []
     unit_quiz = None
     for ci in content_items:
         ct = (ci.get("content_type") or "").strip().lower()
@@ -290,10 +313,6 @@ def _build_unit(lu_name, lang_code, lang_name, counters):
             vobj = _build_video(content_ref, lang_name, counters)
             if vobj:
                 videos.append(vobj)
-        elif ct == "assignment":
-            aobj = _build_assignment(content_ref, lang_code, lang_name, counters)
-            if aobj:
-                assignments.append(aobj)
         elif ct == "quiz" and unit_quiz is None:
             unit_quiz = _build_quiz(content_ref, lang_name, counters)
 
@@ -307,12 +326,11 @@ def _build_unit(lu_name, lang_code, lang_name, counters):
         "diff": lu.difficulty_tier,
         "xp": vid_xp + quiz_xp,
         "vids": videos or None,
-        "assignments": assignments or None,
         "quiz": unit_quiz,
     })
 
 
-def _build_course(cl_name, lang_code, lang_name, counters):
+def _build_course(cl_name, lang_name, counters):
     row = frappe.db.sql(
         'SELECT name, name1, level, vertical, stage, kit_less,'
         ' course_description, course_summary, course_objectives, prerequisite_knowledge, download_url'
@@ -356,7 +374,7 @@ def _build_course(cl_name, lang_code, lang_name, counters):
 
     units = []
     for r in lu_rows:
-        u = _build_unit(r.learning_unit, lang_code, lang_name, counters)
+        u = _build_unit(r.learning_unit, lang_name, counters)
         if u:
             units.append(u)
 
@@ -528,6 +546,12 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
         return {"success": False, "error": f"No course levels found for program '{program_id}'"}
 
     lang_name_cache = {lc: _lang_name(lc) for lc in lang_list}
+    lang_full_name_cache = {lc: _lang_full_name(lc) for lc in lang_list}
+
+    assignment_ids = [
+        r.name
+        for r in frappe.db.sql('SELECT name FROM "tabAssignment" ORDER BY name ASC', as_dict=True)
+    ]
 
     payload = {
         "constants": _build_constants(program_id),
@@ -539,17 +563,35 @@ def export_program_content(program_id=None, include_r2=False, langs=None):
 
     for lang in lang_list:
         ln = lang_name_cache[lang]
+        lfn = lang_full_name_cache[lang]
         counters = {"vid_seq": 0, "quiz_seq": 0, "assign_seq": 0}
 
         index_courses = [e for e in (_build_index_entry(cid, ln) for cid in course_ids) if e]
 
         courses = {}
         for cid in course_ids:
-            data = _build_course(cid, lang, ln, counters)
+            data = _build_course(cid, ln, counters)
             if data:
                 courses[cid] = data
 
-        payload["langs"][lang] = {"index": {"courses": index_courses}, "courses": courses}
+        assignments = {}
+        assignment_index = []
+        for aid in assignment_ids:
+            data = _build_assignment(aid, lfn, counters)
+            if data:
+                assignments[data["id"]] = data
+                assignment_index.append(_c({
+                    "id": data["id"],
+                    "nm": data["nm"],
+                    "type": data.get("type"),
+                    "diff": data.get("diff"),
+                }))
+
+        payload["langs"][lang] = {
+            "index": {"courses": index_courses, "assignments": assignment_index},
+            "courses": courses,
+            "assignments": assignments,
+        }
 
     return {"success": True, "program": program_id, "payload": payload}
 
