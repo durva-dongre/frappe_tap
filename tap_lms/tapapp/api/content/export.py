@@ -146,7 +146,7 @@ def _build_video(vc_name, lang_name, lang_full_name, counters):
         as_dict=True,
     )
     if not row:
-        return None
+        return None, []
 
     v = row[0]
     nm = v.video_name
@@ -178,8 +178,19 @@ def _build_video(vc_name, lang_name, lang_full_name, counters):
     if pq_row and pq_row[0].assessment:
         plio_quiz = _build_quiz(pq_row[0].assessment, lang_name, counters)
 
+    assignment_refs = [
+        r.assessment
+        for r in frappe.db.sql(
+            'SELECT assessment FROM "tabAssessmentList"'
+            ' WHERE parent = %s AND assessment_type = \'Assignment\' ORDER BY idx ASC',
+            vc_name,
+            as_dict=True,
+        )
+        if r.assessment
+    ]
+
     counters["vid_seq"] += 1
-    return _c({
+    video = _c({
         "id": counters["vid_seq"],
         "nm": nm,
         "desc": desc,
@@ -187,6 +198,7 @@ def _build_video(vc_name, lang_name, lang_full_name, counters):
         "pts": pts,
         "pq": plio_quiz,
     })
+    return video, assignment_refs
 
 
 def _build_submission_rules(a_name, lang_full_name):
@@ -304,22 +316,31 @@ def _build_unit(lu_name, lang_name, lang_full_name, counters):
 
     videos = []
     unit_quiz = None
-    assignments = []
+    assignment_refs = []
     for ci in content_items:
         ct = (ci.get("content_type") or "").strip().lower()
         content_ref = ci.get("content")
         if not content_ref:
             continue
         if ct == "videoclass":
-            vobj = _build_video(content_ref, lang_name, lang_full_name, counters)
+            vobj, vid_assign_refs = _build_video(content_ref, lang_name, lang_full_name, counters)
             if vobj:
                 videos.append(vobj)
+                assignment_refs.extend(vid_assign_refs)
         elif ct == "quiz" and unit_quiz is None:
             unit_quiz = _build_quiz(content_ref, lang_name, counters)
-        elif ct == "assignment":
-            aobj = _build_assignment(content_ref, lang_full_name, counters)
-            if aobj:
-                assignments.append(aobj)
+        elif ct == "assignment" and content_ref not in assignment_refs:
+            assignment_refs.append(content_ref)
+
+    seen_refs = set()
+    assignments = []
+    for ref in assignment_refs:
+        if ref in seen_refs:
+            continue
+        seen_refs.add(ref)
+        aobj = _build_assignment(ref, lang_full_name, counters)
+        if aobj:
+            assignments.append(aobj)
 
     vid_xp = sum(v.get("pts", 0) for v in videos)
     quiz_xp = (videos[-1].get("pts", 10) if videos else 10) if unit_quiz else 0
