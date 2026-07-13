@@ -49,6 +49,27 @@ def _get_learner_row(learner_id):
     return row[0] if row else None
 
 
+def _get_learner_rows_bulk(learner_ids):
+    if not learner_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(learner_ids))
+    rows = frappe.db.sql(
+        f"""
+        SELECT name, student_name, language, district, state, school, birthdate, archetype,
+               xp, xp_d0, xp_d1, xp_d2, xp_d3, xp_d4, xp_d5, xp_d6, weekly_xp,
+               level, streak, longest_streak, last_activity_date,
+               submission_gems, submission_index,
+               activities_watched_this_week, max_weekly_activities,
+               window_start_date, is_bingeing
+        FROM "tabTapapp Learner"
+        WHERE name IN ({placeholders})
+        """,
+        tuple(learner_ids),
+        as_dict=True,
+    )
+    return {r.name: r for r in rows}
+
+
 def _compute_archetype(streak, submission_index, last_activity_date, today):
     if not last_activity_date:
         return ARCHETYPE_DORMANT
@@ -73,6 +94,41 @@ def _sync_archetype(learner_id, r, today):
         )
         r.archetype = computed
     return computed
+
+
+def _sync_archetypes_bulk(rows_by_learner, today):
+    updates = []
+    for learner_id, r in rows_by_learner.items():
+        computed = _compute_archetype(
+            r.streak or 0, r.submission_index or 0, _parse_date(r.last_activity_date), today
+        )
+        if computed != r.archetype:
+            r.archetype = computed
+            updates.append((computed, learner_id))
+
+    if not updates:
+        return
+
+    case_parts = []
+    ids = []
+    for computed, learner_id in updates:
+        case_parts.append("WHEN %s THEN %s")
+        ids.append(learner_id)
+    params = []
+    for computed, learner_id in updates:
+        params.extend([learner_id, computed])
+    placeholders = ",".join(["%s"] * len(ids))
+    params.extend(ids)
+
+    frappe.db.sql(
+        f"""
+        UPDATE "tabTapapp Learner"
+           SET archetype = CASE name {' '.join(case_parts)} ELSE archetype END,
+               modified = NOW()
+         WHERE name IN ({placeholders})
+        """,
+        tuple(params),
+    )
 
 
 def _roll_window_if_expired(r, today):
@@ -122,21 +178,9 @@ def _window_status(r, today=None):
 _ALL_SECTIONS = {"xp", "streak", "window", "level", "archetype", "submission", "enrollment", "achievements"}
 
 
-def learner_full_state(learner_id, fields=None, include_achievements=False, sync_archetype=True):
-    wanted = _parse_optional(fields)
-    want_all = wanted is None
-
+def _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements, achievements_by_learner=None):
     def _want(section):
         return want_all or section in wanted
-
-    r = _get_learner_row(learner_id)
-    if not r:
-        return None
-
-    today = _today()
-
-    if sync_archetype and (want_all or _want("archetype")):
-        _sync_archetype(learner_id, r, today)
 
     result = {"learner_id": learner_id}
 
@@ -177,13 +221,67 @@ def learner_full_state(learner_id, fields=None, include_achievements=False, sync
         result["submission_index"] = r.submission_index or 0
 
     if include_achievements or _want("achievements"):
-        from tap_lms.tapapp.api.progress.achievements import fetch_achievements
-        result["achievements"] = fetch_achievements(learner_id)
+        if achievements_by_learner is not None:
+            result["achievements"] = achievements_by_learner.get(learner_id, [])
+        else:
+            from tap_lms.tapapp.api.progress.achievements import fetch_achievements
+            result["achievements"] = fetch_achievements(learner_id)
 
     if _want("enrollment"):
         result["enrollment"] = _fetch_current_enrollment(learner_id)
 
     return result
+
+
+def learner_full_state(learner_id, fields=None, include_achievements=False, sync_archetype=True):
+    wanted = _parse_optional(fields)
+    want_all = wanted is None
+
+    r = _get_learner_row(learner_id)
+    if not r:
+        return None
+
+    today = _today()
+
+    if sync_archetype and (want_all or "archetype" in wanted):
+        _sync_archetype(learner_id, r, today)
+
+    return _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements)
+
+
+def learner_bulk_state(learner_ids, fields=None, include_achievements=False, sync_archetype=True):
+    """Batched equivalent of learner_full_state for many learners at once.
+
+    Returns a dict keyed by learner_id. Unknown/missing learner_ids are
+    simply absent from the result (callers use .get(learner_id) and treat
+    a missing key the same as None).
+    """
+    learner_ids = [lid for lid in (learner_ids or []) if lid]
+    if not learner_ids:
+        return {}
+
+    wanted = _parse_optional(fields)
+    want_all = wanted is None
+    today = _today()
+
+    rows_by_learner = _get_learner_rows_bulk(learner_ids)
+    if not rows_by_learner:
+        return {}
+
+    if sync_archetype and (want_all or "archetype" in wanted):
+        _sync_archetypes_bulk(rows_by_learner, today)
+
+    achievements_by_learner = None
+    if include_achievements or want_all or "achievements" in wanted:
+        from tap_lms.tapapp.api.progress.achievements import fetch_achievements_bulk
+        achievements_by_learner = fetch_achievements_bulk(list(rows_by_learner.keys()))
+
+    return {
+        learner_id: _build_state_from_row(
+            learner_id, r, wanted, want_all, today, include_achievements, achievements_by_learner
+        )
+        for learner_id, r in rows_by_learner.items()
+    }
 
 
 def _fetch_current_enrollment(learner_id):
