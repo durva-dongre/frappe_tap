@@ -350,13 +350,14 @@ def record_activity(learner_id=None, xp=None, activity_type=None, fields=None):
 
 @frappe.whitelist(allow_guest=True)
 def update_content_progress(
-    learner_id=None, video_index=None, quiz_index=None,
+    learner_id=None, video_index=None, quiz_index=None, submission_index=None,
     xp=None, activity_type=None, fields=None,
 ):
     fd = frappe.form_dict
     learner_id = learner_id or fd.get("learner_id")
     video_index = video_index if video_index is not None else fd.get("video_index")
     quiz_index = quiz_index if quiz_index is not None else fd.get("quiz_index")
+    submission_index = submission_index if submission_index is not None else fd.get("submission_index")
     xp = xp if xp is not None else fd.get("xp")
     activity_type = activity_type or fd.get("activity_type")
     fields = fields or fd.get("fields")
@@ -366,11 +367,16 @@ def update_content_progress(
 
     has_video = video_index is not None
     has_quiz = quiz_index is not None
-    if not has_video and not has_quiz:
-        frappe.throw("At least one of video_index or quiz_index is required", frappe.ValidationError)
+    has_submission = submission_index is not None
+    if not has_video and not has_quiz and not has_submission:
+        frappe.throw(
+            "At least one of video_index, quiz_index or submission_index is required",
+            frappe.ValidationError,
+        )
 
     video_count = int(video_index) if has_video else None
     quiz_count = int(quiz_index) if has_quiz else None
+    submission_count = int(submission_index) if has_submission else None
 
     enrollment = _get_enrollment_row(learner_id)
     if not enrollment:
@@ -391,9 +397,15 @@ def update_content_progress(
 
     current_videos = enrollment.videos_completed or 0
     current_quizzes = enrollment.quizzes_completed or 0
+    current_submissions = enrollment.submission_index or 0
     new_videos = max(current_videos, video_count) if has_video else current_videos
     new_quizzes = max(current_quizzes, quiz_count) if has_quiz else current_quizzes
-    progress_moved = new_videos > current_videos or new_quizzes > current_quizzes
+    new_submissions = max(current_submissions, submission_count) if has_submission else current_submissions
+    progress_moved = (
+        new_videos > current_videos
+        or new_quizzes > current_quizzes
+        or new_submissions > current_submissions
+    )
 
     if progress_moved:
         frappe.db.sql(
@@ -401,10 +413,24 @@ def update_content_progress(
             UPDATE "tabTapapp Enroll"
                SET videos_completed = GREATEST(videos_completed, %s),
                    quizzes_completed = GREATEST(quizzes_completed, %s),
+                   submission_index = GREATEST(submission_index, %s),
                    modified = NOW()
              WHERE name = %s
             """,
-            (new_videos, new_quizzes, enrollment.name),
+            (new_videos, new_quizzes, new_submissions, enrollment.name),
+        )
+        frappe.db.commit()
+
+    if has_submission and new_submissions > current_submissions:
+        frappe.db.sql(
+            """
+            UPDATE "tabTapapp Learner"
+               SET submission_gems = submission_gems + %s,
+                   submission_index = GREATEST(submission_index, %s),
+                   modified = NOW()
+             WHERE name = %s
+            """,
+            (SUBMISSION_GEMS, new_submissions, learner_id),
         )
         frappe.db.commit()
 
@@ -414,8 +440,17 @@ def update_content_progress(
         "updated": progress_moved,
         "videos_completed": new_videos,
         "quizzes_completed": new_quizzes,
+        "submission_index": new_submissions,
         **activity_result,
     }
+
+
+# Alias so the worker's existing route target
+# (tap_lms.tapapp.api.progress.learner.submit_progress) resolves without
+# needing to change worker/src/routes.js. Frappe's dispatcher does
+# getattr(module, "submit_progress"), so this points straight at the
+# already-whitelisted update_content_progress function.
+submit_progress = update_content_progress
 
 
 @frappe.whitelist()
