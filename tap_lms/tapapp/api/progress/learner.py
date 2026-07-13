@@ -548,6 +548,7 @@ def submit_progress(
 
     frappe.db.commit()
 
+<<<<<<< HEAD
     result = {
         "progress_recorded": True,
         "conflict": False,
@@ -562,3 +563,12 @@ def submit_progress(
         result["expected_submission_index"] = expected_submission_index + 1
 
     return {**result, **learner_full_state(learner_id, fields=fields)}
+=======
+    return {
+        "processed": True,
+        "submission_index": submission_index,
+        "xp_awarded": SUBMISSION_XP,
+        "gems_awarded": SUBMISSION_GEMS,
+        **learner_full_state(learner_id, fields="xp,submission,archetype"),
+    }
+>>>>>>> 8ddd4fa (Fixed Learner API)
