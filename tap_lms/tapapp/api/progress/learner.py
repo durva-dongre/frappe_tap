@@ -10,6 +10,8 @@ ARCHETYPE_FENCE_SITTER = "fence_sitter"
 ARCHETYPE_IRREGULAR_SUBMITTER = "irregular_submitter"
 ARCHETYPE_SUBMITTER = "submitter"
 
+DEFAULT_PROGRESS_FIELDS = "xp,streak,submission,version"
+
 
 def _today():
     return date.today()
@@ -39,7 +41,7 @@ def _get_learner_row(learner_id):
                level, streak, longest_streak, last_activity_date,
                submission_gems, submission_index,
                activities_watched_this_week, max_weekly_activities,
-               window_start_date, is_bingeing
+               window_start_date, is_bingeing, modified
         FROM "tabTapapp Learner"
         WHERE name=%s LIMIT 1
         """,
@@ -60,7 +62,7 @@ def _get_learner_rows_bulk(learner_ids):
                level, streak, longest_streak, last_activity_date,
                submission_gems, submission_index,
                activities_watched_this_week, max_weekly_activities,
-               window_start_date, is_bingeing
+               window_start_date, is_bingeing, modified
         FROM "tabTapapp Learner"
         WHERE name IN ({placeholders})
         """,
@@ -175,7 +177,7 @@ def _window_status(r, today=None):
     }
 
 
-_ALL_SECTIONS = {"xp", "streak", "window", "level", "archetype", "submission", "enrollment", "achievements"}
+_ALL_SECTIONS = {"xp", "streak", "window", "level", "archetype", "submission", "enrollment", "achievements", "version"}
 
 
 def _build_state_from_row(learner_id, r, wanted, want_all, today, include_achievements, achievements_by_learner=None):
@@ -219,6 +221,9 @@ def _build_state_from_row(learner_id, r, wanted, want_all, today, include_achiev
     if _want("submission"):
         result["submission_gems"] = r.submission_gems or 0
         result["submission_index"] = r.submission_index or 0
+
+    if _want("version"):
+        result["version"] = str(r.modified) if getattr(r, "modified", None) else None
 
     if include_achievements or _want("achievements"):
         if achievements_by_learner is not None:
@@ -342,14 +347,39 @@ def get_learner_state(learner_id=None, fields=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def enroll_course(learner_id=None, course=None):
+def get_learner_progress(learner_id=None, fields=None):
     fd = frappe.form_dict
     learner_id = learner_id or fd.get("learner_id")
-    course = course or fd.get("course")
+    fields = fields or fd.get("fields") or DEFAULT_PROGRESS_FIELDS
 
-    if not learner_id or not course:
-        frappe.throw("learner_id and course are required", frappe.ValidationError)
+    if not learner_id:
+        frappe.throw("learner_id is required", frappe.ValidationError)
 
+    state = learner_full_state(learner_id, fields=fields)
+    if state is None:
+        frappe.throw("Learner not found", frappe.DoesNotExistError)
+    return state
+
+
+@frappe.whitelist(allow_guest=True)
+def get_learners_progress(learner_ids=None, fields=None):
+    fd = frappe.form_dict
+    learner_ids = learner_ids or fd.get("learner_ids")
+    fields = fields or fd.get("fields") or DEFAULT_PROGRESS_FIELDS
+
+    if isinstance(learner_ids, str):
+        try:
+            learner_ids = frappe.parse_json(learner_ids)
+        except Exception:
+            learner_ids = [x.strip() for x in learner_ids.split(",") if x.strip()]
+
+    if not isinstance(learner_ids, list) or not learner_ids:
+        frappe.throw("learner_ids must be a non-empty array", frappe.ValidationError)
+
+    return learner_bulk_state(learner_ids, fields=fields)
+
+
+def _enroll_course_internal(learner_id, course):
     existing = _get_enrollment_row(learner_id)
     if existing:
         frappe.db.sql(
@@ -376,6 +406,18 @@ def enroll_course(learner_id=None, course=None):
             """,
             (frappe.generate_hash(length=10), learner_id, course),
         )
+
+
+@frappe.whitelist(allow_guest=True)
+def enroll_course(learner_id=None, course=None):
+    fd = frappe.form_dict
+    learner_id = learner_id or fd.get("learner_id")
+    course = course or fd.get("course")
+
+    if not learner_id or not course:
+        frappe.throw("learner_id and course are required", frappe.ValidationError)
+
+    _enroll_course_internal(learner_id, course)
     frappe.db.commit()
 
     return {"enrolled": True, "course": course, **learner_full_state(learner_id, fields="enrollment")}
@@ -387,7 +429,7 @@ def record_activity(learner_id=None, xp=None, activity_type=None, fields=None):
     learner_id = learner_id or fd.get("learner_id")
     xp = xp if xp is not None else fd.get("xp")
     activity_type = activity_type or fd.get("activity_type")
-    fields = fields or fd.get("fields")
+    fields = fields or fd.get("fields") or DEFAULT_PROGRESS_FIELDS
 
     if not learner_id:
         frappe.throw("learner_id is required", frappe.ValidationError)
@@ -458,7 +500,7 @@ def update_content_progress(
     submission_index = submission_index if submission_index is not None else fd.get("submission_index")
     xp = xp if xp is not None else fd.get("xp")
     activity_type = activity_type or fd.get("activity_type")
-    fields = fields or fd.get("fields")
+    fields = fields or fd.get("fields") or DEFAULT_PROGRESS_FIELDS
 
     if not learner_id:
         frappe.throw("learner_id is required", frappe.ValidationError)
@@ -625,5 +667,5 @@ def submission_verified_webhook(learner_id=None, submission_index=None):
         "submission_index": submission_index,
         "xp_awarded": SUBMISSION_XP,
         "gems_awarded": SUBMISSION_GEMS,
-        **learner_full_state(learner_id, fields="xp,submission,archetype"),
+        **learner_full_state(learner_id, fields="xp,submission,archetype,version"),
     }

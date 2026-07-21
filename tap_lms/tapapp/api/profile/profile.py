@@ -89,18 +89,42 @@ def _apply_updates(phone, learner_id, updates):
     return bool(learner_set or profile_set)
 
 
+def _resolve_learner_id(phone, learner_id, grade, roll_number, division):
+    if learner_id:
+        return _owned_learner_id(phone, learner_id)
+
+    if not (grade and roll_number and division):
+        frappe.throw("learner_id or (grade, roll_number, division) is required", frappe.ValidationError)
+
+    division = _clean_division(division)
+    row = frappe.db.sql(
+        """
+        SELECT tapapp_learner
+        FROM "tabTapapp Auth Profile"
+        WHERE parent=%s AND grade=%s AND roll_number=%s AND division=%s
+        LIMIT 1
+        """,
+        (phone, grade, roll_number, division),
+        as_dict=True,
+    )
+    if not row or not row[0].tapapp_learner:
+        frappe.throw("No matching student found", frappe.DoesNotExistError)
+    return row[0].tapapp_learner
+
+
 @frappe.whitelist(allow_guest=True)
-def select_profile(phone=None, learner_id=None, fields=None):
+def select_profile(phone=None, learner_id=None, grade=None, roll_number=None, division=None, fields=None):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
     learner_id = learner_id or fd.get("learner_id")
+    grade = grade or fd.get("grade")
+    roll_number = roll_number or fd.get("roll_number")
+    division = division or fd.get("division")
     fields = fields or fd.get("fields")
 
-    if not learner_id:
-        frappe.throw("learner_id is required", frappe.ValidationError)
-
     payload, new_token = _require_access_token_with_refresh(phone)
-    _owned_learner_id(phone, learner_id)
+
+    learner_id = _resolve_learner_id(phone, learner_id, grade, roll_number, division)
 
     state = learner_full_state(learner_id, fields=fields, include_achievements=True)
     if state is None:
@@ -165,50 +189,17 @@ def update_profile(phone=None, learner_id=None, updates=None, **kwargs):
 
 @frappe.whitelist(allow_guest=True)
 def search_student(phone=None, grade=None, roll_number=None, division=None):
-    fd = frappe.form_dict
-    phone = phone or fd.get("phone", "")
-    grade = grade or fd.get("grade")
-    roll_number = roll_number or fd.get("roll_number")
-    division = division or fd.get("division")
-
-    if not grade or not roll_number or not division:
-        frappe.throw("grade, roll_number, and division are required", frappe.ValidationError)
-
-    _require_access_token(phone)
-    division = _clean_division(division)
-
-    row = frappe.db.sql(
-        """
-        SELECT tapapp_learner, student_name, roll_number, grade, division, avatar, student
-        FROM "tabTapapp Auth Profile"
-        WHERE parent=%s AND grade=%s AND roll_number=%s AND division=%s
-        LIMIT 1
-        """,
-        (phone, grade, roll_number, division),
-        as_dict=True,
-    )
-    if not row:
-        frappe.throw("No matching student found", frappe.DoesNotExistError)
-
-    r = row[0]
-    state = learner_full_state(r.tapapp_learner, include_achievements=True) if r.tapapp_learner else None
-    return {
-        "learner_id": r.tapapp_learner,
-        "student_name": r.student_name,
-        "roll_number": r.roll_number,
-        "grade": r.grade,
-        "division": r.division,
-        "avatar": r.avatar,
-        "state": state,
-    }
+    return select_profile(phone=phone, grade=grade, roll_number=roll_number, division=division)
 
 
 @frappe.whitelist(allow_guest=True)
-def get_bulk_students(phone=None, grade=None, division=None, page=None, page_size=None):
+def get_bulk_students(phone=None, grade=None, division=None, roll_number=None, query=None, page=None, page_size=None):
     fd = frappe.form_dict
     phone = phone or fd.get("phone", "")
     grade = grade or fd.get("grade")
     division = division or fd.get("division")
+    roll_number = roll_number or fd.get("roll_number")
+    query = query or fd.get("query")
     page = int(page or fd.get("page", 1))
     page_size = min(int(page_size or fd.get("page_size", 100)), 500)
     offset = (page - 1) * page_size
@@ -223,6 +214,12 @@ def get_bulk_students(phone=None, grade=None, division=None, page=None, page_siz
     if division:
         conditions.append("division = %s")
         params.append(_clean_division(division))
+    if roll_number:
+        conditions.append("roll_number = %s")
+        params.append(roll_number)
+    if query:
+        conditions.append("student_name LIKE %s")
+        params.append(f"%{query}%")
 
     where_clause = " AND ".join(conditions)
     rows = frappe.db.sql(

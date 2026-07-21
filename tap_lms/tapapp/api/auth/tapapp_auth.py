@@ -2,7 +2,6 @@ import frappe
 import jwt
 import datetime
 from frappe.utils.password import check_password, update_password
-from tap_lms.tapapp.api.progress.learner import learner_bulk_state
 
 RESET_OTP = "000000"
 RESET_OTP_EXPIRY_SECONDS = 600
@@ -110,25 +109,39 @@ def _get_teacher_auth_row(phone):
     return rows[0] if rows else None
 
 
-def _fetch_profiles_page(phone, page=1, page_size=50):
+def _fetch_profiles_page(phone, page=1, page_size=50, grade=None, division=None, roll_number=None, query=None):
     page_size = min(page_size, MAX_PAGE_SIZE)
     offset = (page - 1) * page_size
+
+    conditions = ["parent = %s"]
+    params = [phone]
+    if grade:
+        conditions.append("grade = %s")
+        params.append(grade)
+    if division:
+        conditions.append("division = %s")
+        params.append(division.strip().upper())
+    if roll_number:
+        conditions.append("roll_number = %s")
+        params.append(roll_number)
+    if query:
+        conditions.append("student_name LIKE %s")
+        params.append(f"%{query}%")
+
+    where_clause = " AND ".join(conditions)
     rows = frappe.db.sql(
-        """
-        SELECT tapapp_learner, student_name, roll_number, grade, division, avatar, student
+        f"""
+        SELECT tapapp_learner, student_name, roll_number, grade, division, avatar, student, onboarding_completed
         FROM "tabTapapp Auth Profile"
-        WHERE parent = %s
+        WHERE {where_clause}
         ORDER BY grade ASC, division ASC, roll_number ASC
         LIMIT %s OFFSET %s
         """,
-        (phone, page_size + 1, offset),
+        (*params, page_size + 1, offset),
         as_dict=True,
     )
     has_more = len(rows) > page_size
     page_rows = rows[:page_size]
-
-    learner_ids = [r.tapapp_learner for r in page_rows if r.tapapp_learner]
-    states_by_learner = learner_bulk_state(learner_ids, fields="xp,streak,window,archetype")
 
     profiles = [
         {
@@ -138,7 +151,7 @@ def _fetch_profiles_page(phone, page=1, page_size=50):
             "grade": r.grade,
             "division": r.division,
             "avatar": r.avatar,
-            "state": states_by_learner.get(r.tapapp_learner),
+            "onboarding_completed": bool(r.onboarding_completed),
         }
         for r in page_rows
     ]
@@ -205,10 +218,17 @@ def get_profiles(phone=None):
     fd = frappe.form_dict
     page = int(fd.get("page", 1))
     page_size = min(int(fd.get("page_size", 50)), MAX_PAGE_SIZE)
+    grade = fd.get("grade")
+    division = fd.get("division")
+    roll_number = fd.get("roll_number")
+    query = fd.get("query")
 
     payload, new_token = _require_access_token_with_refresh(phone)
 
-    profiles, has_more = _fetch_profiles_page(phone, page=page, page_size=page_size)
+    profiles, has_more = _fetch_profiles_page(
+        phone, page=page, page_size=page_size,
+        grade=grade, division=division, roll_number=roll_number, query=query,
+    )
     result = {
         "phone": phone,
         "profiles": profiles,
@@ -231,55 +251,13 @@ def search_profiles(phone=None):
     query = fd.get("query")
     page = int(fd.get("page", 1))
     page_size = min(int(fd.get("page_size", 20)), MAX_PAGE_SIZE)
-    offset = (page - 1) * page_size
 
     _require_access_token(phone)
 
-    conditions = ["parent = %s"]
-    params = [phone]
-    if grade:
-        conditions.append("grade = %s")
-        params.append(grade)
-    if division:
-        conditions.append("division = %s")
-        params.append(division.strip().upper())
-    if roll_number:
-        conditions.append("roll_number = %s")
-        params.append(roll_number)
-    if query:
-        conditions.append("student_name LIKE %s")
-        params.append(f"%{query}%")
-
-    where_clause = " AND ".join(conditions)
-    rows = frappe.db.sql(
-        f"""
-        SELECT tapapp_learner, student_name, roll_number, grade, division, avatar, student
-        FROM "tabTapapp Auth Profile"
-        WHERE {where_clause}
-        ORDER BY grade ASC, division ASC, roll_number ASC
-        LIMIT %s OFFSET %s
-        """,
-        (*params, page_size + 1, offset),
-        as_dict=True,
+    profiles, has_more = _fetch_profiles_page(
+        phone, page=page, page_size=page_size,
+        grade=grade, division=division, roll_number=roll_number, query=query,
     )
-    has_more = len(rows) > page_size
-    page_rows = rows[:page_size]
-
-    learner_ids = [r.tapapp_learner for r in page_rows if r.tapapp_learner]
-    states_by_learner = learner_bulk_state(learner_ids, fields="xp,streak,window,archetype")
-
-    profiles = [
-        {
-            "learner_id": r.tapapp_learner,
-            "student_name": r.student_name,
-            "roll_number": r.roll_number,
-            "grade": r.grade,
-            "division": r.division,
-            "avatar": r.avatar,
-            "state": states_by_learner.get(r.tapapp_learner),
-        }
-        for r in page_rows
-    ]
     return {
         "phone": phone,
         "profiles": profiles,
@@ -335,3 +313,4 @@ def reset_password(phone=None, password=None):
     update_password(phone, password, doctype="Tapapp Auth", fieldname="password")
     frappe.db.commit()
     return _login_payload(auth_row)
+    
