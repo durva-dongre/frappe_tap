@@ -8,7 +8,7 @@ RESET_OTP_EXPIRY_SECONDS = 600
 RESET_TOKEN_EXPIRY_SECONDS = 600
 ACCESS_TOKEN_EXPIRY_SECONDS = 60 * 60 * 24 * 90
 TOKEN_REFRESH_THRESHOLD_DAYS = 30
-LOGIN_PROFILES_PAGE_SIZE = 10
+LOGIN_PROFILES_PAGE_SIZE = 15
 MAX_PAGE_SIZE = 200
 
 
@@ -109,7 +109,10 @@ def _get_teacher_auth_row(phone):
     return rows[0] if rows else None
 
 
-def _fetch_profiles_page(phone, page=1, page_size=50, grade=None, division=None, roll_number=None, query=None):
+def _fetch_profiles_page(
+    phone, page=1, page_size=50, grade=None, division=None, roll_number=None,
+    query=None, order_by_recent=False,
+):
     page_size = min(page_size, MAX_PAGE_SIZE)
     offset = (page - 1) * page_size
 
@@ -129,12 +132,17 @@ def _fetch_profiles_page(phone, page=1, page_size=50, grade=None, division=None,
         params.append(f"%{query}%")
 
     where_clause = " AND ".join(conditions)
+    order_clause = (
+        "modified DESC"
+        if order_by_recent
+        else "grade ASC, division ASC, roll_number ASC"
+    )
     rows = frappe.db.sql(
         f"""
         SELECT tapapp_learner, student_name, roll_number, grade, division, avatar, student, onboarding_completed
         FROM "tabTapapp Auth Profile"
         WHERE {where_clause}
-        ORDER BY grade ASC, division ASC, roll_number ASC
+        ORDER BY {order_clause}
         LIMIT %s OFFSET %s
         """,
         (*params, page_size + 1, offset),
@@ -158,8 +166,11 @@ def _fetch_profiles_page(phone, page=1, page_size=50, grade=None, division=None,
     return profiles, has_more
 
 
-def _login_payload(auth_row, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE):
-    profiles, has_more = _fetch_profiles_page(auth_row.phone, page=page, page_size=page_size)
+def _login_payload(auth_row, page=1, page_size=LOGIN_PROFILES_PAGE_SIZE, grade=None, division=None):
+    profiles, has_more = _fetch_profiles_page(
+        auth_row.phone, page=page, page_size=page_size,
+        grade=grade, division=division, order_by_recent=True,
+    )
     return {
         "success": True,
         "token": _generate_access_token(auth_row.phone),
@@ -187,9 +198,14 @@ def check_phone(phone=None):
 
 
 @frappe.whitelist(allow_guest=True)
-def login_with_password(phone=None, password=None):
-    phone = phone or frappe.form_dict.get("phone", "")
-    password = password or frappe.form_dict.get("password")
+def login_with_password(phone=None, password=None, grade=None, division=None, page=None, page_size=None):
+    fd = frappe.form_dict
+    phone = phone or fd.get("phone", "")
+    password = password or fd.get("password")
+    grade = grade or fd.get("grade")
+    division = division or fd.get("division")
+    page = int(page or fd.get("page", 1))
+    page_size = min(int(page_size or fd.get("page_size", LOGIN_PROFILES_PAGE_SIZE)), LOGIN_PROFILES_PAGE_SIZE)
 
     if not phone or not password:
         return {"success": False, "error": "invalid_credentials"}
@@ -209,7 +225,7 @@ def login_with_password(phone=None, password=None):
         update_password(phone, password, doctype="Tapapp Auth", fieldname="password")
         frappe.db.commit()
 
-    return _login_payload(auth_row)
+    return _login_payload(auth_row, page=page, page_size=page_size, grade=grade, division=division)
 
 
 @frappe.whitelist(allow_guest=True)
