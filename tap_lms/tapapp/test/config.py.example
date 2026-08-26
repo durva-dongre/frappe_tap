@@ -1,0 +1,61 @@
+{
+  "base_url": "https://your-site.example.com",
+  "api_prefix": "/api/method/",
+  "frappe_api_key": "PUT_KEY_HERE",
+  "frappe_api_secret": "PUT_SECRET_HERE",
+  "request_timeout_seconds": 15,
+  "verify_tls": true,
+
+  "accounts": {
+    "phone_a": "9990000001",
+    "pass_a": "TestPass123",
+    "phone_b": "9990000002",
+    "pass_b": "TestPass123",
+    "phone_new": "9990000003",
+    "phone_new2": "9990000004",
+    "phone_new3": "9990000005"
+  },
+
+  "learner_ids": {
+    "lid_owned_a": "TL00000001",
+    "lid_owned_b": "TL00000002",
+    "lid_write_1": "TL00000010",
+    "lid_write_2": "TL00000011",
+    "lid_write_3": "TL00000012",
+    "lid_concurrency": "TL00000099"
+  },
+
+  "course_ids": {
+    "course_1": "COURSE-LEVEL-A",
+    "course_2": "COURSE-LEVEL-B"
+  },
+
+  "program_id_for_export": "PROGRAM-001",
+  "export_langs": ["en", "hi"],
+
+  "grade_division_roll_lookup": {
+    "grade": "6",
+    "division": "A",
+    "roll_number": "12"
+  },
+
+  "stress": {
+    "concurrency_levels": [1, 5, 10, 25, 50, 100, 200],
+    "requests_per_level": 300,
+    "ramp_pause_seconds": 5,
+    "max_duration_seconds_per_level": 60,
+    "abort_error_rate_threshold": 0.20,
+    "sample_resource_interval_seconds": 1
+  },
+
+  "safety": {
+    "allow_password_mutation_tests": true,
+    "allow_bulk_write_tests": true,
+    "bulk_update_max_rows_per_request": 500,
+    "dry_run_only": false,
+    "run_first_time_password_tests": true,
+    "run_stress_suite": false,
+    "run_concurrency_suite": false,
+    "run_retrigger_smoke": false
+  }
+}
