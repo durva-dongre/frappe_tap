@@ -111,7 +111,7 @@ def _send_to_apps_script(payload: dict):
 def run_tapapp_analytics_report():
     cache = frappe.cache()
     lock_ttl = dynamic_lock_ttl(_LOCK_TTL_BASE_SEC, _LOCK_TTL_PER_MILLION_SEC)
-    acquired = cache.redis.set(cache.make_key(JOB_LOCK_KEY), "1", nx=True, ex=lock_ttl)
+    acquired = cache.set(cache.make_key(JOB_LOCK_KEY), "1", nx=True, ex=lock_ttl)
     if not acquired:
         frappe.logger().warning("Tapapp analytics report already running, skipping.")
         return
