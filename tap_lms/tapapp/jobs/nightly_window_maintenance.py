@@ -89,13 +89,6 @@ def _run_maintenance(today) -> int:
 
 
 def run_nightly_window_maintenance():
-    tracker = get_or_create_tracker(JOB_KEY, JOB_LABEL)
-    if tracker.paused:
-        tracker.status = "Paused"
-        tracker.save(ignore_permissions=True)
-        frappe.db.commit()
-        return
-
     cache = frappe.cache()
     lock_ttl = dynamic_lock_ttl(_LOCK_TTL_BASE_SEC, _LOCK_TTL_PER_MILLION_SEC)
     acquired = cache.redis.set(cache.make_key(JOB_LOCK_KEY), "1", nx=True, ex=lock_ttl)
@@ -104,21 +97,29 @@ def run_nightly_window_maintenance():
         return
     cache.set_value(JOB_START_KEY, str(int(time.time())), expires_in_sec=lock_ttl)
 
-    tracker.status = "Running"
-    tracker.save(ignore_permissions=True)
-    frappe.db.commit()
-
-    t0 = time.time()
     try:
-        today = frappe.utils.getdate(frappe.utils.now_datetime())
-        updated = _run_maintenance(today)
-        duration = time.time() - t0
-        mark_tracker(tracker, "Success", duration)
-        frappe.logger().info(f"Tapapp nightly window maintenance done in {round(duration, 1)}s. Rows updated={updated} FreeMB={free_mb()}")
-    except Exception as e:
-        duration = time.time() - t0
-        mark_tracker(tracker, "Failed", duration, str(e)[:5000])
-        frappe.log_error(title="Tapapp nightly window maintenance failed", message=frappe.get_traceback())
+        tracker = get_or_create_tracker(JOB_KEY, JOB_LABEL)
+        if tracker.paused:
+            tracker.status = "Paused"
+            tracker.save(ignore_permissions=True)
+            frappe.db.commit()
+            return
+
+        tracker.status = "Running"
+        tracker.save(ignore_permissions=True)
+        frappe.db.commit()
+
+        t0 = time.time()
+        try:
+            today = frappe.utils.getdate(frappe.utils.now_datetime())
+            updated = _run_maintenance(today)
+            duration = time.time() - t0
+            mark_tracker(tracker, "Success", duration)
+            frappe.logger().info(f"Tapapp nightly window maintenance done in {round(duration, 1)}s. Rows updated={updated} FreeMB={free_mb()}")
+        except Exception as e:
+            duration = time.time() - t0
+            mark_tracker(tracker, "Failed", duration, str(e)[:5000])
+            frappe.log_error(title="Tapapp nightly window maintenance failed", message=frappe.get_traceback())
     finally:
         cache.delete_value(JOB_LOCK_KEY)
         cache.delete_value(JOB_START_KEY)
