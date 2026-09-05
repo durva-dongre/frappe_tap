@@ -268,28 +268,46 @@ def sec_record(log, case_id, endpoint, params, call_result, expected_note, passe
 
 
 class ResourceSampler:
-    def __init__(self, interval_seconds, server_pid=None):
+    def __init__(self, interval_seconds, server_pids=None):
         self.interval_seconds = interval_seconds
-        self.server_pid = server_pid
+        self.server_pids = server_pids or []
         self.samples = []
         self.lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread = None
 
     def _server_proc_sample(self):
-        if not self.server_pid:
+        if not self.server_pids:
             return None
-        try:
-            p = psutil.Process(self.server_pid)
-            with p.oneshot():
-                return {
-                    "cpu_percent": p.cpu_percent(interval=None),
-                    "rss_mb": p.memory_info().rss // (1024 * 1024),
-                    "num_threads": p.num_threads(),
-                    "num_fds": p.num_fds() if hasattr(p, "num_fds") else None,
-                }
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        total_cpu = 0.0
+        total_rss = 0
+        total_threads = 0
+        total_fds = 0
+        seen_any = False
+        fds_available = True
+        for pid in self.server_pids:
+            try:
+                p = psutil.Process(pid)
+                with p.oneshot():
+                    total_cpu += p.cpu_percent(interval=None)
+                    total_rss += p.memory_info().rss
+                    total_threads += p.num_threads()
+                    if hasattr(p, "num_fds"):
+                        total_fds += p.num_fds()
+                    else:
+                        fds_available = False
+                seen_any = True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not seen_any:
             return None
+        return {
+            "cpu_percent": round(total_cpu, 1),
+            "rss_mb": total_rss // (1024 * 1024),
+            "num_threads": total_threads,
+            "num_fds": total_fds if fds_available else None,
+            "processes_tracked": len(self.server_pids),
+        }
 
     def _loop(self):
         while not self._stop_event.is_set():
@@ -371,16 +389,16 @@ class ResourceSampler:
         return False
 
 
-def find_server_pid(cfg):
+def find_server_pids(cfg):
     candidates = []
     for p in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
             cmdline = " ".join(p.info.get("cmdline") or [])
         except Exception:
             continue
-        if "gunicorn" in cmdline or "frappe" in cmdline or "bench" in cmdline or "werkzeug" in cmdline:
+        if "gunicorn" in cmdline or "frappe.app:application" in cmdline or "werkzeug" in cmdline:
             candidates.append(p.info["pid"])
-    return candidates[0] if candidates else None
+    return candidates
 
 
 class State:
@@ -820,8 +838,8 @@ def _level_is_healthy(cfg, error_rate, latencies, client_saturated):
     return True
 
 
-def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, headers_factory, server_pid):
-    sampler = ResourceSampler(cfg.sample_resource_interval_seconds, server_pid=server_pid)
+def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, headers_factory, server_pids):
+    sampler = ResourceSampler(cfg.sample_resource_interval_seconds, server_pids=server_pids)
     level = cfg.initial_concurrency
     last_healthy_level = None
     first_unhealthy_level = None
@@ -905,7 +923,7 @@ def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, h
     return refined_ceiling, ceiling_reason
 
 
-def run_full_stress_suite(client, cfg, log, state, server_pid):
+def run_full_stress_suite(client, cfg, log, state, server_pids):
     if not cfg.users:
         return
     phone = cfg.users[0]["phone"]
@@ -918,39 +936,39 @@ def run_full_stress_suite(client, cfg, log, state, server_pid):
     log.write_status("stress:class_a_reads")
     run_adaptive_stress_class(
         client, cfg, log, "Class A (single-record reads, no auth)", "get_learner_state",
-        lambda: {"learner_id": rr_learner()}, lambda: {}, server_pid,
+        lambda: {"learner_id": rr_learner()}, lambda: {}, server_pids,
     )
     run_adaptive_stress_class(
         client, cfg, log, "Class A (single-record reads, no auth)", "check_phone",
-        lambda: {"phone": phone}, lambda: {}, server_pid,
+        lambda: {"phone": phone}, lambda: {}, server_pids,
     )
     run_adaptive_stress_class(
         client, cfg, log, "Class A (single-record reads, no auth)", "get_learner_achievements",
-        lambda: {"learner_id": rr_learner()}, lambda: {}, server_pid,
+        lambda: {"learner_id": rr_learner()}, lambda: {}, server_pids,
     )
 
     log.write_status("stress:class_b_batch_reads")
     run_adaptive_stress_class(
         client, cfg, log, "Class B (batch reads)", "get_learners_progress",
-        lambda: {"learner_ids": json.dumps(lid_pool)}, lambda: {}, server_pid,
+        lambda: {"learner_ids": json.dumps(lid_pool)}, lambda: {}, server_pids,
     )
     if token:
         run_adaptive_stress_class(
             client, cfg, log, "Class B (paginated reads, authenticated)", "get_profiles",
             lambda: {"phone": phone, "page": 1, "page_size": 50},
-            lambda: client.bearer_headers(token), server_pid,
+            lambda: client.bearer_headers(token), server_pids,
         )
         run_adaptive_stress_class(
             client, cfg, log, "Class B (paginated reads, authenticated)", "get_bulk_students",
             lambda: {"phone": phone, "page": 1, "page_size": 50},
-            lambda: client.bearer_headers(token), server_pid,
+            lambda: client.bearer_headers(token), server_pids,
         )
 
     log.write_status("stress:class_c_single_writes")
     run_adaptive_stress_class(
         client, cfg, log, "Class C (single writes)", "record_activity",
         lambda: {"learner_id": rr_learner(), "xp": 1, "activity_type": "stress"},
-        lambda: {}, server_pid,
+        lambda: {}, server_pids,
     )
 
     if cfg.allow_bulk_write_tests and token:
@@ -961,7 +979,7 @@ def run_full_stress_suite(client, cfg, log, state, server_pid):
                      "changes": json.dumps([{"learner_id": cfg.users[0]["learners"][0]["learner_id"],
                                               "updates": {"grade": "6"}}]),
                      "atomic": "false"},
-            lambda: client.bearer_headers(token), server_pid,
+            lambda: client.bearer_headers(token), server_pids,
         )
 
     if cfg.program_id_for_export:
@@ -969,7 +987,7 @@ def run_full_stress_suite(client, cfg, log, state, server_pid):
         run_adaptive_stress_class(
             client, cfg, log, "Class E (heavy aggregation/export)", "export_program_content",
             lambda: {"program_id": cfg.program_id_for_export},
-            lambda: client.api_key_headers(), server_pid,
+            lambda: client.api_key_headers(), server_pids,
         )
 
 
@@ -1022,8 +1040,9 @@ def main():
     parser.add_argument("--config", default="config.json")
     parser.add_argument("--only", default=None,
                          help="Comma-separated: functional,security,concurrency,stress")
-    parser.add_argument("--server-pid", type=int, default=None,
-                         help="PID of the Frappe/gunicorn server process, for per-process resource tracking")
+    parser.add_argument("--server-pids", type=str, default=None,
+                         help="Comma-separated PIDs of the Frappe/gunicorn master+worker processes, "
+                              "for aggregated resource tracking. If omitted, auto-detected.")
     args = parser.parse_args()
 
     cfg = Config(args.config)
@@ -1033,7 +1052,11 @@ def main():
     state = State(cfg)
     start_time = now_ts()
 
-    server_pid = args.server_pid or find_server_pid(cfg)
+    if args.server_pids:
+        server_pids = [int(p.strip()) for p in args.server_pids.split(",") if p.strip()]
+    else:
+        server_pids = find_server_pids(cfg)
+    print(f"Tracking server resource usage across PIDs: {server_pids or 'none found'}")
 
     def handle_signal(signum, frame):
         log.write_status("interrupted", extra={"signal": signum})
@@ -1101,7 +1124,7 @@ def main():
 
         if wants("stress") and cfg.run_stress_suite:
             log.write_status("stress")
-            run_full_stress_suite(client, cfg, log, state, server_pid)
+            run_full_stress_suite(client, cfg, log, state, server_pids)
             log.write_summary_snapshot(cfg)
 
         log.write_status("completed")
