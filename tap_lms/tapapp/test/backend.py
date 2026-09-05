@@ -3,7 +3,6 @@ import concurrent.futures
 import datetime
 import json
 import os
-import platform
 import signal
 import statistics
 import sys
@@ -50,65 +49,154 @@ ENDPOINT_MODULE_MAP = {
     "export_content": "tap_lms.tapapp.api.content.export.export_content",
 }
 
+REDACT_KEYS = {"password", "token", "reset_token", "api_secret", "authorization"}
+
+NOTE_MAX_CHARS = 4000
+
+
+class ConfigError(Exception):
+    pass
+
+
+def _require(raw, key, typ, where="config"):
+    if key not in raw:
+        raise ConfigError(f"{where}: missing required key '{key}'")
+    val = raw[key]
+    if not isinstance(val, typ):
+        raise ConfigError(f"{where}: key '{key}' must be {typ.__name__}, got {type(val).__name__}")
+    return val
+
 
 class Config:
     def __init__(self, path):
+        if not os.path.isfile(path):
+            raise ConfigError(f"config file not found: {path}")
         with open(path, "r") as f:
-            raw = json.load(f)
+            try:
+                raw = json.load(f)
+            except json.JSONDecodeError as e:
+                raise ConfigError(f"config file is not valid JSON: {e}")
+
+        if not isinstance(raw, dict):
+            raise ConfigError("config root must be a JSON object")
+
         self.raw = raw
-        self.base_url = raw["base_url"].rstrip("/")
+        self.base_url = _require(raw, "base_url", str).rstrip("/")
+        if not (self.base_url.startswith("http://") or self.base_url.startswith("https://")):
+            raise ConfigError(f"base_url must start with http:// or https://, got: {self.base_url}")
+
         self.api_prefix = raw.get("api_prefix", "/api/method/")
+        if not isinstance(self.api_prefix, str) or not self.api_prefix:
+            raise ConfigError("api_prefix must be a non-empty string")
+
         self.site_host = raw.get("site_host", "")
+        if not isinstance(self.site_host, str):
+            raise ConfigError("site_host must be a string")
+
         self.endpoint_module_map = dict(ENDPOINT_MODULE_MAP)
-        self.endpoint_module_map.update(raw.get("endpoint_module_overrides", {}))
-        self.use_dotted_paths = raw.get("use_dotted_paths", True)
+        overrides = raw.get("endpoint_module_overrides", {})
+        if not isinstance(overrides, dict):
+            raise ConfigError("endpoint_module_overrides must be an object")
+        self.endpoint_module_map.update(overrides)
+
+        self.use_dotted_paths = bool(raw.get("use_dotted_paths", True))
+
         self.frappe_api_key = raw.get("frappe_api_key", "")
         self.frappe_api_secret = raw.get("frappe_api_secret", "")
+        self.has_real_api_credentials = bool(
+            self.frappe_api_key
+            and self.frappe_api_secret
+            and self.frappe_api_key not in ("PUT_KEY_HERE", "")
+            and self.frappe_api_secret not in ("PUT_SECRET_HERE", "")
+        )
+
         self.request_timeout_seconds = raw.get("request_timeout_seconds", 20)
-        self.verify_tls = raw.get("verify_tls", False)
+        if not isinstance(self.request_timeout_seconds, (int, float)) or self.request_timeout_seconds <= 0:
+            raise ConfigError("request_timeout_seconds must be a positive number")
+
+        self.verify_tls = bool(raw.get("verify_tls", False))
 
         self.users = raw.get("users", [])
+        if not isinstance(self.users, list):
+            raise ConfigError("users must be a list")
+        for i, u in enumerate(self.users):
+            if not isinstance(u, dict):
+                raise ConfigError(f"users[{i}] must be an object")
+            if "phone" not in u or not isinstance(u["phone"], str) or not u["phone"]:
+                raise ConfigError(f"users[{i}] missing a non-empty 'phone'")
+            if "password" not in u or not isinstance(u["password"], str) or not u["password"]:
+                raise ConfigError(f"users[{i}] missing a non-empty 'password'")
+            for j, l in enumerate(u.get("learners", [])):
+                if not isinstance(l, dict) or "learner_id" not in l:
+                    raise ConfigError(f"users[{i}].learners[{j}] missing 'learner_id'")
+
+        seen_phones = set()
+        for u in self.users:
+            if u["phone"] in seen_phones:
+                raise ConfigError(f"duplicate phone in users: {u['phone']}")
+            seen_phones.add(u["phone"])
+
         self.user_by_phone = {u["phone"]: u for u in self.users}
         self.all_learner_ids = [l["learner_id"] for u in self.users for l in u.get("learners", [])]
 
         course = raw.get("course_ids", {})
+        if not isinstance(course, dict):
+            raise ConfigError("course_ids must be an object")
         self.course_1 = course.get("course_1")
         self.course_2 = course.get("course_2")
 
         self.program_id_for_export = raw.get("program_id_for_export")
         self.export_langs = raw.get("export_langs", ["en"])
+        if not isinstance(self.export_langs, list):
+            raise ConfigError("export_langs must be a list")
 
         stress = raw.get("stress", {})
-        self.initial_concurrency = stress.get("initial_concurrency", 5)
-        self.growth_factor = stress.get("growth_factor", 2.0)
-        self.hard_ceiling = stress.get("hard_ceiling", 1000)
-        self.requests_per_level_min = stress.get("requests_per_level_min", 40)
-        self.requests_per_level_max = stress.get("requests_per_level_max", 400)
-        self.ramp_pause_seconds = stress.get("ramp_pause_seconds", 3)
-        self.max_duration_seconds_per_level = stress.get("max_duration_seconds_per_level", 45)
-        self.abort_error_rate_threshold = stress.get("abort_error_rate_threshold", 0.15)
-        self.abort_p95_latency_ms = stress.get("abort_p95_latency_ms", 8000)
-        self.client_cpu_abort_percent = stress.get("client_cpu_abort_percent", 90)
-        self.client_ram_abort_percent = stress.get("client_ram_abort_percent", 90)
-        self.sample_resource_interval_seconds = stress.get("sample_resource_interval_seconds", 0.5)
-        self.consecutive_bad_levels_to_stop = stress.get("consecutive_bad_levels_to_stop", 2)
-        self.refine_binary_search_steps = stress.get("refine_binary_search_steps", 4)
+        if not isinstance(stress, dict):
+            raise ConfigError("stress must be an object")
+        self.initial_concurrency = int(stress.get("initial_concurrency", 5))
+        self.growth_factor = float(stress.get("growth_factor", 2.0))
+        self.hard_ceiling = int(stress.get("hard_ceiling", 1000))
+        self.requests_per_level_min = int(stress.get("requests_per_level_min", 40))
+        self.requests_per_level_max = int(stress.get("requests_per_level_max", 400))
+        self.ramp_pause_seconds = float(stress.get("ramp_pause_seconds", 3))
+        self.max_duration_seconds_per_level = float(stress.get("max_duration_seconds_per_level", 45))
+        self.abort_error_rate_threshold = float(stress.get("abort_error_rate_threshold", 0.15))
+        self.abort_p95_latency_ms = float(stress.get("abort_p95_latency_ms", 8000))
+        self.client_cpu_abort_percent = float(stress.get("client_cpu_abort_percent", 90))
+        self.client_ram_abort_percent = float(stress.get("client_ram_abort_percent", 90))
+        self.sample_resource_interval_seconds = float(stress.get("sample_resource_interval_seconds", 0.5))
+        self.consecutive_bad_levels_to_stop = int(stress.get("consecutive_bad_levels_to_stop", 2))
+        self.refine_binary_search_steps = int(stress.get("refine_binary_search_steps", 4))
+
+        if self.initial_concurrency < 1:
+            raise ConfigError("stress.initial_concurrency must be >= 1")
+        if self.growth_factor <= 1.0:
+            raise ConfigError("stress.growth_factor must be > 1.0")
+        if self.hard_ceiling < self.initial_concurrency:
+            raise ConfigError("stress.hard_ceiling must be >= initial_concurrency")
+        if self.requests_per_level_min < 1 or self.requests_per_level_max < self.requests_per_level_min:
+            raise ConfigError("stress.requests_per_level_min/max are invalid")
+        if not (0 < self.abort_error_rate_threshold <= 1):
+            raise ConfigError("stress.abort_error_rate_threshold must be in (0, 1]")
 
         safety = raw.get("safety", {})
-        self.allow_password_mutation_tests = safety.get("allow_password_mutation_tests", False)
-        self.allow_bulk_write_tests = safety.get("allow_bulk_write_tests", True)
-        self.bulk_update_max_rows_per_request = safety.get("bulk_update_max_rows_per_request", 500)
-        self.run_first_time_password_tests = safety.get("run_first_time_password_tests", False)
-        self.run_stress_suite = safety.get("run_stress_suite", True)
-        self.run_concurrency_suite = safety.get("run_concurrency_suite", True)
-        self.run_retrigger_smoke = safety.get("run_retrigger_smoke", False)
+        if not isinstance(safety, dict):
+            raise ConfigError("safety must be an object")
+        self.allow_password_mutation_tests = bool(safety.get("allow_password_mutation_tests", False))
+        self.allow_bulk_write_tests = bool(safety.get("allow_bulk_write_tests", True))
+        self.bulk_update_max_rows_per_request = int(safety.get("bulk_update_max_rows_per_request", 500))
+        self.run_first_time_password_tests = bool(safety.get("run_first_time_password_tests", False))
+        self.run_stress_suite = bool(safety.get("run_stress_suite", True))
+        self.run_concurrency_suite = bool(safety.get("run_concurrency_suite", True))
+        self.run_retrigger_smoke = bool(safety.get("run_retrigger_smoke", False))
 
         output = raw.get("output", {})
+        if not isinstance(output, dict):
+            raise ConfigError("output must be an object")
         self.results_dir = output.get("results_dir", "./stress_results")
-        self.flush_every_n_results = output.get("flush_every_n_results", 1)
-
-
-REDACT_KEYS = {"password", "token", "reset_token", "api_secret", "authorization"}
+        if not isinstance(self.results_dir, str) or not self.results_dir:
+            raise ConfigError("output.results_dir must be a non-empty string")
+        self.flush_every_n_results = int(output.get("flush_every_n_results", 1))
 
 
 def redact(params):
@@ -116,11 +204,20 @@ def redact(params):
         return params
     out = {}
     for k, v in params.items():
-        if k.lower() in REDACT_KEYS:
+        if isinstance(k, str) and k.lower() in REDACT_KEYS:
             out[k] = "***REDACTED***"
         else:
             out[k] = v
     return out
+
+
+def truncate_note(text, limit=NOTE_MAX_CHARS):
+    if text is None:
+        return ""
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"...<truncated, {len(text)} chars total>"
 
 
 class ApiClient:
@@ -132,14 +229,20 @@ class ApiClient:
         self.session.mount("https://", adapter)
 
     def call(self, method_path, params=None, headers=None, timeout=None):
+        if not isinstance(method_path, str) or not method_path:
+            return CallResult(status_code=None, body=None, latency_ms=0.0,
+                               error=f"invalid method_path: {method_path!r}")
+
         resolved_method = method_path
         if self.config.use_dotted_paths:
             resolved_method = self.config.endpoint_module_map.get(method_path, method_path)
+
         url = f"{self.config.base_url}{self.config.api_prefix}{resolved_method}"
-        params = params or {}
-        headers = dict(headers or {})
+        params = params if isinstance(params, dict) else {}
+        headers = dict(headers) if isinstance(headers, dict) else {}
         if self.config.site_host:
             headers["Host"] = self.config.site_host
+
         t0 = time.time()
         try:
             resp = self.session.post(
@@ -149,24 +252,37 @@ class ApiClient:
                 timeout=timeout or self.config.request_timeout_seconds,
                 verify=self.config.verify_tls,
             )
-            latency_ms = (time.time() - t0) * 1000.0
-            try:
-                body = resp.json()
-            except ValueError:
-                body = {"_raw_text": resp.text[:2000]}
-            return CallResult(status_code=resp.status_code, body=body, latency_ms=latency_ms, error=None)
+        except requests.exceptions.Timeout as e:
+            return CallResult(status_code=None, body=None, latency_ms=(time.time() - t0) * 1000.0,
+                               error=f"timeout: {e}")
+        except requests.exceptions.ConnectionError as e:
+            return CallResult(status_code=None, body=None, latency_ms=(time.time() - t0) * 1000.0,
+                               error=f"connection_error: {e}")
         except requests.exceptions.RequestException as e:
-            latency_ms = (time.time() - t0) * 1000.0
-            return CallResult(status_code=None, body=None, latency_ms=latency_ms, error=str(e))
+            return CallResult(status_code=None, body=None, latency_ms=(time.time() - t0) * 1000.0,
+                               error=str(e))
+
+        latency_ms = (time.time() - t0) * 1000.0
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {"_raw_text": resp.text[:2000] if resp.text else ""}
+        return CallResult(status_code=resp.status_code, body=body, latency_ms=latency_ms, error=None)
 
     def api_key_headers(self):
+        if not self.config.has_real_api_credentials:
+            return {}
         return {"Authorization": f"token {self.config.frappe_api_key}:{self.config.frappe_api_secret}"}
 
     def bearer_headers(self, token, header_name="X-Flutter-Authorization"):
+        if not token:
+            return {}
         return {header_name: f"Bearer {token}"}
 
 
 class CallResult:
+    __slots__ = ("status_code", "body", "latency_ms", "error")
+
     def __init__(self, status_code, body, latency_ms, error):
         self.status_code = status_code
         self.body = body
@@ -178,11 +294,23 @@ class CallResult:
 
     def message_body(self):
         if isinstance(self.body, dict):
-            if "message" in self.body and isinstance(self.body["message"], dict):
-                return self.body["message"]
-            if "message" in self.body:
-                return self.body["message"]
+            msg = self.body.get("message")
+            if msg is not None:
+                return msg
         return self.body
+
+    def error_summary(self, limit=800):
+        if self.error:
+            return truncate_note(self.error, limit)
+        if isinstance(self.body, dict):
+            exc_type = self.body.get("exc_type")
+            exc = self.body.get("exc")
+            if exc_type or exc:
+                combined = f"{exc_type or ''}: {exc or ''}".strip(": ")
+                return truncate_note(combined, limit)
+            if "_raw_text" in self.body:
+                return truncate_note(self.body["_raw_text"], limit)
+        return truncate_note(json.dumps(self.body) if self.body is not None else "", limit)
 
 
 def now_ts():
@@ -202,9 +330,11 @@ class StreamingLog:
         self.summary_path = os.path.join(results_dir, f"summary_{run_id}.json")
         self.status_path = os.path.join(results_dir, f"status_{run_id}.json")
         self.lock = threading.Lock()
-        self.counts = {"functional_pass": 0, "functional_fail": 0, "functional_skip": 0,
-                       "security_pass": 0, "security_fail": 0, "security_skip": 0,
-                       "findings": 0, "stress_levels_completed": 0}
+        self.counts = {
+            "functional_pass": 0, "functional_fail": 0, "functional_skip": 0,
+            "security_pass": 0, "security_fail": 0, "security_skip": 0,
+            "findings": 0, "stress_levels_completed": 0,
+        }
         self._touch_all()
         self.write_status("initializing")
 
@@ -214,9 +344,10 @@ class StreamingLog:
             open(p, "a").close()
 
     def _append(self, path, row):
+        line = json.dumps(row, default=str) + "\n"
         with self.lock:
             with open(path, "a") as f:
-                f.write(json.dumps(row) + "\n")
+                f.write(line)
                 f.flush()
                 os.fsync(f.fileno())
 
@@ -239,13 +370,19 @@ class StreamingLog:
 
     def add_stress(self, row):
         self._append(self.stress_path, row)
-        if row.get("concurrency_level") not in (None, "CEILING", "REFINE"):
+        if row.get("concurrency_level") not in (None, "CEILING", "REFINE") and \
+                not str(row.get("concurrency_level", "")).startswith("REFINE"):
             with self.lock:
                 self.counts["stress_levels_completed"] += 1
 
     def add_finding(self, title, endpoint, description, evidence=""):
-        row = {"timestamp": now_ts(), "title": title, "endpoint": endpoint,
-               "description": description, "evidence": evidence}
+        row = {
+            "timestamp": now_ts(),
+            "title": title,
+            "endpoint": endpoint,
+            "description": description,
+            "evidence": truncate_note(evidence, 2000),
+        }
         self._append(self.findings_path, row)
         with self.lock:
             self.counts["findings"] += 1
@@ -257,12 +394,12 @@ class StreamingLog:
         with self.lock:
             tmp = self.status_path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump(payload, f, indent=2)
+                json.dump(payload, f, indent=2, default=str)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self.status_path)
 
-    def write_summary_snapshot(self, cfg, extra_lines=None):
+    def write_summary_snapshot(self, cfg):
         with self.lock:
             snapshot = {
                 "timestamp": now_ts(),
@@ -272,7 +409,7 @@ class StreamingLog:
             }
             tmp = self.summary_path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump(snapshot, f, indent=2)
+                json.dump(snapshot, f, indent=2, default=str)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self.summary_path)
@@ -289,7 +426,7 @@ def record(log, case_id, endpoint, params, call_result, expected_note, passed, n
         "error": call_result.error if call_result else None,
         "expected": expected_note,
         "result": "PASS" if passed is True else ("FAIL" if passed is False else "SKIPPED"),
-        "note": note,
+        "note": truncate_note(note),
     }
     log.add_functional(row)
     return row
@@ -306,7 +443,7 @@ def sec_record(log, case_id, endpoint, params, call_result, expected_note, passe
         "error": call_result.error if call_result else None,
         "expected": expected_note,
         "result": "PASS" if passed is True else ("FAIL" if passed is False else "SKIPPED"),
-        "note": note,
+        "note": truncate_note(note),
     }
     log.add_security(row)
     return row
@@ -314,8 +451,8 @@ def sec_record(log, case_id, endpoint, params, call_result, expected_note, passe
 
 class ResourceSampler:
     def __init__(self, interval_seconds, server_pids=None):
-        self.interval_seconds = interval_seconds
-        self.server_pids = server_pids or []
+        self.interval_seconds = max(0.05, float(interval_seconds))
+        self.server_pids = list(server_pids) if server_pids else []
         self.samples = []
         self.lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -385,7 +522,8 @@ class ResourceSampler:
             self._stop_event.wait(self.interval_seconds)
 
     def start(self):
-        self.samples = []
+        with self.lock:
+            self.samples = []
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -399,9 +537,12 @@ class ResourceSampler:
         with self.lock:
             samples = list(self.samples)
         if not samples:
-            return {"cpu_avg": None, "cpu_peak": None, "ram_avg": None, "ram_peak": None,
-                     "server_cpu_avg": None, "server_cpu_peak": None,
-                     "server_rss_mb_avg": None, "server_rss_mb_peak": None}
+            return {
+                "cpu_avg": None, "cpu_peak": None, "ram_avg": None, "ram_peak": None,
+                "server_cpu_avg": None, "server_cpu_peak": None,
+                "server_rss_mb_avg": None, "server_rss_mb_peak": None,
+                "sample_count": 0,
+            }
         cpu_vals = [s["cpu_avg"] for s in samples if s["cpu_avg"] is not None]
         ram_vals = [s["ram_percent"] for s in samples if s["ram_percent"] is not None]
         server_cpu = [s["server_proc"]["cpu_percent"] for s in samples
@@ -454,43 +595,63 @@ class State:
         self.enrolled_learners = {}
         self.record_activity_calls = {}
         self.submission_index_by_learner = {}
+        self._lock = threading.Lock()
 
     def token_for(self, client, cfg, phone):
-        if phone in self.tokens_by_phone:
-            return self.tokens_by_phone[phone]
+        with self._lock:
+            existing = self.tokens_by_phone.get(phone)
+        if existing:
+            return existing
         password = self.pass_current_by_phone.get(phone)
+        if not password:
+            return None
         r = client.call("login_with_password", {"phone": phone, "password": password})
         body = r.message_body()
         if isinstance(body, dict) and body.get("token"):
-            self.tokens_by_phone[phone] = body["token"]
+            with self._lock:
+                self.tokens_by_phone[phone] = body["token"]
             return body["token"]
         return None
 
 
+def _safe_json_dumps(value, limit=500):
+    try:
+        return truncate_note(json.dumps(value), limit)
+    except Exception:
+        return truncate_note(str(value), limit)
+
+
 def run_login_all_users_suite(client, cfg, log, state):
     ep = "login_with_password"
+    if not cfg.users:
+        record(log, "login__no_users", ep, {}, None, "200, success:true, token present", None,
+               "SKIPPED — no users configured")
+        return
+
     for u in cfg.users:
         phone = u["phone"]
         r = client.call(ep, {"phone": phone, "password": u["password"]})
         body = r.message_body()
-        passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is True and body.get("token")
+        passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is True and bool(body.get("token"))
         if passed:
             state.tokens_by_phone[phone] = body["token"]
+        note = "" if passed else f"actual response: {_safe_json_dumps(body)}" if not r.error else r.error
         record(log, f"login__{phone}", ep, {"phone": phone}, r,
-               "200, success:true, token present", passed)
+               "200, success:true, token present", passed, note=note)
 
     r = client.call(ep, {"phone": cfg.users[0]["phone"], "password": "WrongPassword999"})
     body = r.message_body()
     passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is False
     record(log, "login__wrong_password", ep, {"phone": cfg.users[0]["phone"]}, r,
-           "200, success:false, error:invalid_credentials", passed)
+           "200, success:false, error:invalid_credentials", passed,
+           note="" if passed else f"actual response: {_safe_json_dumps(body)}")
 
     r = client.call(ep, {"phone": "9999999999", "password": "whatever1"})
     body = r.message_body()
     passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is False
     record(log, "login__unregistered_phone", ep, {"phone": "9999999999"}, r,
            "200, success:false, error:invalid_credentials", passed,
-           note="" if passed else f"actual body: {json.dumps(body)[:300]}")
+           note="" if passed else f"actual response: {_safe_json_dumps(body)} status={r.status_code} error={r.error}")
 
 
 def run_get_profiles_all_users_suite(client, cfg, log, state):
@@ -506,7 +667,8 @@ def run_get_profiles_all_users_suite(client, cfg, log, state):
         body = r.message_body()
         passed = r.is_2xx() and isinstance(body, dict) and "profiles" in body
         record(log, f"get_profiles__{phone}", ep, {"phone": phone}, r,
-               "200, profiles array for this account", passed)
+               "200, profiles array for this account", passed,
+               note="" if passed else f"actual response: {_safe_json_dumps(body)}")
 
 
 def run_onboarding_all_learners_suite(client, cfg, log, state):
@@ -536,7 +698,8 @@ def run_onboarding_all_learners_suite(client, cfg, log, state):
                     state.enrolled_learners[lid] = course
             record(log, f"onboarding__{lid}", ep,
                    {"phone": phone, "learner_id": lid, "course": course}, r,
-                   "200, onboarding_completed:true, course enrolled", passed)
+                   "200, onboarding_completed:true, course enrolled", passed,
+                   note="" if passed else f"actual response: {_safe_json_dumps(body)}")
 
 
 def run_enroll_course_all_learners_suite(client, cfg, log, state):
@@ -553,7 +716,8 @@ def run_enroll_course_all_learners_suite(client, cfg, log, state):
             if passed:
                 state.enrolled_learners[lid] = cfg.course_2
             record(log, f"enroll__{lid}", ep, {"learner_id": lid, "course": cfg.course_2}, r,
-                   "200, enrolled:true", passed)
+                   "200, enrolled:true", passed,
+                   note="" if passed else f"actual response: {_safe_json_dumps(body)}")
 
 
 def run_record_activity_all_learners_suite(client, cfg, log, state):
@@ -566,7 +730,8 @@ def run_record_activity_all_learners_suite(client, cfg, log, state):
             passed = r.is_2xx() and isinstance(body, dict) and body.get("activity_recorded") is True
             state.record_activity_calls[lid] = state.record_activity_calls.get(lid, 0) + (1 if passed else 0)
             record(log, f"record_activity__{lid}", ep, {"learner_id": lid, "activity_type": "video"}, r,
-                   "200, xp_awarded, activity_recorded:true", passed)
+                   "200, xp_awarded, activity_recorded:true", passed,
+                   note="" if passed else f"status={r.status_code} error={r.error_summary()}")
 
 
 def run_content_progress_all_learners_suite(client, cfg, log, state):
@@ -582,7 +747,7 @@ def run_content_progress_all_learners_suite(client, cfg, log, state):
             record(log, f"content_progress__{lid}", ep,
                    {"learner_id": lid, "video_index": 1, "activity_type": "video"}, r,
                    "200, updated true/false depending on weekly cap state", None,
-                   f"observed status={r.status_code}")
+                   note=f"observed status={r.status_code} error={r.error_summary() if r.error else ''}")
 
 
 def run_learner_state_all_learners_suite(client, cfg, log):
@@ -592,17 +757,23 @@ def run_learner_state_all_learners_suite(client, cfg, log):
         body = r.message_body()
         passed = r.is_2xx() and isinstance(body, dict) and "learner_id" in body
         record(log, f"learner_state__{lid}", ep, {"learner_id": lid}, r,
-               "200, full learner state", passed)
+               "200, full learner state", passed,
+               note="" if passed else f"status={r.status_code} error={r.error_summary()}")
 
 
 def run_get_learners_progress_batch_suite(client, cfg, log):
     ep = "get_learners_progress"
+    if not cfg.all_learner_ids:
+        record(log, "learners_progress__all_learners_batch", ep, {}, None, "200", None,
+               "SKIPPED — no learners configured")
+        return
     r = client.call(ep, {"learner_ids": json.dumps(cfg.all_learner_ids)})
     body = r.message_body()
     passed = r.is_2xx() and isinstance(body, dict) and all(lid in body for lid in cfg.all_learner_ids)
     record(log, "learners_progress__all_learners_batch", ep,
            {"learner_ids_count": len(cfg.all_learner_ids)}, r,
-           "200, dict keyed by every learner_id in the dataset", passed)
+           "200, dict keyed by every learner_id in the dataset", passed,
+           note="" if passed else f"status={r.status_code} error={r.error_summary()}")
 
 
 def run_bulk_update_all_users_suite(client, cfg, log, state):
@@ -624,7 +795,8 @@ def run_bulk_update_all_users_suite(client, cfg, log, state):
         body = r.message_body()
         passed = r.is_2xx() and isinstance(body, dict) and body.get("succeeded") == len(changes)
         record(log, f"bulk_update__{phone}", ep, {"phone": phone, "changes_count": len(changes)}, r,
-               "200, all rows in this account's batch succeed", passed)
+               "200, all rows in this account's batch succeed", passed,
+               note="" if passed else f"actual response: {_safe_json_dumps(body)}")
 
 
 def run_achievements_all_learners_suite(client, cfg, log):
@@ -632,33 +804,51 @@ def run_achievements_all_learners_suite(client, cfg, log):
     award_ep = "award_achievement"
     conflict_bug_flagged = False
     auth_error_flagged = False
+    other_error_samples = []
+
     for lid in cfg.all_learner_ids:
         r = client.call(read_ep, {"learner_id": lid})
+        body = r.message_body()
+        passed = r.is_2xx() and isinstance(body, dict) and "achievements" in body
         record(log, f"achievements_read__{lid}", read_ep, {"learner_id": lid}, r,
-               "200, achievements array", r.is_2xx())
+               "200, achievements array", passed,
+               note="" if passed else f"status={r.status_code} error={r.error_summary()}")
 
         r2 = client.call(award_ep, {"learner_id": lid, "achievement": "load_test_badge", "level": 1},
                           headers=client.api_key_headers())
-        body = r2.message_body()
-        passed = r2.is_2xx() and isinstance(body, dict) and "awarded" in body
+        body2 = r2.message_body()
+        passed2 = r2.is_2xx() and isinstance(body2, dict) and "awarded" in body2
         note = ""
-        if not passed:
-            raw = json.dumps(r2.body)[:500] if r2.body else str(r2.error)
+        if not passed2:
+            raw = r2.error_summary(limit=1500)
             if r2.status_code == 401 or "AuthenticationError" in raw:
                 note = ("looks like an auth failure, not a schema bug — check frappe_api_key/"
                         "frappe_api_secret in config.json are real values, not placeholders")
                 auth_error_flagged = True
+            elif "InvalidColumnReference" in raw or "UndefinedColumn" in raw:
+                note = (f"Postgres rejected a column reference in award_achievement's SQL — "
+                        f"this is a schema mismatch, not an auth issue. raw: {raw}")
+                other_error_samples.append(note)
             elif "ON CONFLICT" in raw or "no unique or exclusion constraint" in raw or "duplicate key" in raw:
                 note = ("looks like the ON CONFLICT (parent, achievement) clause in award_achievement "
                         "has no matching unique constraint in the DB schema — this is a backend bug, "
-                        "not a test/config issue")
+                        f"not a test/config issue. raw: {raw}")
                 conflict_bug_flagged = True
             else:
                 note = f"actual response: {raw}"
+                other_error_samples.append(note)
         record(log, f"achievements_award__{lid}", award_ep,
                {"learner_id": lid, "achievement": "load_test_badge", "level": 1}, r2,
-               "200, awarded true/false", passed, note=note)
+               "200, awarded true/false", passed2, note=note)
 
+    if not cfg.has_real_api_credentials:
+        log.add_finding(
+            "award_achievement not tested with real credentials", award_ep,
+            "config.json's frappe_api_key/frappe_api_secret are empty or still placeholders, "
+            "so award_achievement calls in this run were sent without valid auth; failures above "
+            "may reflect that rather than a code bug",
+            "set frappe_api_key / frappe_api_secret in config.json to real values",
+        )
     if auth_error_flagged:
         log.add_finding("award_achievement calls failing on auth", award_ep,
                          "award_achievement requires a valid Frappe API key/secret pair; the configured "
@@ -672,21 +862,40 @@ def run_achievements_all_learners_suite(client, cfg, log):
                          "so every award call fails with a Postgres error",
                          "fix: add a unique constraint/index on (parent, achievement) in that table, "
                          "or change the SQL to match an existing constraint")
+    if other_error_samples:
+        log.add_finding("award_achievement failing with an unclassified error", award_ep,
+                         f"{len(other_error_samples)} award_achievement calls failed with an error that "
+                         "isn't the known auth or ON CONFLICT pattern — inspect the raw response",
+                         truncate_note(other_error_samples[0], 2000))
 
 
 def run_export_suites(client, cfg, log):
+    if not cfg.has_real_api_credentials:
+        record(log, "export_program__happy", "export_program_content", {}, None,
+               "200, success:true, payload present", None,
+               "SKIPPED — no real frappe_api_key/frappe_api_secret configured")
+        record(log, "export_content__happy", "export_content", {}, None,
+               "200, success:true, payload present", None,
+               "SKIPPED — no real frappe_api_key/frappe_api_secret configured")
+        return
+
     if cfg.program_id_for_export:
         r = client.call("export_program_content", {"program_id": cfg.program_id_for_export},
                          headers=client.api_key_headers(), timeout=120)
         body = r.message_body()
         passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is True
         record(log, "export_program__happy", "export_program_content",
-               {"program_id": cfg.program_id_for_export}, r, "200, success:true, payload present", passed)
+               {"program_id": cfg.program_id_for_export}, r, "200, success:true, payload present", passed,
+               note="" if passed else f"status={r.status_code} error={r.error_summary()}")
+    else:
+        record(log, "export_program__happy", "export_program_content", {}, None,
+               "200, success:true, payload present", None, "SKIPPED — no program_id_for_export in config")
 
     r = client.call("export_content", {}, headers=client.api_key_headers(), timeout=60)
     body = r.message_body()
     passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is True
-    record(log, "export_content__happy", "export_content", {}, r, "200, success:true, payload present", passed)
+    record(log, "export_content__happy", "export_content", {}, r, "200, success:true, payload present", passed,
+           note="" if passed else f"status={r.status_code} error={r.error_summary()}")
 
 
 def run_security_matrix_all_users(client, cfg, log, state):
@@ -717,6 +926,10 @@ def run_security_matrix_all_users(client, cfg, log, state):
         passed = not r.is_2xx()
         sec_record(log, "security__token_impersonation_blocked", "get_profiles",
                    {"phone": phone_b}, r, "non-200, Token phone mismatch", passed)
+    else:
+        sec_record(log, "security__cross_account_checks", "select_profile/update_student/get_profiles",
+                   {}, None, "n/a", None,
+                   note="SKIPPED — no token for first user or second user has no learners")
 
     no_auth_targets = [
         ("get_learner_state", {"learner_id": learner_b}),
@@ -728,6 +941,8 @@ def run_security_matrix_all_users(client, cfg, log, state):
     gated_endpoints = []
     for ep, params in no_auth_targets:
         if params.get("learner_id") is None:
+            sec_record(log, f"security__ownership_gate_probe__{ep}", ep, params, None, "n/a", None,
+                       note="SKIPPED — no learner_id available to probe with")
             continue
         r = client.call(ep, params)
         is_open = r.is_2xx()
@@ -799,7 +1014,18 @@ def run_record_activity_race(client, cfg, log, n, learner_id):
     pre = client.call("get_learner_state", {"learner_id": learner_id})
     pre_body = pre.message_body()
     if not isinstance(pre_body, dict):
+        log.add_concurrency({
+            "timestamp": now_ts(),
+            "case_id": f"race__record_activity_parallel_{n}",
+            "endpoint": ep,
+            "setup": f"lid={learner_id}",
+            "load": f"{n} concurrent record_activity(xp=10) calls",
+            "result_summary": "SKIPPED — could not read baseline learner state",
+            "verdict": "SKIPPED",
+            "note": f"get_learner_state failed: status={pre.status_code} error={pre.error_summary()}",
+        })
         return
+
     starting_xp = pre_body.get("xp", 0)
     cap = pre_body.get("max_weekly_activities", 2)
 
@@ -854,14 +1080,22 @@ def run_load_level(client, ep, param_factory, headers_factory, total_requests, c
     def worker():
         if stop_flag.is_set():
             return None
-        r = client.call(ep, param_factory(), headers_factory())
+        try:
+            params = param_factory()
+        except Exception:
+            params = {}
+        try:
+            headers = headers_factory()
+        except Exception:
+            headers = {}
+        r = client.call(ep, params, headers)
         with lock:
             latencies.append(r.latency_ms)
         return r
 
     t0 = time.time()
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         futures = [pool.submit(worker) for _ in range(total_requests)]
         deadline = t0 + cfg.max_duration_seconds_per_level
         for f in concurrent.futures.as_completed(futures, timeout=None):
@@ -892,7 +1126,7 @@ def stress_record(log, endpoint_class, endpoint, level, sent, success, fail, err
         "fail": fail,
         "errored": err,
         "duration_s": round(duration_s, 2),
-        "throughput_rps": round(sent / duration_s, 2) if duration_s > 0 else None,
+        "throughput_rps": round(sent / duration_s, 2) if duration_s and sent else None,
         "latency_min_ms": round(min(latencies), 1) if latencies else None,
         "latency_mean_ms": round(statistics.mean(latencies), 1) if latencies else None,
         "latency_p50_ms": round(percentile(latencies, 50), 1) if latencies else None,
@@ -936,11 +1170,13 @@ def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, h
     while level <= cfg.hard_ceiling:
         requests_this_level = int(min(cfg.requests_per_level_max, max(cfg.requests_per_level_min, level * 4)))
         sampler.start()
-        duration, latencies, success, fail, errored, sent = run_load_level(
-            client, ep, param_factory, headers_factory, requests_this_level, level, sampler, cfg
-        )
-        client_saturated = sampler.is_client_saturated(cfg.client_cpu_abort_percent, cfg.client_ram_abort_percent)
-        sampler.stop()
+        try:
+            duration, latencies, success, fail, errored, sent = run_load_level(
+                client, ep, param_factory, headers_factory, requests_this_level, level, sampler, cfg
+            )
+        finally:
+            client_saturated = sampler.is_client_saturated(cfg.client_cpu_abort_percent, cfg.client_ram_abort_percent)
+            sampler.stop()
         resource_summary = sampler.summary()
 
         error_rate = (fail + errored) / sent if sent else 1.0
@@ -965,9 +1201,10 @@ def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, h
             break
 
         time.sleep(cfg.ramp_pause_seconds)
-        level = int(level * cfg.growth_factor)
-        if level == tested_levels[-1][0]:
-            level += 1
+        next_level = int(level * cfg.growth_factor)
+        if next_level <= level:
+            next_level = level + 1
+        level = next_level
 
     ceiling_reason = "hard_ceiling_reached"
     refined_ceiling = last_healthy_level
@@ -981,11 +1218,14 @@ def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, h
                 break
             requests_this_level = int(min(cfg.requests_per_level_max, max(cfg.requests_per_level_min, mid * 4)))
             sampler.start()
-            duration, latencies, success, fail, errored, sent = run_load_level(
-                client, ep, param_factory, headers_factory, requests_this_level, mid, sampler, cfg
-            )
-            client_saturated = sampler.is_client_saturated(cfg.client_cpu_abort_percent, cfg.client_ram_abort_percent)
-            sampler.stop()
+            try:
+                duration, latencies, success, fail, errored, sent = run_load_level(
+                    client, ep, param_factory, headers_factory, requests_this_level, mid, sampler, cfg
+                )
+            finally:
+                client_saturated = sampler.is_client_saturated(
+                    cfg.client_cpu_abort_percent, cfg.client_ram_abort_percent)
+                sampler.stop()
             resource_summary = sampler.summary()
             error_rate = (fail + errored) / sent if sent else 1.0
             healthy = _level_is_healthy(cfg, error_rate, latencies, client_saturated)
@@ -1012,6 +1252,7 @@ def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, h
 
 def run_full_stress_suite(client, cfg, log, state, server_pids):
     if not cfg.users:
+        log.write_status("stress:skipped", extra={"reason": "no users configured"})
         return
     phone = cfg.users[0]["phone"]
     token = state.tokens_by_phone.get(phone) or state.token_for(client, cfg, phone)
@@ -1050,6 +1291,8 @@ def run_full_stress_suite(client, cfg, log, state, server_pids):
             lambda: {"phone": phone, "page": 1, "page_size": 50},
             lambda: client.bearer_headers(token), server_pids,
         )
+    else:
+        log.write_status("stress:class_b_auth_skipped", extra={"reason": "no auth token for first user"})
 
     log.write_status("stress:class_c_single_writes")
     run_adaptive_stress_class(
@@ -1058,7 +1301,7 @@ def run_full_stress_suite(client, cfg, log, state, server_pids):
         lambda: {}, server_pids,
     )
 
-    if cfg.allow_bulk_write_tests and token:
+    if cfg.allow_bulk_write_tests and token and cfg.users[0].get("learners"):
         log.write_status("stress:class_d_bulk_writes")
         run_adaptive_stress_class(
             client, cfg, log, "Class D (bulk writes)", "bulk_update_students",
@@ -1069,13 +1312,15 @@ def run_full_stress_suite(client, cfg, log, state, server_pids):
             lambda: client.bearer_headers(token), server_pids,
         )
 
-    if cfg.program_id_for_export:
+    if cfg.program_id_for_export and cfg.has_real_api_credentials:
         log.write_status("stress:class_e_export")
         run_adaptive_stress_class(
             client, cfg, log, "Class E (heavy aggregation/export)", "export_program_content",
             lambda: {"program_id": cfg.program_id_for_export},
             lambda: client.api_key_headers(), server_pids,
         )
+    elif cfg.program_id_for_export and not cfg.has_real_api_credentials:
+        log.write_status("stress:class_e_skipped", extra={"reason": "no real api credentials configured"})
 
 
 def write_final_report(log, cfg, run_id, start_time, end_time):
@@ -1102,7 +1347,13 @@ def write_final_report(log, cfg, run_id, start_time, end_time):
     if os.path.exists(log.stress_path):
         with open(log.stress_path) as f:
             for line in f:
-                row = json.loads(line)
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 if row.get("concurrency_level") == "CEILING":
                     ceilings.append(row)
     lines.append("STRESS CEILINGS FOUND")
@@ -1132,20 +1383,44 @@ def main():
                               "for aggregated resource tracking. If omitted, auto-detected.")
     args = parser.parse_args()
 
-    cfg = Config(args.config)
+    try:
+        cfg = Config(args.config)
+    except ConfigError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    valid_sections = {"functional", "security", "concurrency", "stress"}
+    sections = None
+    if args.only:
+        sections = {s.strip() for s in args.only.split(",") if s.strip()}
+        unknown = sections - valid_sections
+        if unknown:
+            print(f"error: --only has unknown section(s): {sorted(unknown)}; "
+                  f"valid sections are {sorted(valid_sections)}", file=sys.stderr)
+            sys.exit(2)
+
+    if args.server_pids:
+        try:
+            server_pids = [int(p.strip()) for p in args.server_pids.split(",") if p.strip()]
+        except ValueError:
+            print("error: --server-pids must be a comma-separated list of integers", file=sys.stderr)
+            sys.exit(2)
+    else:
+        server_pids = find_server_pids(cfg)
+
     client = ApiClient(cfg)
     run_id = str(uuid.uuid4())[:8]
     log = StreamingLog(cfg.results_dir, run_id)
     state = State(cfg)
     start_time = now_ts()
 
-    if args.server_pids:
-        server_pids = [int(p.strip()) for p in args.server_pids.split(",") if p.strip()]
-    else:
-        server_pids = find_server_pids(cfg)
     print(f"Tracking server resource usage across PIDs: {server_pids or 'none found'}")
     print(f"Sending requests to {cfg.base_url} with Host header: {cfg.site_host or '(none set)'}")
     print(f"Resolving endpoints to dotted module paths: {cfg.use_dotted_paths}")
+    if not cfg.has_real_api_credentials:
+        print("warning: frappe_api_key/frappe_api_secret are missing or still placeholders — "
+              "award_achievement, export_program_content, export_content and submission_verified_webhook "
+              "will be skipped or will fail on auth", file=sys.stderr)
 
     def handle_signal(signum, frame):
         log.write_status("interrupted", extra={"signal": signum})
@@ -1154,8 +1429,6 @@ def main():
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
-
-    sections = {s.strip() for s in args.only.split(",")} if args.only else None
 
     def wants(name):
         return sections is None or name in sections
