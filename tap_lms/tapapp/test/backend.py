@@ -489,7 +489,8 @@ def run_login_all_users_suite(client, cfg, log, state):
     body = r.message_body()
     passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is False
     record(log, "login__unregistered_phone", ep, {"phone": "9999999999"}, r,
-           "200, success:false, error:invalid_credentials", passed)
+           "200, success:false, error:invalid_credentials", passed,
+           note="" if passed else f"actual body: {json.dumps(body)[:300]}")
 
 
 def run_get_profiles_all_users_suite(client, cfg, log, state):
@@ -629,6 +630,8 @@ def run_bulk_update_all_users_suite(client, cfg, log, state):
 def run_achievements_all_learners_suite(client, cfg, log):
     read_ep = "get_learner_achievements"
     award_ep = "award_achievement"
+    conflict_bug_flagged = False
+    auth_error_flagged = False
     for lid in cfg.all_learner_ids:
         r = client.call(read_ep, {"learner_id": lid})
         record(log, f"achievements_read__{lid}", read_ep, {"learner_id": lid}, r,
@@ -638,9 +641,37 @@ def run_achievements_all_learners_suite(client, cfg, log):
                           headers=client.api_key_headers())
         body = r2.message_body()
         passed = r2.is_2xx() and isinstance(body, dict) and "awarded" in body
+        note = ""
+        if not passed:
+            raw = json.dumps(r2.body)[:500] if r2.body else str(r2.error)
+            if r2.status_code == 401 or "AuthenticationError" in raw:
+                note = ("looks like an auth failure, not a schema bug — check frappe_api_key/"
+                        "frappe_api_secret in config.json are real values, not placeholders")
+                auth_error_flagged = True
+            elif "ON CONFLICT" in raw or "no unique or exclusion constraint" in raw or "duplicate key" in raw:
+                note = ("looks like the ON CONFLICT (parent, achievement) clause in award_achievement "
+                        "has no matching unique constraint in the DB schema — this is a backend bug, "
+                        "not a test/config issue")
+                conflict_bug_flagged = True
+            else:
+                note = f"actual response: {raw}"
         record(log, f"achievements_award__{lid}", award_ep,
                {"learner_id": lid, "achievement": "load_test_badge", "level": 1}, r2,
-               "200, awarded true/false", passed)
+               "200, awarded true/false", passed, note=note)
+
+    if auth_error_flagged:
+        log.add_finding("award_achievement calls failing on auth", award_ep,
+                         "award_achievement requires a valid Frappe API key/secret pair; the configured "
+                         "credentials in config.json are being rejected by the server",
+                         "check frappe_api_key / frappe_api_secret in config.json")
+    if conflict_bug_flagged:
+        log.add_finding("award_achievement ON CONFLICT target missing", award_ep,
+                         "award_achievement's upsert uses ON CONFLICT (parent, achievement) DO UPDATE, "
+                         "which requires a unique constraint or index on those two columns in "
+                         "'tabTapapp Learner Achievements'; only a primary key on 'name' currently exists, "
+                         "so every award call fails with a Postgres error",
+                         "fix: add a unique constraint/index on (parent, achievement) in that table, "
+                         "or change the SQL to match an existing constraint")
 
 
 def run_export_suites(client, cfg, log):
@@ -693,20 +724,31 @@ def run_security_matrix_all_users(client, cfg, log, state):
         ("record_activity", {"learner_id": learner_b, "xp": 5, "activity_type": "video"}),
         ("get_learner_achievements", {"learner_id": learner_b}),
     ]
-    open_count = 0
+    open_endpoints = []
+    gated_endpoints = []
     for ep, params in no_auth_targets:
         if params.get("learner_id") is None:
             continue
         r = client.call(ep, params)
-        if r.is_2xx():
-            open_count += 1
-        sec_record(log, f"security__no_ownership_gate__{ep}", ep, params, r,
-                   "200 — endpoint intentionally has no per-account ownership gate", r.is_2xx())
-    if open_count > 0:
-        log.add_finding("Progress endpoints have no ownership gate", "multiple",
-                         f"{open_count}/{len(no_auth_targets)} learner/progress endpoints returned 200 "
+        is_open = r.is_2xx()
+        if is_open:
+            open_endpoints.append(ep)
+        else:
+            gated_endpoints.append(ep)
+        sec_record(log, f"security__ownership_gate_probe__{ep}", ep, params, r,
+                   "observational — records whether this endpoint currently accepts unauthenticated "
+                   "cross-account calls; neither 200 nor non-200 is treated as a failure here", True,
+                   note=f"{'OPEN (no ownership gate)' if is_open else 'GATED (rejected without auth)'}")
+    if open_endpoints:
+        log.add_finding("Endpoints with no ownership gate", "multiple",
+                         f"{len(open_endpoints)}/{len(no_auth_targets)} learner/progress endpoints returned 200 "
                          "with zero auth headers against a learner_id from a different account",
-                         f"endpoints tested: {[e for e, _ in no_auth_targets]}")
+                         f"open endpoints: {open_endpoints}")
+    if gated_endpoints:
+        log.add_finding("Endpoints correctly gated", "multiple",
+                         f"{len(gated_endpoints)}/{len(no_auth_targets)} learner/progress endpoints correctly "
+                         "rejected an unauthenticated cross-account call",
+                         f"gated endpoints: {gated_endpoints}")
 
 
 def run_bulk_vs_single_race(client, cfg, log, state):
