@@ -15,6 +15,42 @@ import psutil
 import requests
 
 
+ENDPOINT_MODULE_MAP = {
+    "check_phone": "tap_lms.tapapp.api.auth.tapapp_auth.check_phone",
+    "login_with_password": "tap_lms.tapapp.api.auth.tapapp_auth.login_with_password",
+    "get_profiles": "tap_lms.tapapp.api.auth.tapapp_auth.get_profiles",
+    "search_profiles": "tap_lms.tapapp.api.auth.tapapp_auth.search_profiles",
+    "forgot_password_send_otp": "tap_lms.tapapp.api.auth.tapapp_auth.forgot_password_send_otp",
+    "forgot_password_verify_otp": "tap_lms.tapapp.api.auth.tapapp_auth.forgot_password_verify_otp",
+    "reset_password": "tap_lms.tapapp.api.auth.tapapp_auth.reset_password",
+
+    "select_profile": "tap_lms.tapapp.api.profile.profile.select_profile",
+    "update_avatar": "tap_lms.tapapp.api.profile.profile.update_avatar",
+    "update_profile": "tap_lms.tapapp.api.profile.profile.update_profile",
+    "search_student": "tap_lms.tapapp.api.profile.profile.search_student",
+    "get_bulk_students": "tap_lms.tapapp.api.profile.profile.get_bulk_students",
+    "update_student": "tap_lms.tapapp.api.profile.profile.update_student",
+    "bulk_update_students": "tap_lms.tapapp.api.profile.profile.bulk_update_students",
+
+    "complete_onboarding": "tap_lms.tapapp.api.profile.onboarding.complete_onboarding",
+
+    "get_learner_state": "tap_lms.tapapp.api.progress.learner.get_learner_state",
+    "get_learner_progress": "tap_lms.tapapp.api.progress.learner.get_learner_progress",
+    "get_learners_progress": "tap_lms.tapapp.api.progress.learner.get_learners_progress",
+    "enroll_course": "tap_lms.tapapp.api.progress.learner.enroll_course",
+    "record_activity": "tap_lms.tapapp.api.progress.learner.record_activity",
+    "update_content_progress": "tap_lms.tapapp.api.progress.learner.update_content_progress",
+    "submit_progress": "tap_lms.tapapp.api.progress.learner.submit_progress",
+    "submission_verified_webhook": "tap_lms.tapapp.api.progress.learner.submission_verified_webhook",
+
+    "get_learner_achievements": "tap_lms.tapapp.api.progress.achievements.get_learner_achievements",
+    "award_achievement": "tap_lms.tapapp.api.progress.achievements.award_achievement",
+
+    "export_program_content": "tap_lms.tapapp.api.content.export.export_program_content",
+    "export_content": "tap_lms.tapapp.api.content.export.export_content",
+}
+
+
 class Config:
     def __init__(self, path):
         with open(path, "r") as f:
@@ -23,6 +59,9 @@ class Config:
         self.base_url = raw["base_url"].rstrip("/")
         self.api_prefix = raw.get("api_prefix", "/api/method/")
         self.site_host = raw.get("site_host", "")
+        self.endpoint_module_map = dict(ENDPOINT_MODULE_MAP)
+        self.endpoint_module_map.update(raw.get("endpoint_module_overrides", {}))
+        self.use_dotted_paths = raw.get("use_dotted_paths", True)
         self.frappe_api_key = raw.get("frappe_api_key", "")
         self.frappe_api_secret = raw.get("frappe_api_secret", "")
         self.request_timeout_seconds = raw.get("request_timeout_seconds", 20)
@@ -93,7 +132,10 @@ class ApiClient:
         self.session.mount("https://", adapter)
 
     def call(self, method_path, params=None, headers=None, timeout=None):
-        url = f"{self.config.base_url}{self.config.api_prefix}{method_path}"
+        resolved_method = method_path
+        if self.config.use_dotted_paths:
+            resolved_method = self.config.endpoint_module_map.get(method_path, method_path)
+        url = f"{self.config.base_url}{self.config.api_prefix}{resolved_method}"
         params = params or {}
         headers = dict(headers or {})
         if self.config.site_host:
@@ -1061,6 +1103,7 @@ def main():
         server_pids = find_server_pids(cfg)
     print(f"Tracking server resource usage across PIDs: {server_pids or 'none found'}")
     print(f"Sending requests to {cfg.base_url} with Host header: {cfg.site_host or '(none set)'}")
+    print(f"Resolving endpoints to dotted module paths: {cfg.use_dotted_paths}")
 
     def handle_signal(signum, frame):
         log.write_status("interrupted", extra={"signal": signum})
