@@ -1745,6 +1745,11 @@ def run_jobs_stress_suite(cfg, log):
         no_errors = len(errors) == 0
         passed = exactly_one_ran and no_errors
 
+        serialization_failures = sum(
+            1 for e in errors
+            if "could not serialize access" in e or "concurrent update" in e
+        )
+
         note = f"durations={[round(d, 3) for d in durations]} real_runs_estimated={real_runs}"
         if errors:
             note += f" errors={len(errors)} first={truncate_note(errors[0], 500)}"
@@ -1753,14 +1758,37 @@ def run_jobs_stress_suite(cfg, log):
                    "exactly one of N concurrent triggers executes; the rest see the lock held "
                    "and no-op without error", passed, note=note)
 
-        if not passed:
+        if serialization_failures:
+            log.add_finding(
+                f"{job_key}: cache lock has a check-then-act race, tracker writes collide under "
+                "concurrent triggers",
+                job_key,
+                f"Fired {n} concurrent in-process calls to this job. {serialization_failures} of them "
+                "raised a Postgres serialization error while saving the job's tracker row "
+                "(\"could not serialize access due to concurrent update\"). This is not the job "
+                "failing to do its work — it means more than one concurrent call passed the "
+                "\"if cache.get_value(JOB_LOCK_KEY): return\" check before any of them had actually "
+                "called cache.set_value(...) to claim the lock, so multiple threads proceeded past "
+                "the lock check simultaneously and then collided writing tracker.status=\"Running\" "
+                "to the same Tapapp Tasks row at the same time. The cache read-then-write is not "
+                "atomic, so under real concurrent triggers (e.g. an overlapping manual retrigger and "
+                "a scheduled run, or multiple app servers/workers invoking the same job at the same "
+                "moment) more than one execution can begin before either has recorded that it's "
+                "running, and the ones that lose the tracker-save race raise instead of cleanly "
+                "no-op'ing. A single-threaded, one-at-a-time call to this job is unaffected and will "
+                "always pass — this only shows up under genuine concurrent invocation, exactly what "
+                "this check does and what happened here.",
+                note,
+            )
+        elif not passed:
             log.add_finding(f"{job_key}: concurrency lock did not behave as expected", job_key,
                              f"Fired {n} concurrent in-process calls to this job. Expected exactly one "
                              "to actually run its body (the cache lock should make the rest no-op "
                              f"immediately); observed an estimated {real_runs} real run(s) and "
-                             f"{len(errors)} raised exception(s). Either the lock is not preventing "
-                             "concurrent execution, or a concurrent run is raising instead of "
-                             "silently skipping.",
+                             f"{len(errors)} raised exception(s), none matching the known Postgres "
+                             "serialization-failure pattern. Either the lock is not preventing "
+                             "concurrent execution, or a concurrent run is raising for some other "
+                             "reason instead of silently skipping.",
                              note)
 
 

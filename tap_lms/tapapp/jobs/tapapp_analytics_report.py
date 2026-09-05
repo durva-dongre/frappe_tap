@@ -117,11 +117,11 @@ def run_tapapp_analytics_report():
         return
 
     cache = frappe.cache()
-    if cache.get_value(JOB_LOCK_KEY):
+    lock_ttl = dynamic_lock_ttl(_LOCK_TTL_BASE_SEC, _LOCK_TTL_PER_MILLION_SEC)
+    acquired = cache.redis.set(cache.make_key(JOB_LOCK_KEY), "1", nx=True, ex=lock_ttl)
+    if not acquired:
         frappe.logger().warning("Tapapp analytics report already running, skipping.")
         return
-    lock_ttl = dynamic_lock_ttl(_LOCK_TTL_BASE_SEC, _LOCK_TTL_PER_MILLION_SEC)
-    cache.set_value(JOB_LOCK_KEY, "1", expires_in_sec=lock_ttl)
     cache.set_value(JOB_START_KEY, str(int(time.time())), expires_in_sec=lock_ttl)
 
     tracker.status = "Running"
