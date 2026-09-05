@@ -1804,40 +1804,39 @@ def write_final_report(log, cfg, run_id, start_time, end_time):
     return report_path
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Tapapp staged-environment stress, functional, and jobs test harness")
-    parser.add_argument("--config", default="config.json")
-    parser.add_argument("--only", default=None,
-                         help="Comma-separated: functional,security,concurrency,stress,jobs,jobs_stress")
-    parser.add_argument("--server-pids", type=str, default=None,
-                         help="Comma-separated PIDs of the Frappe/gunicorn master+worker processes, "
-                              "for aggregated resource tracking. If omitted, auto-detected.")
-    args = parser.parse_args()
+VALID_SECTIONS = {"functional", "security", "concurrency", "stress", "jobs", "jobs_stress"}
 
-    try:
-        cfg = Config(args.config)
-    except ConfigError as e:
-        print(f"config error: {e}", file=sys.stderr)
-        sys.exit(2)
 
-    valid_sections = {"functional", "security", "concurrency", "stress", "jobs", "jobs_stress"}
-    sections = None
-    if args.only:
-        sections = {s.strip() for s in args.only.split(",") if s.strip()}
-        unknown = sections - valid_sections
-        if unknown:
-            print(f"error: --only has unknown section(s): {sorted(unknown)}; "
-                  f"valid sections are {sorted(valid_sections)}", file=sys.stderr)
-            sys.exit(2)
-
-    if args.server_pids:
-        try:
-            server_pids = [int(p.strip()) for p in args.server_pids.split(",") if p.strip()]
-        except ValueError:
-            print("error: --server-pids must be a comma-separated list of integers", file=sys.stderr)
-            sys.exit(2)
+def _parse_only(only):
+    if not only:
+        return None
+    if isinstance(only, (list, tuple, set)):
+        sections = {str(s).strip() for s in only if str(s).strip()}
     else:
-        server_pids = find_server_pids(cfg)
+        sections = {s.strip() for s in str(only).split(",") if s.strip()}
+    unknown = sections - VALID_SECTIONS
+    if unknown:
+        raise ConfigError(f"--only/only has unknown section(s): {sorted(unknown)}; "
+                           f"valid sections are {sorted(VALID_SECTIONS)}")
+    return sections
+
+
+def _parse_server_pids(server_pids):
+    if not server_pids:
+        return None
+    if isinstance(server_pids, (list, tuple, set)):
+        return [int(p) for p in server_pids]
+    try:
+        return [int(p.strip()) for p in str(server_pids).split(",") if p.strip()]
+    except ValueError:
+        raise ConfigError("server_pids must be a comma-separated list of integers")
+
+
+def run_harness(config_path="config.json", only=None, server_pids=None):
+    cfg = Config(config_path)
+    sections = _parse_only(only)
+    explicit_pids = _parse_server_pids(server_pids)
+    server_pids = explicit_pids if explicit_pids is not None else find_server_pids(cfg)
 
     client = ApiClient(cfg)
     run_id = str(uuid.uuid4())[:8]
@@ -1943,6 +1942,40 @@ def main():
         print(f"Report written to: {report_path}")
         print(f"Status file (safe to tail during a run): {log.status_path}")
         print(json.dumps(log.counts, indent=2))
+
+    return {
+        "run_id": run_id,
+        "report_path": report_path,
+        "status_path": log.status_path,
+        "findings_path": log.findings_path,
+        "counts": dict(log.counts),
+    }
+
+
+def run(config=None, only=None, server_pids=None):
+    config_path = config or os.environ.get("TAPAPP_HARNESS_CONFIG", "config.json")
+    try:
+        return run_harness(config_path=config_path, only=only, server_pids=server_pids)
+    except ConfigError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        raise
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Tapapp staged-environment stress, functional, and jobs test harness")
+    parser.add_argument("--config", default="config.json")
+    parser.add_argument("--only", default=None,
+                         help="Comma-separated: functional,security,concurrency,stress,jobs,jobs_stress")
+    parser.add_argument("--server-pids", type=str, default=None,
+                         help="Comma-separated PIDs of the Frappe/gunicorn master+worker processes, "
+                              "for aggregated resource tracking. If omitted, auto-detected.")
+    args = parser.parse_args()
+
+    try:
+        run_harness(config_path=args.config, only=args.only, server_pids=args.server_pids)
+    except ConfigError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":
