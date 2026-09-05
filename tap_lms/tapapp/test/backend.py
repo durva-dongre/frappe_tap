@@ -343,6 +343,100 @@ def now_ts():
     return datetime.datetime.now().astimezone().isoformat()
 
 
+class EndpointResourceTracker:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.endpoints = {}
+
+    def _bucket(self, endpoint):
+        with self.lock:
+            b = self.endpoints.get(endpoint)
+            if b is None:
+                b = {
+                    "call_count": 0,
+                    "total_duration_s": 0.0,
+                    "min_duration_s": None,
+                    "max_duration_s": None,
+                    "durations": [],
+                    "cpu_avg_samples": [],
+                    "cpu_peak_samples": [],
+                    "server_cpu_avg_samples": [],
+                    "server_cpu_peak_samples": [],
+                    "server_rss_mb_samples": [],
+                }
+                self.endpoints[endpoint] = b
+            return b
+
+    def record_level(self, endpoint, requests_sent, duration_s, resource_summary):
+        if requests_sent <= 0:
+            return
+        b = self._bucket(endpoint)
+        per_request_s = duration_s / requests_sent if requests_sent else 0.0
+        with self.lock:
+            b["call_count"] += requests_sent
+            b["total_duration_s"] += duration_s
+            b["durations"].append(per_request_s)
+            if b["min_duration_s"] is None or per_request_s < b["min_duration_s"]:
+                b["min_duration_s"] = per_request_s
+            if b["max_duration_s"] is None or per_request_s > b["max_duration_s"]:
+                b["max_duration_s"] = per_request_s
+            if resource_summary.get("cpu_avg") is not None:
+                b["cpu_avg_samples"].append(resource_summary["cpu_avg"])
+            if resource_summary.get("cpu_peak") is not None:
+                b["cpu_peak_samples"].append(resource_summary["cpu_peak"])
+            if resource_summary.get("server_cpu_avg") is not None:
+                b["server_cpu_avg_samples"].append(resource_summary["server_cpu_avg"])
+            if resource_summary.get("server_cpu_peak") is not None:
+                b["server_cpu_peak_samples"].append(resource_summary["server_cpu_peak"])
+            if resource_summary.get("server_rss_mb_avg") is not None:
+                b["server_rss_mb_samples"].append(resource_summary["server_rss_mb_avg"])
+
+    def record_job_level(self, job_key, triggers_fired, durations, resource_summary):
+        endpoint = f"job:{job_key}"
+        if not durations:
+            return
+        b = self._bucket(endpoint)
+        with self.lock:
+            b["call_count"] += len(durations)
+            b["total_duration_s"] += sum(durations)
+            b["durations"].extend(durations)
+            local_min = min(durations)
+            local_max = max(durations)
+            if b["min_duration_s"] is None or local_min < b["min_duration_s"]:
+                b["min_duration_s"] = local_min
+            if b["max_duration_s"] is None or local_max > b["max_duration_s"]:
+                b["max_duration_s"] = local_max
+            if resource_summary.get("cpu_avg") is not None:
+                b["cpu_avg_samples"].append(resource_summary["cpu_avg"])
+            if resource_summary.get("cpu_peak") is not None:
+                b["cpu_peak_samples"].append(resource_summary["cpu_peak"])
+
+    def snapshot(self):
+        with self.lock:
+            out = {}
+            for ep, b in self.endpoints.items():
+                durations = b["durations"]
+                out[ep] = {
+                    "call_count": b["call_count"],
+                    "total_duration_s": round(b["total_duration_s"], 3),
+                    "avg_duration_s": round(statistics.mean(durations), 4) if durations else None,
+                    "min_duration_s": round(b["min_duration_s"], 4) if b["min_duration_s"] is not None else None,
+                    "max_duration_s": round(b["max_duration_s"], 4) if b["max_duration_s"] is not None else None,
+                    "p95_duration_s": round(percentile(durations, 95), 4) if durations else None,
+                    "client_cpu_avg_percent": round(statistics.mean(b["cpu_avg_samples"]), 1)
+                    if b["cpu_avg_samples"] else None,
+                    "client_cpu_peak_percent": round(max(b["cpu_peak_samples"]), 1)
+                    if b["cpu_peak_samples"] else None,
+                    "server_cpu_avg_percent": round(statistics.mean(b["server_cpu_avg_samples"]), 1)
+                    if b["server_cpu_avg_samples"] else None,
+                    "server_cpu_peak_percent": round(max(b["server_cpu_peak_samples"]), 1)
+                    if b["server_cpu_peak_samples"] else None,
+                    "server_rss_mb_avg": round(statistics.mean(b["server_rss_mb_samples"]), 1)
+                    if b["server_rss_mb_samples"] else None,
+                }
+            return out
+
+
 class StreamingLog:
     def __init__(self, results_dir, run_id):
         os.makedirs(results_dir, exist_ok=True)
@@ -357,7 +451,9 @@ class StreamingLog:
         self.findings_path = os.path.join(results_dir, f"findings_{run_id}.jsonl")
         self.summary_path = os.path.join(results_dir, f"summary_{run_id}.json")
         self.status_path = os.path.join(results_dir, f"status_{run_id}.json")
+        self.endpoint_resource_path = os.path.join(results_dir, f"endpoint_resources_{run_id}.json")
         self.lock = threading.Lock()
+        self.endpoint_tracker = EndpointResourceTracker()
         self.counts = {
             "functional_pass": 0, "functional_fail": 0, "functional_skip": 0,
             "security_pass": 0, "security_fail": 0, "security_skip": 0,
@@ -455,6 +551,16 @@ class StreamingLog:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp, self.summary_path)
+
+    def write_endpoint_resource_snapshot(self):
+        snapshot = self.endpoint_tracker.snapshot()
+        payload = {"timestamp": now_ts(), "run_id": self.run_id, "endpoints": snapshot}
+        tmp = self.endpoint_resource_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(payload, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, self.endpoint_resource_path)
 
 
 def record(log, case_id, endpoint, params, call_result, expected_note, passed, note=""):
@@ -1305,6 +1411,9 @@ def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, h
             sampler.stop()
         resource_summary = sampler.summary()
 
+        log.endpoint_tracker.record_level(ep, sent, duration, resource_summary)
+        log.write_endpoint_resource_snapshot()
+
         error_rate = (fail + errored) / sent if sent else 1.0
         healthy = _level_is_healthy(cfg, error_rate, latencies, client_saturated)
         note = "client-saturated, result may understate true server capacity" if client_saturated else ""
@@ -1353,6 +1462,10 @@ def run_adaptive_stress_class(client, cfg, log, class_name, ep, param_factory, h
                     cfg.client_cpu_abort_percent, cfg.client_ram_abort_percent)
                 sampler.stop()
             resource_summary = sampler.summary()
+
+            log.endpoint_tracker.record_level(ep, sent, duration, resource_summary)
+            log.write_endpoint_resource_snapshot()
+
             error_rate = (fail + errored) / sent if sent else 1.0
             healthy = _level_is_healthy(cfg, error_rate, latencies, client_saturated)
             stress_record(log, class_name, ep, f"REFINE-{mid}", sent, success, fail, errored, latencies,
@@ -1539,6 +1652,8 @@ def run_jobs_correctness_suite(cfg, log):
             continue
 
         duration, error = _run_job_inline(frappe_mod, job_key)
+        log.endpoint_tracker.record_job_level(job_key, 1, [duration], {})
+        log.write_endpoint_resource_snapshot()
         tracker = _job_tracker_snapshot(frappe_mod, job_key)
 
         if error is not None:
@@ -1668,6 +1783,9 @@ def run_jobs_stress_suite(cfg, log):
                 frappe_mod, job_key, level, sampler, site
             )
 
+            log.endpoint_tracker.record_job_level(job_key, level, durations, resource_summary)
+            log.write_endpoint_resource_snapshot()
+
             all_succeeded = len(errors) == 0
             row = {
                 "timestamp": now_ts(),
@@ -1740,6 +1858,9 @@ def run_jobs_stress_suite(cfg, log):
             for f in concurrent.futures.as_completed(futures):
                 f.result()
 
+        log.endpoint_tracker.record_job_level(job_key, n, durations, {})
+        log.write_endpoint_resource_snapshot()
+
         real_runs = sum(1 for d in durations if d > 0.05)
         exactly_one_ran = real_runs == 1
         no_errors = len(errors) == 0
@@ -1807,6 +1928,7 @@ def write_final_report(log, cfg, run_id, start_time, end_time):
     lines.append(f"Jobs correctness logs: {log.jobs_path}")
     lines.append(f"Jobs stress logs: {log.jobs_stress_path}")
     lines.append(f"Findings: {log.findings_path}")
+    lines.append(f"Per-endpoint CPU/duration snapshot: {log.endpoint_resource_path}")
     lines.append(f"Live status snapshot (safe to read mid-run): {log.status_path}")
     lines.append("")
     lines.append("SUMMARY")
@@ -1854,6 +1976,25 @@ def write_final_report(log, cfg, run_id, start_time, end_time):
             lines.append(f"  {row['job_key']}: {row['note']}")
     else:
         lines.append("  none recorded — jobs stress suite may not have run, was skipped, or was interrupted early")
+    lines.append("")
+
+    lines.append("PER-ENDPOINT CPU AND DURATION SUMMARY")
+    endpoint_snapshot = log.endpoint_tracker.snapshot()
+    if endpoint_snapshot:
+        for ep, stats in sorted(endpoint_snapshot.items()):
+            lines.append(f"  {ep}:")
+            lines.append(f"    calls={stats['call_count']} total_duration_s={stats['total_duration_s']}")
+            lines.append(f"    avg_duration_s={stats['avg_duration_s']} "
+                          f"p95_duration_s={stats['p95_duration_s']} "
+                          f"min_duration_s={stats['min_duration_s']} "
+                          f"max_duration_s={stats['max_duration_s']}")
+            lines.append(f"    client_cpu_avg_percent={stats['client_cpu_avg_percent']} "
+                         f"client_cpu_peak_percent={stats['client_cpu_peak_percent']}")
+            lines.append(f"    server_cpu_avg_percent={stats['server_cpu_avg_percent']} "
+                         f"server_cpu_peak_percent={stats['server_cpu_peak_percent']} "
+                         f"server_rss_mb_avg={stats['server_rss_mb_avg']}")
+    else:
+        lines.append("  none recorded")
     lines.append("")
     lines.append("END OF REPORT")
 
@@ -2002,6 +2143,7 @@ def run_harness(config_path="config.json", only=None, server_pids=None):
         report_path = write_final_report(log, cfg, run_id, start_time, end_time)
         print(f"Report written to: {report_path}")
         print(f"Status file (safe to tail during a run): {log.status_path}")
+        print(f"Endpoint resource file (safe to tail during a run): {log.endpoint_resource_path}")
         print(json.dumps(log.counts, indent=2))
 
     return {
@@ -2009,6 +2151,7 @@ def run_harness(config_path="config.json", only=None, server_pids=None):
         "report_path": report_path,
         "status_path": log.status_path,
         "findings_path": log.findings_path,
+        "endpoint_resource_path": log.endpoint_resource_path,
         "counts": dict(log.counts),
     }
 
