@@ -22,6 +22,7 @@ class Config:
         self.raw = raw
         self.base_url = raw["base_url"].rstrip("/")
         self.api_prefix = raw.get("api_prefix", "/api/method/")
+        self.site_host = raw.get("site_host", "")
         self.frappe_api_key = raw.get("frappe_api_key", "")
         self.frappe_api_secret = raw.get("frappe_api_secret", "")
         self.request_timeout_seconds = raw.get("request_timeout_seconds", 20)
@@ -94,7 +95,9 @@ class ApiClient:
     def call(self, method_path, params=None, headers=None, timeout=None):
         url = f"{self.config.base_url}{self.config.api_prefix}{method_path}"
         params = params or {}
-        headers = headers or {}
+        headers = dict(headers or {})
+        if self.config.site_host:
+            headers["Host"] = self.config.site_host
         t0 = time.time()
         try:
             resp = self.session.post(
@@ -1057,6 +1060,7 @@ def main():
     else:
         server_pids = find_server_pids(cfg)
     print(f"Tracking server resource usage across PIDs: {server_pids or 'none found'}")
+    print(f"Sending requests to {cfg.base_url} with Host header: {cfg.site_host or '(none set)'}")
 
     def handle_signal(signum, frame):
         log.write_status("interrupted", extra={"signal": signum})
