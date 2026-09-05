@@ -1,4 +1,5 @@
 import frappe
+import pickle
 import time
 from datetime import timedelta
 from tap_lms.tapapp.jobs._shared import (
@@ -91,7 +92,7 @@ def _run_maintenance(today) -> int:
 def run_nightly_window_maintenance():
     cache = frappe.cache()
     lock_ttl = dynamic_lock_ttl(_LOCK_TTL_BASE_SEC, _LOCK_TTL_PER_MILLION_SEC)
-    acquired = cache.set(cache.make_key(JOB_LOCK_KEY), "1", nx=True, ex=lock_ttl)
+    acquired = cache.set(cache.make_key(JOB_LOCK_KEY), pickle.dumps("1"), nx=True, ex=lock_ttl)
     if not acquired:
         frappe.logger().warning("Tapapp nightly window maintenance already running, skipping.")
         return
