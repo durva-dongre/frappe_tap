@@ -1466,18 +1466,46 @@ def _job_lock_is_held(frappe_mod, job_key):
     return bool(_job_cache_get(frappe_mod, lock_key))
 
 
-def _run_job_inline(frappe_mod, job_key):
+def _current_site(frappe_mod):
+    try:
+        return frappe_mod.local.site
+    except Exception:
+        return None
+
+
+def _run_job_inline(frappe_mod, job_key, site=None, needs_own_context=False):
     import importlib
     dotted = JOB_DISPATCH[job_key]
     module_path, func_name = dotted.rsplit(".", 1)
-    module = importlib.import_module(module_path)
-    func = getattr(module, func_name)
+
     t0 = time.time()
     error = None
+    bound_here = False
     try:
-        func()
+        if needs_own_context:
+            if not site:
+                return time.time() - t0, "cannot run in a worker thread: no site name available to bind a fresh frappe context"
+            frappe_mod.init(site=site)
+            frappe_mod.connect()
+            bound_here = True
+        module = importlib.import_module(module_path)
+        func = getattr(module, func_name)
+        try:
+            func()
+        except Exception as e:
+            error = str(e)
     except Exception as e:
-        error = str(e)
+        error = f"failed to bind frappe context in worker thread: {e}"
+    finally:
+        if bound_here:
+            try:
+                frappe_mod.db.close()
+            except Exception:
+                pass
+            try:
+                frappe_mod.destroy()
+            except Exception:
+                pass
     duration = time.time() - t0
     return duration, error
 
@@ -1586,14 +1614,14 @@ def run_jobs_correctness_suite(cfg, log):
                    duration_s=duration, note=note)
 
 
-def _job_stress_level_result(frappe_mod, job_key, concurrency, sampler):
+def _job_stress_level_result(frappe_mod, job_key, concurrency, sampler, site):
     sampler.start()
     t0 = time.time()
     results = []
     lock = threading.Lock()
 
     def worker():
-        duration, error = _run_job_inline(frappe_mod, job_key)
+        duration, error = _run_job_inline(frappe_mod, job_key, site=site, needs_own_context=True)
         with lock:
             results.append((duration, error))
 
@@ -1605,11 +1633,8 @@ def _job_stress_level_result(frappe_mod, job_key, concurrency, sampler):
     sampler.stop()
     resource_summary = sampler.summary()
 
-    executed = 0
-    tracker_before_map = {}
     errors = [e for _, e in results if e is not None]
     durations = [d for d, _ in results]
-    executed = sum(1 for d, e in results if e is None and d > 0.01)
 
     return duration, durations, errors, resource_summary
 
@@ -1618,6 +1643,14 @@ def run_jobs_stress_suite(cfg, log):
     frappe_mod = _frappe_module()
     if frappe_mod is None:
         log.write_status("jobs_stress:skipped", extra={"reason": "frappe module not importable"})
+        return
+
+    site = _current_site(frappe_mod)
+    if not site:
+        log.write_status("jobs_stress:skipped", extra={"reason": "could not determine current site name "
+                                                                   "from frappe.local.site; worker threads "
+                                                                   "cannot bind their own frappe context "
+                                                                   "without it"})
         return
 
     for job_key in JOB_DISPATCH:
@@ -1632,7 +1665,7 @@ def run_jobs_stress_suite(cfg, log):
 
         while level <= cfg.job_stress_hard_ceiling:
             duration, durations, errors, resource_summary = _job_stress_level_result(
-                frappe_mod, job_key, level, sampler
+                frappe_mod, job_key, level, sampler, site
             )
 
             all_succeeded = len(errors) == 0
@@ -1695,8 +1728,8 @@ def run_jobs_stress_suite(cfg, log):
         errors = []
         lock = threading.Lock()
 
-        def worker():
-            duration, error = _run_job_inline(frappe_mod, job_key)
+        def worker(job_key=job_key):
+            duration, error = _run_job_inline(frappe_mod, job_key, site=site, needs_own_context=True)
             with lock:
                 durations.append(duration)
                 if error is not None:
