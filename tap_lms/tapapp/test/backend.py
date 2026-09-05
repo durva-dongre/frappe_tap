@@ -646,12 +646,32 @@ def run_login_all_users_suite(client, cfg, log, state):
            "200, success:false, error:invalid_credentials", passed,
            note="" if passed else f"actual response: {_safe_json_dumps(body)}")
 
-    r = client.call(ep, {"phone": "9999999999", "password": "whatever1"})
-    body = r.message_body()
-    passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is False
-    record(log, "login__unregistered_phone", ep, {"phone": "9999999999"}, r,
-           "200, success:false, error:invalid_credentials", passed,
-           note="" if passed else f"actual response: {_safe_json_dumps(body)} status={r.status_code} error={r.error}")
+    probe_phone = "9999999999"
+    if probe_phone in cfg.user_by_phone:
+        record(log, "login__unregistered_phone", ep, {"phone": probe_phone}, None,
+               "200, success:false, error:invalid_credentials", None,
+               note=f"SKIPPED — {probe_phone} is a real configured user in this run, "
+                    "can't use it as an unregistered-phone probe")
+    else:
+        r = client.call(ep, {"phone": probe_phone, "password": "whatever1"})
+        body = r.message_body()
+        passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is False
+        if r.is_2xx() and isinstance(body, dict) and body.get("success") is True:
+            log.add_finding(
+                "login_with_password auto-provisions unregistered phone numbers",
+                ep,
+                f"Calling login_with_password with a phone number ({probe_phone}) that had no existing "
+                "Tapapp Auth record, plus any password of 6+ characters, silently created a new account "
+                "and returned a valid access token — there is no registration gate on this endpoint. "
+                "This probe account was NOT cleaned up automatically (the harness has no privileged "
+                "delete path for it); if you rely on this endpoint being unable to create accounts, "
+                f"delete the {probe_phone} row from tabTapapp Auth before the next run, or this "
+                "test will keep reporting the same finding without ever going red as a functional FAIL.",
+                f"response: {_safe_json_dumps(body)}",
+            )
+        record(log, "login__unregistered_phone", ep, {"phone": probe_phone}, r,
+               "200, success:false, error:invalid_credentials", passed,
+               note="" if passed else f"actual response: {_safe_json_dumps(body)} status={r.status_code} error={r.error}")
 
 
 def run_get_profiles_all_users_suite(client, cfg, log, state):
@@ -720,8 +740,16 @@ def run_enroll_course_all_learners_suite(client, cfg, log, state):
                    note="" if passed else f"actual response: {_safe_json_dumps(body)}")
 
 
+def _is_weekly_cap_error(call_result):
+    if call_result.status_code != 417:
+        return False
+    raw = call_result.error_summary(limit=2000)
+    return "Weekly activity limit reached" in raw
+
+
 def run_record_activity_all_learners_suite(client, cfg, log, state):
     ep = "record_activity"
+    cap_hits = 0
     for u in cfg.users:
         for l in u.get("learners", []):
             lid = l["learner_id"]
@@ -729,9 +757,32 @@ def run_record_activity_all_learners_suite(client, cfg, log, state):
             body = r.message_body()
             passed = r.is_2xx() and isinstance(body, dict) and body.get("activity_recorded") is True
             state.record_activity_calls[lid] = state.record_activity_calls.get(lid, 0) + (1 if passed else 0)
-            record(log, f"record_activity__{lid}", ep, {"learner_id": lid, "activity_type": "video"}, r,
-                   "200, xp_awarded, activity_recorded:true", passed,
-                   note="" if passed else f"status={r.status_code} error={r.error_summary()}")
+
+            if passed:
+                record(log, f"record_activity__{lid}", ep, {"learner_id": lid, "activity_type": "video"}, r,
+                       "200, xp_awarded, activity_recorded:true", True)
+            elif _is_weekly_cap_error(r):
+                cap_hits += 1
+                record(log, f"record_activity__{lid}", ep, {"learner_id": lid, "activity_type": "video"}, r,
+                       "200, xp_awarded, activity_recorded:true", None,
+                       note="SKIPPED — learner already hit their weekly activity cap in this window; "
+                            "this is expected server behavior on repeat harness runs against persistent "
+                            "data, not a failure")
+            else:
+                record(log, f"record_activity__{lid}", ep, {"learner_id": lid, "activity_type": "video"}, r,
+                       "200, xp_awarded, activity_recorded:true", False,
+                       note=f"status={r.status_code} error={r.error_summary()}")
+
+    if cap_hits:
+        log.add_finding(
+            "record_activity: learners at weekly activity cap",
+            ep,
+            f"{cap_hits} learner(s) had already reached their weekly activity limit before this run, "
+            "so record_activity correctly rejected the call with a 417 — these are counted as skipped, "
+            "not failed. This will keep happening on repeat runs against the same staged data unless "
+            "the window resets or activities_watched_this_week is reset between runs.",
+            f"cap_hits={cap_hits}",
+        )
 
 
 def run_content_progress_all_learners_suite(client, cfg, log, state):
@@ -825,15 +876,15 @@ def run_achievements_all_learners_suite(client, cfg, log):
                 note = ("looks like an auth failure, not a schema bug — check frappe_api_key/"
                         "frappe_api_secret in config.json are real values, not placeholders")
                 auth_error_flagged = True
+            elif "no unique or exclusion constraint" in raw or "duplicate key" in raw:
+                note = ("the ON CONFLICT (parent, achievement) clause in award_achievement has no "
+                        "matching unique constraint or index in the DB schema — this is a backend "
+                        f"bug, not a test/config issue. raw: {raw}")
+                conflict_bug_flagged = True
             elif "InvalidColumnReference" in raw or "UndefinedColumn" in raw:
                 note = (f"Postgres rejected a column reference in award_achievement's SQL — "
-                        f"this is a schema mismatch, not an auth issue. raw: {raw}")
+                        f"check the column names in the query against the live schema. raw: {raw}")
                 other_error_samples.append(note)
-            elif "ON CONFLICT" in raw or "no unique or exclusion constraint" in raw or "duplicate key" in raw:
-                note = ("looks like the ON CONFLICT (parent, achievement) clause in award_achievement "
-                        "has no matching unique constraint in the DB schema — this is a backend bug, "
-                        f"not a test/config issue. raw: {raw}")
-                conflict_bug_flagged = True
             else:
                 note = f"actual response: {raw}"
                 other_error_samples.append(note)
