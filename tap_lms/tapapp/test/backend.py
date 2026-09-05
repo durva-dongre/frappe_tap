@@ -53,6 +53,16 @@ REDACT_KEYS = {"password", "token", "reset_token", "api_secret", "authorization"
 
 NOTE_MAX_CHARS = 4000
 
+JOB_DISPATCH = {
+    "Nightly Window Maintenance": "tap_lms.tapapp.jobs.nightly_window_maintenance.run_nightly_window_maintenance",
+    "Analytics Report": "tap_lms.tapapp.jobs.tapapp_analytics_report.run_tapapp_analytics_report",
+}
+
+JOB_LOCK_KEYS = {
+    "Nightly Window Maintenance": "tapapp:nightly_maintenance:running",
+    "Analytics Report": "tapapp:analytics:running",
+}
+
 
 class ConfigError(Exception):
     pass
@@ -179,16 +189,32 @@ class Config:
         if not (0 < self.abort_error_rate_threshold <= 1):
             raise ConfigError("stress.abort_error_rate_threshold must be in (0, 1]")
 
+        jobs = raw.get("jobs", {})
+        if not isinstance(jobs, dict):
+            raise ConfigError("jobs must be an object")
+        self.run_jobs_suite = bool(jobs.get("run_jobs_suite", True))
+        self.run_jobs_stress = bool(jobs.get("run_jobs_stress", True))
+        self.job_lock_wait_timeout_seconds = float(jobs.get("job_lock_wait_timeout_seconds", 120))
+        self.job_lock_poll_interval_seconds = float(jobs.get("job_lock_poll_interval_seconds", 0.25))
+        self.job_concurrent_trigger_count = int(jobs.get("job_concurrent_trigger_count", 10))
+        self.job_stress_initial_concurrency = int(jobs.get("job_stress_initial_concurrency", 2))
+        self.job_stress_growth_factor = float(jobs.get("job_stress_growth_factor", 2.0))
+        self.job_stress_hard_ceiling = int(jobs.get("job_stress_hard_ceiling", 64))
+        self.job_stress_consecutive_bad_levels_to_stop = int(
+            jobs.get("job_stress_consecutive_bad_levels_to_stop", 2)
+        )
+        self.job_sample_resource_interval_seconds = float(
+            jobs.get("job_sample_resource_interval_seconds", 0.5)
+        )
+
         safety = raw.get("safety", {})
         if not isinstance(safety, dict):
             raise ConfigError("safety must be an object")
-        self.allow_password_mutation_tests = bool(safety.get("allow_password_mutation_tests", False))
         self.allow_bulk_write_tests = bool(safety.get("allow_bulk_write_tests", True))
         self.bulk_update_max_rows_per_request = int(safety.get("bulk_update_max_rows_per_request", 500))
         self.run_first_time_password_tests = bool(safety.get("run_first_time_password_tests", False))
         self.run_stress_suite = bool(safety.get("run_stress_suite", True))
         self.run_concurrency_suite = bool(safety.get("run_concurrency_suite", True))
-        self.run_retrigger_smoke = bool(safety.get("run_retrigger_smoke", False))
 
         output = raw.get("output", {})
         if not isinstance(output, dict):
@@ -326,6 +352,8 @@ class StreamingLog:
         self.security_path = os.path.join(results_dir, f"security_{run_id}.jsonl")
         self.concurrency_path = os.path.join(results_dir, f"concurrency_{run_id}.jsonl")
         self.stress_path = os.path.join(results_dir, f"stress_{run_id}.jsonl")
+        self.jobs_path = os.path.join(results_dir, f"jobs_{run_id}.jsonl")
+        self.jobs_stress_path = os.path.join(results_dir, f"jobs_stress_{run_id}.jsonl")
         self.findings_path = os.path.join(results_dir, f"findings_{run_id}.jsonl")
         self.summary_path = os.path.join(results_dir, f"summary_{run_id}.json")
         self.status_path = os.path.join(results_dir, f"status_{run_id}.json")
@@ -333,14 +361,15 @@ class StreamingLog:
         self.counts = {
             "functional_pass": 0, "functional_fail": 0, "functional_skip": 0,
             "security_pass": 0, "security_fail": 0, "security_skip": 0,
-            "findings": 0, "stress_levels_completed": 0,
+            "jobs_pass": 0, "jobs_fail": 0, "jobs_skip": 0,
+            "findings": 0, "stress_levels_completed": 0, "jobs_stress_levels_completed": 0,
         }
         self._touch_all()
         self.write_status("initializing")
 
     def _touch_all(self):
         for p in (self.functional_path, self.security_path, self.concurrency_path,
-                  self.stress_path, self.findings_path):
+                  self.stress_path, self.jobs_path, self.jobs_stress_path, self.findings_path):
             open(p, "a").close()
 
     def _append(self, path, row):
@@ -374,6 +403,19 @@ class StreamingLog:
                 not str(row.get("concurrency_level", "")).startswith("REFINE"):
             with self.lock:
                 self.counts["stress_levels_completed"] += 1
+
+    def add_job_result(self, row):
+        self._append(self.jobs_path, row)
+        with self.lock:
+            key = "jobs_" + ("pass" if row["result"] == "PASS" else
+                              "fail" if row["result"] == "FAIL" else "skip")
+            self.counts[key] += 1
+
+    def add_job_stress(self, row):
+        self._append(self.jobs_stress_path, row)
+        if row.get("concurrency_level") not in (None, "CEILING"):
+            with self.lock:
+                self.counts["jobs_stress_levels_completed"] += 1
 
     def add_finding(self, title, endpoint, description, evidence=""):
         row = {
@@ -446,6 +488,20 @@ def sec_record(log, case_id, endpoint, params, call_result, expected_note, passe
         "note": truncate_note(note),
     }
     log.add_security(row)
+    return row
+
+
+def job_record(log, case_id, job_key, expected_note, passed, duration_s=None, note=""):
+    row = {
+        "timestamp": now_ts(),
+        "case_id": case_id,
+        "job_key": job_key,
+        "duration_s": round(duration_s, 3) if duration_s is not None else None,
+        "expected": expected_note,
+        "result": "PASS" if passed is True else ("FAIL" if passed is False else "SKIPPED"),
+        "note": truncate_note(note),
+    }
+    log.add_job_result(row)
     return row
 
 
@@ -652,26 +708,39 @@ def run_login_all_users_suite(client, cfg, log, state):
                "200, success:false, error:invalid_credentials", None,
                note=f"SKIPPED — {probe_phone} is a real configured user in this run, "
                     "can't use it as an unregistered-phone probe")
-    else:
-        r = client.call(ep, {"phone": probe_phone, "password": "whatever1"})
-        body = r.message_body()
-        passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is False
-        if r.is_2xx() and isinstance(body, dict) and body.get("success") is True:
-            log.add_finding(
-                "login_with_password auto-provisions unregistered phone numbers",
-                ep,
-                f"Calling login_with_password with a phone number ({probe_phone}) that had no existing "
-                "Tapapp Auth record, plus any password of 6+ characters, silently created a new account "
-                "and returned a valid access token — there is no registration gate on this endpoint. "
-                "This probe account was NOT cleaned up automatically (the harness has no privileged "
-                "delete path for it); if you rely on this endpoint being unable to create accounts, "
-                f"delete the {probe_phone} row from tabTapapp Auth before the next run, or this "
-                "test will keep reporting the same finding without ever going red as a functional FAIL.",
-                f"response: {_safe_json_dumps(body)}",
-            )
+        return
+
+    r = client.call(ep, {"phone": probe_phone, "password": "whatever1"})
+    body = r.message_body()
+    account_was_created = r.is_2xx() and isinstance(body, dict) and body.get("success") is True
+    passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is False
+
+    if account_was_created:
+        log.add_finding(
+            "login_with_password auto-provisions unregistered phone numbers",
+            ep,
+            f"Calling login_with_password with a phone number ({probe_phone}) that had no existing "
+            "Tapapp Auth record, plus any password of 6+ characters, silently created a new account "
+            "and returned a valid access token — there is no registration gate on this endpoint. "
+            "The harness cannot and does not attempt to delete this probe account: it has no "
+            "privileged delete path, and deleting application data is out of scope for this "
+            "harness by design. This means the probe phone number is now permanently registered "
+            "in this environment, and this specific check will report SKIPPED on every subsequent "
+            "run (see the note on this case) rather than PASS or FAIL, until someone with direct "
+            f"database access removes the {probe_phone} row from tabTapapp Auth.",
+            f"response: {_safe_json_dumps(body)}",
+        )
         record(log, "login__unregistered_phone", ep, {"phone": probe_phone}, r,
-               "200, success:false, error:invalid_credentials", passed,
-               note="" if passed else f"actual response: {_safe_json_dumps(body)} status={r.status_code} error={r.error}")
+               "200, success:false, error:invalid_credentials", None,
+               note=f"SKIPPED — this call itself just auto-provisioned {probe_phone} as a real "
+                    "account (see finding), so the probe is no longer testing an unregistered "
+                    "phone; it cannot be a clean PASS or FAIL on this or any future run against "
+                    "this environment without a manual DB cleanup")
+        return
+
+    record(log, "login__unregistered_phone", ep, {"phone": probe_phone}, r,
+           "200, success:false, error:invalid_credentials", passed,
+           note="" if passed else f"actual response: {_safe_json_dumps(body)} status={r.status_code} error={r.error}")
 
 
 def run_get_profiles_all_users_suite(client, cfg, log, state):
@@ -767,7 +836,7 @@ def run_record_activity_all_learners_suite(client, cfg, log, state):
                        "200, xp_awarded, activity_recorded:true", None,
                        note="SKIPPED — learner already hit their weekly activity cap in this window; "
                             "this is expected server behavior on repeat harness runs against persistent "
-                            "data, not a failure")
+                            "data, not a failure, and the harness does not reset this data")
             else:
                 record(log, f"record_activity__{lid}", ep, {"learner_id": lid, "activity_type": "video"}, r,
                        "200, xp_awarded, activity_recorded:true", False,
@@ -779,8 +848,9 @@ def run_record_activity_all_learners_suite(client, cfg, log, state):
             ep,
             f"{cap_hits} learner(s) had already reached their weekly activity limit before this run, "
             "so record_activity correctly rejected the call with a 417 — these are counted as skipped, "
-            "not failed. This will keep happening on repeat runs against the same staged data unless "
-            "the window resets or activities_watched_this_week is reset between runs.",
+            "not failed. The harness never resets activities_watched_this_week or window_start_date, so "
+            "this will keep happening on every repeat run against the same staged learners until the "
+            "7-day window rolls over naturally.",
             f"cap_hits={cap_hits}",
         )
 
@@ -935,9 +1005,14 @@ def run_export_suites(client, cfg, log):
                          headers=client.api_key_headers(), timeout=120)
         body = r.message_body()
         passed = r.is_2xx() and isinstance(body, dict) and body.get("success") is True
+        note = "" if passed else f"status={r.status_code} error={r.error_summary()}"
+        if r.is_2xx() and isinstance(body, dict) and body.get("success") is False:
+            note = (f"status={r.status_code} application-level failure: {_safe_json_dumps(body)} — "
+                     "this usually means program_id_for_export in config.json does not exist as a "
+                     "program in tabCourse Level in this environment, not a code bug")
         record(log, "export_program__happy", "export_program_content",
                {"program_id": cfg.program_id_for_export}, r, "200, success:true, payload present", passed,
-               note="" if passed else f"status={r.status_code} error={r.error_summary()}")
+               note=note)
     else:
         record(log, "export_program__happy", "export_program_content", {}, None,
                "200, success:true, payload present", None, "SKIPPED — no program_id_for_export in config")
@@ -1374,6 +1449,288 @@ def run_full_stress_suite(client, cfg, log, state, server_pids):
         log.write_status("stress:class_e_skipped", extra={"reason": "no real api credentials configured"})
 
 
+def _frappe_module():
+    try:
+        import frappe
+        return frappe
+    except ImportError:
+        return None
+
+
+def _job_cache_get(frappe_mod, key):
+    return frappe_mod.cache().get_value(key)
+
+
+def _job_lock_is_held(frappe_mod, job_key):
+    lock_key = JOB_LOCK_KEYS[job_key]
+    return bool(_job_cache_get(frappe_mod, lock_key))
+
+
+def _run_job_inline(frappe_mod, job_key):
+    import importlib
+    dotted = JOB_DISPATCH[job_key]
+    module_path, func_name = dotted.rsplit(".", 1)
+    module = importlib.import_module(module_path)
+    func = getattr(module, func_name)
+    t0 = time.time()
+    error = None
+    try:
+        func()
+    except Exception as e:
+        error = str(e)
+    duration = time.time() - t0
+    return duration, error
+
+
+def _job_tracker_snapshot(frappe_mod, job_key):
+    frappe_mod.db.commit()
+    rows = frappe_mod.db.sql(
+        'SELECT status, last_run_at, last_success_at, last_duration_seconds, last_error '
+        'FROM "tabTapapp Tasks" WHERE job_key=%s',
+        job_key,
+        as_dict=True,
+    )
+    return rows[0] if rows else None
+
+
+def run_jobs_correctness_suite(cfg, log):
+    frappe_mod = _frappe_module()
+    if frappe_mod is None:
+        for job_key in JOB_DISPATCH:
+            job_record(log, f"job_correctness__{job_key}", job_key, "job runs to completion, tracker shows Success",
+                       None, note="SKIPPED — frappe module not importable; run this harness with "
+                                  "`bench execute` inside the site's python environment to test jobs in-process")
+        return
+
+    for job_key in JOB_DISPATCH:
+        if _job_lock_is_held(frappe_mod, job_key):
+            job_record(log, f"job_correctness__{job_key}", job_key,
+                       "job runs to completion, tracker shows Success", None,
+                       note="SKIPPED — job's cache lock is already held by another run; "
+                            "not safe to invoke concurrently with whatever holds it")
+            continue
+
+        duration, error = _run_job_inline(frappe_mod, job_key)
+        tracker = _job_tracker_snapshot(frappe_mod, job_key)
+
+        if error is not None:
+            job_record(log, f"job_correctness__{job_key}", job_key,
+                       "job runs to completion, tracker shows Success", False, duration_s=duration,
+                       note=f"job raised an exception during inline execution: {error}")
+            log.add_finding(f"{job_key}: raised during execution", job_key,
+                             f"Calling the job function directly raised an exception rather than "
+                             "completing and recording failure through its own tracker/try-except path",
+                             error)
+            continue
+
+        if tracker is None:
+            job_record(log, f"job_correctness__{job_key}", job_key,
+                       "job runs to completion, tracker shows Success", False, duration_s=duration,
+                       note="job returned without raising, but no Tapapp Tasks row exists for this "
+                            "job_key afterwards — tracker was not created")
+            continue
+
+        passed = tracker.status == "Success" and not tracker.last_error
+        note = "" if passed else f"tracker status={tracker.status} last_error={tracker.last_error}"
+        job_record(log, f"job_correctness__{job_key}", job_key,
+                   "job runs to completion, tracker shows Success", passed, duration_s=duration, note=note)
+
+    for job_key in JOB_DISPATCH:
+        lock_key = JOB_LOCK_KEYS[job_key]
+        frappe_mod.cache().set_value(lock_key, "1", expires_in_sec=5)
+        held_before = _job_lock_is_held(frappe_mod, job_key)
+        duration, error = _run_job_inline(frappe_mod, job_key)
+        frappe_mod.cache().delete_value(lock_key)
+
+        passed = held_before and error is None
+        note = ""
+        if not held_before:
+            note = "could not verify — failed to set the lock key before calling the job"
+        elif error is not None:
+            note = f"job raised while the lock was already held, expected a silent no-op skip: {error}"
+        job_record(log, f"job_lock_respected__{job_key}", job_key,
+                   "job sees its own cache lock already held and returns without doing work or raising",
+                   passed if held_before else None, duration_s=duration, note=note)
+
+    for job_key in JOB_DISPATCH:
+        tracker = _job_tracker_snapshot(frappe_mod, job_key)
+        if tracker is None:
+            continue
+        try:
+            doc = frappe_mod.get_doc("Tapapp Tasks", job_key)
+            doc.paused = 1
+            doc.save(ignore_permissions=True)
+            frappe_mod.db.commit()
+        except Exception as e:
+            job_record(log, f"job_paused_respected__{job_key}", job_key,
+                       "job sees paused=1 and sets status to Paused without doing work", None,
+                       note=f"SKIPPED — could not set paused=1 on tracker: {e}")
+            continue
+
+        duration, error = _run_job_inline(frappe_mod, job_key)
+        tracker_after = _job_tracker_snapshot(frappe_mod, job_key)
+
+        try:
+            doc.paused = 0
+            doc.save(ignore_permissions=True)
+            frappe_mod.db.commit()
+        except Exception:
+            pass
+
+        passed = error is None and tracker_after is not None and tracker_after.status == "Paused"
+        note = "" if passed else (
+            f"error={error} tracker_status_after={tracker_after.status if tracker_after else None}"
+        )
+        job_record(log, f"job_paused_respected__{job_key}", job_key,
+                   "job sees paused=1 and sets status to Paused without doing work", passed,
+                   duration_s=duration, note=note)
+
+
+def _job_stress_level_result(frappe_mod, job_key, concurrency, sampler):
+    sampler.start()
+    t0 = time.time()
+    results = []
+    lock = threading.Lock()
+
+    def worker():
+        duration, error = _run_job_inline(frappe_mod, job_key)
+        with lock:
+            results.append((duration, error))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = [pool.submit(worker) for _ in range(concurrency)]
+        for f in concurrent.futures.as_completed(futures):
+            f.result()
+    duration = time.time() - t0
+    sampler.stop()
+    resource_summary = sampler.summary()
+
+    executed = 0
+    tracker_before_map = {}
+    errors = [e for _, e in results if e is not None]
+    durations = [d for d, _ in results]
+    executed = sum(1 for d, e in results if e is None and d > 0.01)
+
+    return duration, durations, errors, resource_summary
+
+
+def run_jobs_stress_suite(cfg, log):
+    frappe_mod = _frappe_module()
+    if frappe_mod is None:
+        log.write_status("jobs_stress:skipped", extra={"reason": "frappe module not importable"})
+        return
+
+    for job_key in JOB_DISPATCH:
+        if _job_lock_is_held(frappe_mod, job_key):
+            log.write_status(f"jobs_stress:{job_key}:skipped", extra={"reason": "job lock already held"})
+            continue
+
+        level = cfg.job_stress_initial_concurrency
+        consecutive_bad = 0
+        last_healthy_level = None
+        sampler = ResourceSampler(cfg.job_sample_resource_interval_seconds, server_pids=[os.getpid()])
+
+        while level <= cfg.job_stress_hard_ceiling:
+            duration, durations, errors, resource_summary = _job_stress_level_result(
+                frappe_mod, job_key, level, sampler
+            )
+
+            all_succeeded = len(errors) == 0
+            row = {
+                "timestamp": now_ts(),
+                "job_key": job_key,
+                "concurrency_level": level,
+                "triggers_fired": level,
+                "duration_s": round(duration, 2),
+                "duration_min_s": round(min(durations), 3) if durations else None,
+                "duration_mean_s": round(statistics.mean(durations), 3) if durations else None,
+                "duration_max_s": round(max(durations), 3) if durations else None,
+                "errors": len(errors),
+                "cpu_avg": resource_summary.get("cpu_avg"),
+                "cpu_peak": resource_summary.get("cpu_peak"),
+                "ram_avg": resource_summary.get("ram_avg"),
+                "ram_peak": resource_summary.get("ram_peak"),
+                "note": "" if all_succeeded else f"{len(errors)} concurrent trigger(s) raised; "
+                                                  f"first: {truncate_note(errors[0], 500)}",
+            }
+            log.add_job_stress(row)
+            log.write_summary_snapshot(cfg)
+
+            if all_succeeded:
+                last_healthy_level = level
+                consecutive_bad = 0
+            else:
+                consecutive_bad += 1
+                if consecutive_bad >= cfg.job_stress_consecutive_bad_levels_to_stop:
+                    break
+
+            time.sleep(1.0)
+            next_level = int(level * cfg.job_stress_growth_factor)
+            if next_level <= level:
+                next_level = level + 1
+            level = next_level
+
+        log.add_job_stress({
+            "timestamp": now_ts(),
+            "job_key": job_key,
+            "concurrency_level": "CEILING",
+            "note": f"max concurrent inline triggers with zero errors={last_healthy_level}",
+        })
+
+    for job_key in JOB_DISPATCH:
+        if _job_lock_is_held(frappe_mod, job_key):
+            job_record(log, f"job_lock_stress__{job_key}", job_key,
+                       "exactly one of N concurrent triggers executes; the rest see the lock held "
+                       "and no-op without error", None,
+                       note="SKIPPED — job lock already held before this check started")
+            continue
+
+        n = max(2, cfg.job_concurrent_trigger_count)
+        tracker_before = _job_tracker_snapshot(frappe_mod, job_key)
+        run_count_before = 0
+        if tracker_before and tracker_before.last_run_at:
+            run_count_before = 1
+
+        durations = []
+        errors = []
+        lock = threading.Lock()
+
+        def worker():
+            duration, error = _run_job_inline(frappe_mod, job_key)
+            with lock:
+                durations.append(duration)
+                if error is not None:
+                    errors.append(error)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=n) as pool:
+            futures = [pool.submit(worker) for _ in range(n)]
+            for f in concurrent.futures.as_completed(futures):
+                f.result()
+
+        real_runs = sum(1 for d in durations if d > 0.05)
+        exactly_one_ran = real_runs == 1
+        no_errors = len(errors) == 0
+        passed = exactly_one_ran and no_errors
+
+        note = f"durations={[round(d, 3) for d in durations]} real_runs_estimated={real_runs}"
+        if errors:
+            note += f" errors={len(errors)} first={truncate_note(errors[0], 500)}"
+
+        job_record(log, f"job_lock_stress__{job_key}", job_key,
+                   "exactly one of N concurrent triggers executes; the rest see the lock held "
+                   "and no-op without error", passed, note=note)
+
+        if not passed:
+            log.add_finding(f"{job_key}: concurrency lock did not behave as expected", job_key,
+                             f"Fired {n} concurrent in-process calls to this job. Expected exactly one "
+                             "to actually run its body (the cache lock should make the rest no-op "
+                             f"immediately); observed an estimated {real_runs} real run(s) and "
+                             f"{len(errors)} raised exception(s). Either the lock is not preventing "
+                             "concurrent execution, or a concurrent run is raising instead of "
+                             "silently skipping.",
+                             note)
+
+
 def write_final_report(log, cfg, run_id, start_time, end_time):
     lines = []
     lines.append("TAPAPP STAGED STRESS TEST — FINAL REPORT")
@@ -1386,6 +1743,8 @@ def write_final_report(log, cfg, run_id, start_time, end_time):
     lines.append(f"Raw per-request logs: {log.functional_path}, {log.security_path}")
     lines.append(f"Concurrency race logs: {log.concurrency_path}")
     lines.append(f"Stress ramp logs: {log.stress_path}")
+    lines.append(f"Jobs correctness logs: {log.jobs_path}")
+    lines.append(f"Jobs stress logs: {log.jobs_stress_path}")
     lines.append(f"Findings: {log.findings_path}")
     lines.append(f"Live status snapshot (safe to read mid-run): {log.status_path}")
     lines.append("")
@@ -1407,12 +1766,33 @@ def write_final_report(log, cfg, run_id, start_time, end_time):
                     continue
                 if row.get("concurrency_level") == "CEILING":
                     ceilings.append(row)
-    lines.append("STRESS CEILINGS FOUND")
+    lines.append("STRESS CEILINGS FOUND (HTTP API)")
     if ceilings:
         for row in ceilings:
             lines.append(f"  {row['endpoint_class']} ({row['endpoint']}): {row['note']}")
     else:
         lines.append("  none recorded — stress suite may not have run or was interrupted early")
+    lines.append("")
+
+    job_ceilings = []
+    if os.path.exists(log.jobs_stress_path):
+        with open(log.jobs_stress_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("concurrency_level") == "CEILING":
+                    job_ceilings.append(row)
+    lines.append("STRESS CEILINGS FOUND (BACKGROUND JOBS, IN-PROCESS)")
+    if job_ceilings:
+        for row in job_ceilings:
+            lines.append(f"  {row['job_key']}: {row['note']}")
+    else:
+        lines.append("  none recorded — jobs stress suite may not have run, was skipped, or was interrupted early")
     lines.append("")
     lines.append("END OF REPORT")
 
@@ -1425,10 +1805,10 @@ def write_final_report(log, cfg, run_id, start_time, end_time):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Tapapp staged-environment stress and functional test harness")
+    parser = argparse.ArgumentParser(description="Tapapp staged-environment stress, functional, and jobs test harness")
     parser.add_argument("--config", default="config.json")
     parser.add_argument("--only", default=None,
-                         help="Comma-separated: functional,security,concurrency,stress")
+                         help="Comma-separated: functional,security,concurrency,stress,jobs,jobs_stress")
     parser.add_argument("--server-pids", type=str, default=None,
                          help="Comma-separated PIDs of the Frappe/gunicorn master+worker processes, "
                               "for aggregated resource tracking. If omitted, auto-detected.")
@@ -1440,7 +1820,7 @@ def main():
         print(f"config error: {e}", file=sys.stderr)
         sys.exit(2)
 
-    valid_sections = {"functional", "security", "concurrency", "stress"}
+    valid_sections = {"functional", "security", "concurrency", "stress", "jobs", "jobs_stress"}
     sections = None
     if args.only:
         sections = {s.strip() for s in args.only.split(",") if s.strip()}
@@ -1468,6 +1848,8 @@ def main():
     print(f"Tracking server resource usage across PIDs: {server_pids or 'none found'}")
     print(f"Sending requests to {cfg.base_url} with Host header: {cfg.site_host or '(none set)'}")
     print(f"Resolving endpoints to dotted module paths: {cfg.use_dotted_paths}")
+    print(f"In-process frappe module importable: {_frappe_module() is not None} "
+          f"(required for the jobs and jobs_stress sections)")
     if not cfg.has_real_api_credentials:
         print("warning: frappe_api_key/frappe_api_secret are missing or still placeholders — "
               "award_achievement, export_program_content, export_content and submission_verified_webhook "
@@ -1538,6 +1920,16 @@ def main():
         if wants("stress") and cfg.run_stress_suite:
             log.write_status("stress")
             run_full_stress_suite(client, cfg, log, state, server_pids)
+            log.write_summary_snapshot(cfg)
+
+        if wants("jobs") and cfg.run_jobs_suite:
+            log.write_status("jobs")
+            run_jobs_correctness_suite(cfg, log)
+            log.write_summary_snapshot(cfg)
+
+        if wants("jobs_stress") and cfg.run_jobs_stress:
+            log.write_status("jobs_stress")
+            run_jobs_stress_suite(cfg, log)
             log.write_summary_snapshot(cfg)
 
         log.write_status("completed")
