@@ -6,7 +6,7 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_BASE"
+    "expected_hash": "5809e95a50b0e770c7ea1ea5e8683ac33c4d40bb3f2f0c63f48f7f07f963eaf"
   },
   {
     "name": "same_text_diff_revision",
@@ -15,7 +15,7 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev2",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_DIFF_REV"
+    "expected_hash": "GENERATE_WITH_SCRIPT_BELOW"
   },
   {
     "name": "hindi_nfc",
@@ -25,7 +25,7 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_HINDI"
+    "expected_hash": "GENERATE_WITH_SCRIPT_BELOW"
   },
   {
     "name": "marathi_zero_width",
@@ -35,7 +35,7 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_MARATHI"
+    "expected_hash": "GENERATE_WITH_SCRIPT_BELOW"
   },
   {
     "name": "kannada_tabs_newlines",
@@ -45,7 +45,7 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_KANNADA"
+    "expected_hash": "GENERATE_WITH_SCRIPT_BELOW"
   },
   {
     "name": "punjabi_trailing_space",
@@ -55,7 +55,7 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_PUNJABI"
+    "expected_hash": "GENERATE_WITH_SCRIPT_BELOW"
   },
   {
     "name": "devanagari_danda",
@@ -65,7 +65,7 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_DANDA"
+    "expected_hash": "GENERATE_WITH_SCRIPT_BELOW"
   },
   {
     "name": "nfd_input",
@@ -75,6 +75,6 @@
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "REPLACE_WITH_GENERATED_HASH_NFD"
+    "expected_hash": "GENERATE_WITH_SCRIPT_BELOW"
   }
 ]

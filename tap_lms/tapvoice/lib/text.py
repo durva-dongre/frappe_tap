@@ -1,4 +1,3 @@
-import hashlib
 import re
 import unicodedata
 
@@ -53,7 +52,7 @@ def _truncate(text, limit):
     return "", True
 
 
-def prepare(raw_text, language, max_chars, policy):
+def prepare(raw_text, max_chars, policy):
     stripped_tags = strip_markup(raw_text)
     stripped = _strip_markdown_and_emoji(stripped_tags)
     cleaned = clean_text(stripped)
@@ -64,8 +63,3 @@ def prepare(raw_text, language, max_chars, policy):
     truncated, was_truncated = _truncate(cleaned, max_chars)
     reclaimed = clean_text(truncated)
     return reclaimed, was_truncated
-
-
-def fingerprint(prepared_text, language):
-    payload = f"{prepared_text}\x1f{language}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()

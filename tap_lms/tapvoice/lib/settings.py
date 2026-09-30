@@ -104,6 +104,12 @@ def load():
     return Settings(doc)
 
 
+def load_fresh():
+    frappe.clear_cache(doctype=SETTINGS_DOCTYPE)
+    doc = frappe.get_single(SETTINGS_DOCTYPE)
+    return Settings(doc)
+
+
 def api_path_prefix(settings):
     module_path = (settings.api_module_path or "tap_lms.tapvoice.api.pod").strip(".")
     return f"/api/method/{module_path}."

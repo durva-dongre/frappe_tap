@@ -89,6 +89,15 @@ def is_terminal(status):
     return status in TERMINAL_STATUSES
 
 
+def get_for_update(run_name):
+    rows = frappe.db.sql(
+        "select * from `tabTap Voice Run` where name = %(name)s for update",
+        {"name": run_name},
+        as_dict=True,
+    )
+    return frappe._dict(rows[0]) if rows else None
+
+
 def _sanitize(fields):
     clean = dict(fields)
     for key in INT_FIELDS:
@@ -108,6 +117,11 @@ def set_fields(run_name, fields):
     frappe.db.set_value(RUN_DOCTYPE, run_name, clean, update_modified=False)
 
 
+def increment(run_name, field, amount=1):
+    current = frappe.db.get_value(RUN_DOCTYPE, run_name, field) or 0
+    set_fields(run_name, {field: current + amount})
+
+
 def transition(run_name, from_status, to_status, extra_fields=None):
     if not can_transition(from_status, to_status):
         frappe.throw(f"Cannot transition Tap Voice Run from {from_status} to {to_status}")
@@ -116,14 +130,17 @@ def transition(run_name, from_status, to_status, extra_fields=None):
     set_fields(run_name, fields)
 
 
-def conditional_write_url(run_name, item_id, url, content_hash, expected_modified):
-    result = frappe.db.sql(
+def conditional_write_url(item_id, url, content_hash, expected_modified):
+    frappe.db.sql(
         """
-        update `tabTap Voice Run`
-        set manifest_json = manifest_json
+        update `tabSubmission`
+        set audio_feedback_url = %(url)s
         where name = %(name)s
+          and (audio_feedback_url is null or audio_feedback_url = '')
+          and status != 'Failed'
+          and modified = %(expected_modified)s
         """,
-        {"name": run_name},
+        {"name": item_id, "url": url, "expected_modified": expected_modified},
     )
     cursor = frappe.db._cursor
     return getattr(cursor, "rowcount", 0)

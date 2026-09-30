@@ -3,6 +3,7 @@ import frappe
 from tap_lms.tapvoice.lib import languages
 from tap_lms.tapvoice.lib.text import prepare as prepare_text
 
+SUBMISSION_DOCTYPE = "Submission"
 FAILED_STATUS = "Failed"
 PERMANENT_FAILURE_REASONS = frozenset(
     {
@@ -23,6 +24,34 @@ PERMANENT_FAILURE_REASONS = frozenset(
 )
 
 
+class EligibleItem:
+    def __init__(self, id, text, language, age_hours):
+        self.id = id
+        self.text = text
+        self.language = language
+        self.age_hours = age_hours
+
+
+class EligibilityResult:
+    def __init__(
+        self,
+        items,
+        truncated_count,
+        skipped_unsupported_language,
+        unsupported_language_values,
+        skipped_empty_text,
+        skipped_recent_failure,
+        skipped_flagged,
+    ):
+        self.items = items
+        self.truncated_count = truncated_count
+        self.skipped_unsupported_language = skipped_unsupported_language
+        self.unsupported_language_values = unsupported_language_values
+        self.skipped_empty_text = skipped_empty_text
+        self.skipped_recent_failure = skipped_recent_failure
+        self.skipped_flagged = skipped_flagged
+
+
 def _excluded_ids(recent_run_count):
     if not recent_run_count:
         return set()
@@ -30,7 +59,7 @@ def _excluded_ids(recent_run_count):
         "Tap Voice Run",
         filters={"status": ["not in", ["Draft", "Skipped"]]},
         fields=["failed_items"],
-        order_by="created_at desc",
+        order_by="creation desc",
         limit_page_length=recent_run_count,
     )
     excluded = set()
@@ -55,13 +84,11 @@ def find_eligible(settings, max_scan):
         [basis_field, ">=", window_start],
         ["audio_feedback_url", "in", ["", None]],
     ]
-    if not settings.skip_flagged:
-        pass
-    else:
+    if settings.skip_flagged:
         filters.append(["result_status", "!=", "Success - Flagged"])
 
     rows = frappe.get_all(
-        "Submission",
+        SUBMISSION_DOCTYPE,
         filters=filters,
         fields=[
             "name",
@@ -70,6 +97,7 @@ def find_eligible(settings, max_scan):
             "overall_feedback_translated",
             "translation_language",
             "audio_feedback_url",
+            "result_status",
         ],
         order_by=f"{basis_field} asc",
         limit_page_length=max_scan,
@@ -89,6 +117,9 @@ def find_eligible(settings, max_scan):
         if row.name in excluded:
             skipped_recent_failure += 1
             continue
+        if settings.skip_flagged and row.result_status == "Success - Flagged":
+            skipped_flagged += 1
+            continue
         feedback = (row.overall_feedback_translated or "").strip()
         if not feedback:
             skipped_empty_text += 1
@@ -102,7 +133,7 @@ def find_eligible(settings, max_scan):
 
         max_chars = settings.max_chars_per_text
         policy = settings.over_length_policy
-        prepared, was_truncated = prepare_text(feedback, language, max_chars, policy)
+        prepared, was_truncated = prepare_text(feedback, max_chars, policy)
         if not prepared:
             skipped_empty_text += 1
             continue
@@ -116,21 +147,14 @@ def find_eligible(settings, max_scan):
             else 0
         )
 
-        items.append(
-            {
-                "id": row.name,
-                "text": prepared,
-                "language": language,
-                "age_hours": age_hours,
-            }
-        )
+        items.append(EligibleItem(id=row.name, text=prepared, language=language, age_hours=age_hours))
 
-    return {
-        "items": items,
-        "truncated_count": truncated_count,
-        "skipped_unsupported_language": skipped_unsupported_language,
-        "unsupported_language_values": unsupported_language_values,
-        "skipped_empty_text": skipped_empty_text,
-        "skipped_recent_failure": skipped_recent_failure,
-        "skipped_flagged": skipped_flagged,
-    }
+    return EligibilityResult(
+        items=items,
+        truncated_count=truncated_count,
+        skipped_unsupported_language=skipped_unsupported_language,
+        unsupported_language_values=unsupported_language_values,
+        skipped_empty_text=skipped_empty_text,
+        skipped_recent_failure=skipped_recent_failure,
+        skipped_flagged=skipped_flagged,
+    )

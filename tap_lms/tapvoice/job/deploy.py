@@ -1,9 +1,22 @@
 import frappe
 
+from tap_lms.tapvoice.constants import (
+    ACTIVE_STATUSES,
+    DECISION_DEPLOY,
+    DECISION_SKIP_BLOCKED,
+    DECISION_SKIP_DISABLED,
+    RUN_DOCTYPE,
+    STATUS_DEPLOY_FAILED,
+    STATUS_DEPLOYING,
+    STATUS_SKIPPED,
+    STATUS_STARTING,
+    TERMINATION_MANUAL_ACTION_NEEDED,
+    TERMINATION_PENDING,
+)
 from tap_lms.tapvoice.lib import secrets as secrets_lib
 from tap_lms.tapvoice.lib import settings as settings_lib
 from tap_lms.tapvoice.lib.planner import plan_batch
-from tap_lms.tapvoice.lib.runpod import AmbiguousCreateError, RunPodClient, RunPodError
+from tap_lms.tapvoice.lib.runpod import RunPodClient, RunPodError, build_create_payload
 
 LOCK_KEY = "tapvoice:deploy:mutex"
 LOCK_TTL_SECONDS = 300
@@ -11,11 +24,11 @@ LOCK_TTL_SECONDS = 300
 
 def _acquire_mutex():
     cache = frappe.cache()
-    acquired = cache.set_value(LOCK_KEY, "1", expires_in_sec=LOCK_TTL_SECONDS)
-    if acquired is False:
-        return False
     current = cache.get_value(LOCK_KEY)
-    return current in ("1", b"1")
+    if current in ("1", b"1"):
+        return False
+    cache.set_value(LOCK_KEY, "1", expires_in_sec=LOCK_TTL_SECONDS)
+    return True
 
 
 def _release_mutex():
@@ -24,85 +37,69 @@ def _release_mutex():
 
 def deploy_new(trigger_type="Manual", triggered_by=None, force=False):
     if not _acquire_mutex():
-        return {"decision": "Skip: blocked", "reason": "another deploy is in progress"}
+        return {"deployed": False, "reason": DECISION_SKIP_BLOCKED}
     try:
         settings = settings_lib.load_fresh()
-        if not settings.enabled:
-            return {"decision": "Skip: disabled", "reason": "kill switch is off"}
+        if not settings.kill_switch_on():
+            return {"deployed": False, "reason": DECISION_SKIP_DISABLED}
 
-        active = frappe.db.exists(
-            "Tap Voice Run",
-            {"status": ["in", ["Deploying", "Starting", "Running", "Stopping"]]},
-        )
+        active = frappe.db.exists(RUN_DOCTYPE, {"status": ["in", list(ACTIVE_STATUSES)]})
         if active:
-            return {"decision": "Skip: blocked", "reason": f"active run {active}"}
+            return {"deployed": False, "reason": DECISION_SKIP_BLOCKED}
 
         pending_termination = frappe.db.exists(
-            "Tap Voice Run",
-            {"termination_status": ["in", ["Pending", "Manual Action Needed"]]},
+            RUN_DOCTYPE,
+            {"termination_status": ["in", [TERMINATION_PENDING, TERMINATION_MANUAL_ACTION_NEEDED]]},
         )
         if pending_termination:
-            return {"decision": "Skip: blocked", "reason": f"termination pending on {pending_termination}"}
+            return {"deployed": False, "reason": DECISION_SKIP_BLOCKED}
 
         plan = plan_batch(settings, force=force)
-        if plan["decision"] != "Deploy":
-            run = _create_run(settings, trigger_type, triggered_by, plan, status="Skipped")
-            return {"decision": plan["decision"], "reason": plan.get("reason"), "run": run.name}
+        if plan.decision != DECISION_DEPLOY:
+            run = _create_run(settings, trigger_type, triggered_by, plan, status=STATUS_SKIPPED)
+            return {"deployed": False, "reason": plan.decision, "run": run.name}
 
-        run = _create_run(settings, trigger_type, triggered_by, plan, status="Deploying")
+        run = _create_run(settings, trigger_type, triggered_by, plan, status=STATUS_DEPLOYING)
         frappe.db.commit()
 
-        client = RunPodClient(settings, secrets_lib.all_required())
+        client = RunPodClient(settings.runpod_api_base, secrets_lib.runpod_pod_api_key(), settings.http_timeout_seconds)
+        payload = build_create_payload(settings, run.name, {})
         try:
-            pod = client.create(_pod_payload(settings, run.name, plan))
-        except AmbiguousCreateError:
+            pod = client.create_pod(payload)
+        except RunPodError as exc:
             existing = client.find_by_name(run.name)
             if existing:
                 _record_pod(run.name, existing)
-            else:
-                _mark_deploy_failed(run.name, "ambiguous create, no pod found on lookup")
-                return {"decision": "Deploy Failed", "run": run.name}
-        except RunPodError as exc:
+                return {"deployed": True, "adopted": True, "run": run.name}
             _mark_deploy_failed(run.name, str(exc))
-            return {"decision": "Deploy Failed", "run": run.name}
+            return {"deployed": False, "reason": STATUS_DEPLOY_FAILED, "run": run.name}
         else:
             _record_pod(run.name, pod)
 
-        return {"decision": "Deploy", "run": run.name}
+        return {"deployed": True, "run": run.name}
     finally:
         _release_mutex()
-
-
-def _pod_payload(settings, run_name, plan):
-    return {
-        "name": run_name,
-        "imageName": settings.image_name,
-        "gpuTypeIds": [line.strip() for line in (settings.gpu_type_ids or "").splitlines() if line.strip()],
-        "gpuCount": settings.gpu_count,
-        "cloudType": settings.cloud_type or "SECURE",
-        "containerDiskInGb": settings.container_disk_gb,
-        "volumeInGb": settings.volume_gb,
-        "interruptible": bool(settings.interruptible),
-        "env": {},
-    }
 
 
 def _create_run(settings, trigger_type, triggered_by, plan, status):
     doc = frappe.get_doc(
         {
-            "doctype": "Tap Voice Run",
+            "doctype": RUN_DOCTYPE,
             "status": status,
-            "status_reason": plan.get("reason"),
+            "status_reason": plan.reason,
             "trigger_type": trigger_type,
             "triggered_by": triggered_by or frappe.session.user,
             "created_at": frappe.utils.now_datetime(),
-            "decision": plan["decision"],
-            "eligible_found": plan.get("eligible_found", 0),
-            "urgent_count": plan.get("urgent_count", 0),
-            "truncated_count": plan.get("truncated_count", 0),
-            "estimated_cost_usd": plan.get("estimated_cost_usd", 0),
-            "manifest_json": frappe.as_json(plan.get("manifest", [])),
-            "manifest_count": len(plan.get("manifest", [])),
+            "decision": plan.decision,
+            "eligible_found": plan.eligible_found,
+            "urgent_count": plan.urgent_count,
+            "truncated_count": plan.truncated_count,
+            "estimated_cost_usd": plan.estimated_cost_usd,
+            "manifest_json": frappe.as_json(
+                [{"id": item.id, "language": item.language, "fingerprint": item.text} for item in plan.items]
+            ),
+            "manifest_count": len(plan.items),
+            "termination_status": "Not Needed",
         }
     )
     doc.insert(ignore_permissions=True)
@@ -120,7 +117,7 @@ def _record_pod(run_name, pod):
             "hourly_rate": pod.get("costPerHr") or 0,
             "gpu_type_allocated": pod.get("gpuTypeId"),
             "pod_created_at": frappe.utils.now_datetime(),
-            "status": "Starting",
+            "status": STATUS_STARTING,
         },
     )
 
@@ -131,7 +128,7 @@ def _mark_deploy_failed(run_name, reason):
     runstate.set_fields(
         run_name,
         {
-            "status": "Deploy Failed",
-            "status_reason": reason[:140],
+            "status": STATUS_DEPLOY_FAILED,
+            "status_reason": str(reason)[:140],
         },
     )

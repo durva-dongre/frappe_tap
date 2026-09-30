@@ -25,6 +25,11 @@ def object_key(prefix, language, digest, fmt="ogg"):
     return f"{prefix}/{language}/{digest[:32]}.{fmt}"
 
 
+def expected_key(text, voice, emotion, fmt, model_revision, prefix, language):
+    digest = content_hash(text, voice, emotion, fmt, model_revision)
+    return object_key(prefix, language, digest, fmt)
+
+
 def expected_url(text, language, model_revision, gcs_prefix, cdn_base_url, fmt="ogg"):
     digest = expected_hash(text, language, model_revision, fmt)
     key = object_key(gcs_prefix, language, digest, fmt)
