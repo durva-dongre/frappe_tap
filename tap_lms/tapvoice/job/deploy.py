@@ -23,12 +23,9 @@ LOCK_TTL_SECONDS = 300
 
 
 def _acquire_mutex():
-    cache = frappe.cache()
-    current = cache.get_value(LOCK_KEY)
-    if current in ("1", b"1"):
-        return False
-    cache.set_value(LOCK_KEY, "1", expires_in_sec=LOCK_TTL_SECONDS)
-    return True
+    client = frappe.cache().redis
+    acquired = client.set(LOCK_KEY, "1", nx=True, ex=LOCK_TTL_SECONDS)
+    return bool(acquired)
 
 
 def _release_mutex():

@@ -81,12 +81,12 @@ def _sum_spend(start, end, settings):
     rows = frappe.get_all(
         RUN_DOCTYPE,
         filters={"creation": ["between", [start, end]]},
-        fields=["status", "estimated_cost_usd_final", "estimated_cost_usd", "max_cost_per_run_usd"],
+        fields=["status", "estimated_cost_usd_final", "estimated_cost_usd"],
     )
     total = 0.0
     for row in rows:
         if row.status in ACTIVE_STATUSES:
-            total += row.max_cost_per_run_usd or settings.max_cost_per_run_usd
+            total += settings.max_cost_per_run_usd
         else:
             total += row.estimated_cost_usd_final or row.estimated_cost_usd or 0.0
     return total
@@ -114,16 +114,25 @@ def fit_to_caps(settings, items, hourly_rate=None):
     startup, per_clip = _recent_rate(settings)
 
     count = min(len(items), settings.max_clips_per_run)
-    estimate = _estimate_from_rate(settings, count, rate, startup, per_clip)
-
-    if estimate.cost_usd <= room or count == 0:
+    if count == 0:
         return BudgetCheck(
-            fits=count > 0,
+            fits=False,
+            trimmed_count=0,
+            estimate=BudgetEstimate(seconds=0.0, cost_usd=0.0),
+            today_spend_usd=today,
+            month_spend_usd=month,
+            reason="no_items",
+        )
+
+    estimate = _estimate_from_rate(settings, count, rate, startup, per_clip)
+    if estimate.cost_usd <= room:
+        return BudgetCheck(
+            fits=True,
             trimmed_count=count,
             estimate=estimate,
             today_spend_usd=today,
             month_spend_usd=month,
-            reason="" if count > 0 else "no_items",
+            reason="",
         )
 
     lo, hi = 0, count

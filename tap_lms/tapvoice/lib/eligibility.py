@@ -5,6 +5,7 @@ from tap_lms.tapvoice.lib.text import prepare as prepare_text
 
 SUBMISSION_DOCTYPE = "Submission"
 FAILED_STATUS = "Failed"
+FLAGGED_RESULT_STATUS = "Success - Flagged"
 PERMANENT_FAILURE_REASONS = frozenset(
     {
         "silent",
@@ -84,8 +85,6 @@ def find_eligible(settings, max_scan):
         [basis_field, ">=", window_start],
         ["audio_feedback_url", "in", ["", None]],
     ]
-    if settings.skip_flagged:
-        filters.append(["result_status", "!=", "Success - Flagged"])
 
     rows = frappe.get_all(
         SUBMISSION_DOCTYPE,
@@ -117,7 +116,7 @@ def find_eligible(settings, max_scan):
         if row.name in excluded:
             skipped_recent_failure += 1
             continue
-        if settings.skip_flagged and row.result_status == "Success - Flagged":
+        if settings.skip_flagged and row.result_status == FLAGGED_RESULT_STATUS:
             skipped_flagged += 1
             continue
         feedback = (row.overall_feedback_translated or "").strip()
