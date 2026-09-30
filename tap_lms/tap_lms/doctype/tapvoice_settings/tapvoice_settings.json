@@ -1,0 +1,490 @@
+{
+ "actions": [],
+ "creation": "2026-06-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "control_section",
+  "enabled",
+  "allow_force_start",
+  "skip_flagged",
+  "control_column_break",
+  "batch_section",
+  "window_hours",
+  "window_basis",
+  "max_clips_per_run",
+  "min_items_to_deploy",
+  "run_interval_hours",
+  "urgent_margin_hours",
+  "batch_column_break",
+  "max_chars_per_text",
+  "over_length_policy",
+  "max_runs_per_day",
+  "min_minutes_between_runs",
+  "skip_recent_failures_runs",
+  "cost_section",
+  "fallback_hourly_rate_usd",
+  "est_startup_seconds",
+  "est_seconds_per_clip",
+  "estimate_safety_factor",
+  "cost_column_break",
+  "max_cost_per_run_usd",
+  "max_cost_per_day_usd",
+  "max_cost_per_month_usd",
+  "time_section",
+  "pod_limit_max_seconds",
+  "startup_deadline_minutes",
+  "heartbeat_timeout_minutes",
+  "stopping_grace_minutes",
+  "time_column_break",
+  "token_buffer_minutes",
+  "termination_check_delay_seconds",
+  "breaker_section",
+  "max_consecutive_bad_runs",
+  "bad_run_success_floor_percent",
+  "alert_email",
+  "runpod_section",
+  "runpod_api_base",
+  "image_name",
+  "registry_auth_id",
+  "gpu_type_ids",
+  "gpu_count",
+  "cloud_type",
+  "runpod_column_break",
+  "interruptible",
+  "container_disk_gb",
+  "volume_gb",
+  "data_center_ids",
+  "allowed_cuda_versions",
+  "http_timeout_seconds",
+  "site_section",
+  "public_base_url",
+  "api_module_path",
+  "gcs_bucket",
+  "gcs_prefix",
+  "cdn_base_url",
+  "site_column_break",
+  "model_revision",
+  "verify_urls_on_write",
+  "pod_tuning_section",
+  "max_num_seqs",
+  "decode_microbatch",
+  "gpu_memory_utilization",
+  "seconds_per_item_cap",
+  "notes_section",
+  "operator_notes"
+ ],
+ "fields": [
+  {
+   "fieldname": "control_section",
+   "fieldtype": "Section Break",
+   "label": "Control"
+  },
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_force_start",
+   "fieldtype": "Check",
+   "label": "Allow Force Start"
+  },
+  {
+   "default": "0",
+   "fieldname": "skip_flagged",
+   "fieldtype": "Check",
+   "label": "Skip Flagged Submissions"
+  },
+  {
+   "fieldname": "control_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "batch_section",
+   "fieldtype": "Section Break",
+   "label": "Batch"
+  },
+  {
+   "default": "24",
+   "fieldname": "window_hours",
+   "fieldtype": "Int",
+   "label": "Window Hours"
+  },
+  {
+   "default": "creation",
+   "fieldname": "window_basis",
+   "fieldtype": "Select",
+   "label": "Window Basis",
+   "options": "creation\ncompleted_at\nmodified"
+  },
+  {
+   "default": "2000",
+   "fieldname": "max_clips_per_run",
+   "fieldtype": "Int",
+   "label": "Max Clips Per Run"
+  },
+  {
+   "default": "25",
+   "fieldname": "min_items_to_deploy",
+   "fieldtype": "Int",
+   "label": "Min Items To Deploy"
+  },
+  {
+   "default": "12",
+   "fieldname": "run_interval_hours",
+   "fieldtype": "Int",
+   "label": "Run Interval Hours"
+  },
+  {
+   "default": "1",
+   "fieldname": "urgent_margin_hours",
+   "fieldtype": "Int",
+   "label": "Urgent Margin Hours"
+  },
+  {
+   "fieldname": "batch_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "300",
+   "fieldname": "max_chars_per_text",
+   "fieldtype": "Int",
+   "label": "Max Chars Per Text"
+  },
+  {
+   "default": "truncate",
+   "fieldname": "over_length_policy",
+   "fieldtype": "Select",
+   "label": "Over Length Policy",
+   "options": "truncate\nskip"
+  },
+  {
+   "default": "3",
+   "fieldname": "max_runs_per_day",
+   "fieldtype": "Int",
+   "label": "Max Runs Per Day"
+  },
+  {
+   "default": "120",
+   "fieldname": "min_minutes_between_runs",
+   "fieldtype": "Int",
+   "label": "Min Minutes Between Runs"
+  },
+  {
+   "default": "2",
+   "fieldname": "skip_recent_failures_runs",
+   "fieldtype": "Int",
+   "label": "Skip Recent Failures Runs"
+  },
+  {
+   "fieldname": "cost_section",
+   "fieldtype": "Section Break",
+   "label": "Cost"
+  },
+  {
+   "default": "0.34",
+   "fieldname": "fallback_hourly_rate_usd",
+   "fieldtype": "Currency",
+   "label": "Fallback Hourly Rate USD"
+  },
+  {
+   "default": "180",
+   "fieldname": "est_startup_seconds",
+   "fieldtype": "Int",
+   "label": "Est Startup Seconds"
+  },
+  {
+   "default": "1.0",
+   "fieldname": "est_seconds_per_clip",
+   "fieldtype": "Float",
+   "label": "Est Seconds Per Clip"
+  },
+  {
+   "default": "1.3",
+   "fieldname": "estimate_safety_factor",
+   "fieldtype": "Float",
+   "label": "Estimate Safety Factor"
+  },
+  {
+   "fieldname": "cost_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1.00",
+   "fieldname": "max_cost_per_run_usd",
+   "fieldtype": "Currency",
+   "label": "Max Cost Per Run USD"
+  },
+  {
+   "default": "5.00",
+   "fieldname": "max_cost_per_day_usd",
+   "fieldtype": "Currency",
+   "label": "Max Cost Per Day USD"
+  },
+  {
+   "default": "100.00",
+   "fieldname": "max_cost_per_month_usd",
+   "fieldtype": "Currency",
+   "label": "Max Cost Per Month USD"
+  },
+  {
+   "fieldname": "time_section",
+   "fieldtype": "Section Break",
+   "label": "Time"
+  },
+  {
+   "default": "7200",
+   "fieldname": "pod_limit_max_seconds",
+   "fieldtype": "Int",
+   "label": "Pod Limit Max Seconds"
+  },
+  {
+   "default": "15",
+   "fieldname": "startup_deadline_minutes",
+   "fieldtype": "Int",
+   "label": "Startup Deadline Minutes"
+  },
+  {
+   "default": "6",
+   "fieldname": "heartbeat_timeout_minutes",
+   "fieldtype": "Int",
+   "label": "Heartbeat Timeout Minutes"
+  },
+  {
+   "default": "5",
+   "fieldname": "stopping_grace_minutes",
+   "fieldtype": "Int",
+   "label": "Stopping Grace Minutes"
+  },
+  {
+   "fieldname": "time_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "30",
+   "fieldname": "token_buffer_minutes",
+   "fieldtype": "Int",
+   "label": "Token Buffer Minutes"
+  },
+  {
+   "default": "90",
+   "fieldname": "termination_check_delay_seconds",
+   "fieldtype": "Int",
+   "label": "Termination Check Delay Seconds"
+  },
+  {
+   "fieldname": "breaker_section",
+   "fieldtype": "Section Break",
+   "label": "Breaker"
+  },
+  {
+   "default": "2",
+   "fieldname": "max_consecutive_bad_runs",
+   "fieldtype": "Int",
+   "label": "Max Consecutive Bad Runs"
+  },
+  {
+   "default": "20",
+   "fieldname": "bad_run_success_floor_percent",
+   "fieldtype": "Int",
+   "label": "Bad Run Success Floor Percent"
+  },
+  {
+   "fieldname": "alert_email",
+   "fieldtype": "Data",
+   "label": "Alert Email",
+   "options": "Email"
+  },
+  {
+   "fieldname": "runpod_section",
+   "fieldtype": "Section Break",
+   "label": "RunPod"
+  },
+  {
+   "default": "https://rest.runpod.io/v1",
+   "fieldname": "runpod_api_base",
+   "fieldtype": "Data",
+   "label": "RunPod API Base"
+  },
+  {
+   "fieldname": "image_name",
+   "fieldtype": "Data",
+   "label": "Image Name"
+  },
+  {
+   "fieldname": "registry_auth_id",
+   "fieldtype": "Data",
+   "label": "Registry Auth Id"
+  },
+  {
+   "default": "NVIDIA RTX A5000",
+   "fieldname": "gpu_type_ids",
+   "fieldtype": "Small Text",
+   "label": "GPU Type Ids (one per line, priority order)"
+  },
+  {
+   "default": "1",
+   "fieldname": "gpu_count",
+   "fieldtype": "Int",
+   "label": "GPU Count"
+  },
+  {
+   "fieldname": "cloud_type",
+   "fieldtype": "Select",
+   "label": "Cloud Type",
+   "options": "\nSecure\nCommunity"
+  },
+  {
+   "fieldname": "runpod_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "interruptible",
+   "fieldtype": "Check",
+   "label": "Interruptible"
+  },
+  {
+   "default": "40",
+   "fieldname": "container_disk_gb",
+   "fieldtype": "Int",
+   "label": "Container Disk GB"
+  },
+  {
+   "default": "0",
+   "fieldname": "volume_gb",
+   "fieldtype": "Int",
+   "label": "Volume GB"
+  },
+  {
+   "fieldname": "data_center_ids",
+   "fieldtype": "Small Text",
+   "label": "Data Center Ids"
+  },
+  {
+   "fieldname": "allowed_cuda_versions",
+   "fieldtype": "Small Text",
+   "label": "Allowed CUDA Versions"
+  },
+  {
+   "default": "20",
+   "fieldname": "http_timeout_seconds",
+   "fieldtype": "Int",
+   "label": "HTTP Timeout Seconds"
+  },
+  {
+   "fieldname": "site_section",
+   "fieldtype": "Section Break",
+   "label": "Site"
+  },
+  {
+   "fieldname": "public_base_url",
+   "fieldtype": "Data",
+   "label": "Public Base URL"
+  },
+  {
+   "default": "tap_lms.tapvoice.api.pod",
+   "fieldname": "api_module_path",
+   "fieldtype": "Data",
+   "label": "API Module Path"
+  },
+  {
+   "fieldname": "gcs_bucket",
+   "fieldtype": "Data",
+   "label": "GCS Bucket"
+  },
+  {
+   "default": "tts",
+   "fieldname": "gcs_prefix",
+   "fieldtype": "Data",
+   "label": "GCS Prefix"
+  },
+  {
+   "fieldname": "cdn_base_url",
+   "fieldtype": "Data",
+   "label": "CDN Base URL"
+  },
+  {
+   "fieldname": "site_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "model_revision",
+   "fieldtype": "Data",
+   "label": "Model Revision"
+  },
+  {
+   "default": "1",
+   "fieldname": "verify_urls_on_write",
+   "fieldtype": "Check",
+   "label": "Verify URLs On Write"
+  },
+  {
+   "fieldname": "pod_tuning_section",
+   "fieldtype": "Section Break",
+   "label": "Pod Tuning"
+  },
+  {
+   "default": "48",
+   "fieldname": "max_num_seqs",
+   "fieldtype": "Int",
+   "label": "Max Num Seqs"
+  },
+  {
+   "default": "8",
+   "fieldname": "decode_microbatch",
+   "fieldtype": "Int",
+   "label": "Decode Microbatch"
+  },
+  {
+   "default": "0.90",
+   "fieldname": "gpu_memory_utilization",
+   "fieldtype": "Float",
+   "label": "GPU Memory Utilization"
+  },
+  {
+   "default": "3.0",
+   "fieldname": "seconds_per_item_cap",
+   "fieldtype": "Float",
+   "label": "Seconds Per Item Cap"
+  },
+  {
+   "fieldname": "notes_section",
+   "fieldtype": "Section Break",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "operator_notes",
+   "fieldtype": "Text",
+   "label": "Operator Notes"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-06-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Tap Voice Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 0,
+   "export": 0,
+   "print": 0,
+   "read": 1,
+   "report": 0,
+   "role": "System Manager",
+   "share": 0,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

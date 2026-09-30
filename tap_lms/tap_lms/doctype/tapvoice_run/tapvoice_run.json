@@ -1,0 +1,808 @@
+{
+ "actions": [],
+ "autoname": "format:TVR-{YYYY}{MM}{DD}-{####}",
+ "creation": "2026-06-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "identity_section",
+  "status",
+  "status_reason",
+  "trigger_type",
+  "triggered_by",
+  "created_at",
+  "identity_column_break",
+  "decision",
+  "eligible_found",
+  "urgent_count",
+  "truncated_count",
+  "config_section",
+  "enabled",
+  "allow_force_start",
+  "skip_flagged",
+  "window_hours",
+  "window_basis",
+  "max_clips_per_run",
+  "min_items_to_deploy",
+  "run_interval_hours",
+  "urgent_margin_hours",
+  "max_chars_per_text",
+  "over_length_policy",
+  "config_column_break",
+  "max_runs_per_day",
+  "min_minutes_between_runs",
+  "skip_recent_failures_runs",
+  "fallback_hourly_rate_usd",
+  "est_startup_seconds",
+  "est_seconds_per_clip",
+  "estimate_safety_factor",
+  "max_cost_per_run_usd",
+  "max_cost_per_day_usd",
+  "max_cost_per_month_usd",
+  "pod_limit_max_seconds",
+  "startup_deadline_minutes",
+  "heartbeat_timeout_minutes",
+  "stopping_grace_minutes",
+  "token_buffer_minutes",
+  "termination_check_delay_seconds",
+  "model_revision",
+  "decision_section",
+  "skipped_unsupported_language",
+  "unsupported_language_values",
+  "skipped_empty_text",
+  "skipped_recent_failure",
+  "skipped_flagged",
+  "deferred_over_budget",
+  "estimated_cost_usd",
+  "manifest_section",
+  "manifest_json",
+  "manifest_count",
+  "manifest_served_at",
+  "served_count",
+  "runpod_section",
+  "pod_id",
+  "pod_name",
+  "hourly_rate",
+  "gpu_type_allocated",
+  "pod_created_at",
+  "first_contact_at",
+  "last_beat_at",
+  "last_phase",
+  "remaining_reported",
+  "runpod_column_break",
+  "results_section",
+  "written",
+  "already_set",
+  "stale",
+  "hash_mismatch",
+  "not_in_manifest",
+  "changed_during_write",
+  "pod_failed",
+  "not_processed",
+  "pod_section",
+  "pod_uploaded",
+  "pod_generated",
+  "pod_decoded",
+  "pod_truncated",
+  "pod_retried",
+  "pod_tokens",
+  "pod_audio_seconds",
+  "pod_startup_seconds",
+  "pod_run_seconds",
+  "pod_tokens_per_second",
+  "pod_gpu_sec_per_audio_min",
+  "pod_skipped_existing",
+  "completion_reason",
+  "stats_json",
+  "failures_section",
+  "failure_reasons",
+  "failed_items",
+  "cost_section",
+  "pod_reported_gpu_seconds",
+  "billed_seconds",
+  "overhead_seconds",
+  "estimated_cost_usd_final",
+  "pod_cost_proxy_usd",
+  "cost_per_clip_usd",
+  "cost_per_1000_usd",
+  "gpu_sec_per_audio_min",
+  "termination_section",
+  "termination_status",
+  "termination_attempts",
+  "terminated_at",
+  "last_runpod_response",
+  "last_progress_at",
+  "log_section",
+  "run_log"
+ ],
+ "fields": [
+  {
+   "fieldname": "identity_section",
+   "fieldtype": "Section Break",
+   "label": "Identity"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Draft\nDeploying\nStarting\nRunning\nStopping\nCompleted\nCompleted With Failures\nStopped\nFailed\nTimed Out\nLost\nDeploy Failed\nSkipped",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "status_reason",
+   "fieldtype": "Small Text",
+   "label": "Status Reason"
+  },
+  {
+   "fieldname": "trigger_type",
+   "fieldtype": "Select",
+   "label": "Trigger Type",
+   "options": "Manual\nCron"
+  },
+  {
+   "fieldname": "triggered_by",
+   "fieldtype": "Data",
+   "label": "Triggered By"
+  },
+  {
+   "fieldname": "created_at",
+   "fieldtype": "Datetime",
+   "label": "Created At"
+  },
+  {
+   "fieldname": "identity_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "decision",
+   "fieldtype": "Data",
+   "label": "Decision",
+   "read_only": 1
+  },
+  {
+   "fieldname": "eligible_found",
+   "fieldtype": "Int",
+   "label": "Eligible Found",
+   "read_only": 1
+  },
+  {
+   "fieldname": "urgent_count",
+   "fieldtype": "Int",
+   "label": "Urgent Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "truncated_count",
+   "fieldtype": "Int",
+   "label": "Truncated Count",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "config_section",
+   "fieldtype": "Section Break",
+   "label": "Config Snapshot"
+  },
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_force_start",
+   "fieldtype": "Check",
+   "label": "Allow Force Start",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "skip_flagged",
+   "fieldtype": "Check",
+   "label": "Skip Flagged",
+   "read_only": 1
+  },
+  {
+   "fieldname": "window_hours",
+   "fieldtype": "Int",
+   "label": "Window Hours",
+   "read_only": 1
+  },
+  {
+   "fieldname": "window_basis",
+   "fieldtype": "Data",
+   "label": "Window Basis",
+   "read_only": 1
+  },
+  {
+   "fieldname": "max_clips_per_run",
+   "fieldtype": "Int",
+   "label": "Max Clips Per Run",
+   "read_only": 1
+  },
+  {
+   "fieldname": "min_items_to_deploy",
+   "fieldtype": "Int",
+   "label": "Min Items To Deploy",
+   "read_only": 1
+  },
+  {
+   "fieldname": "run_interval_hours",
+   "fieldtype": "Int",
+   "label": "Run Interval Hours",
+   "read_only": 1
+  },
+  {
+   "fieldname": "urgent_margin_hours",
+   "fieldtype": "Int",
+   "label": "Urgent Margin Hours",
+   "read_only": 1
+  },
+  {
+   "fieldname": "max_chars_per_text",
+   "fieldtype": "Int",
+   "label": "Max Chars Per Text",
+   "read_only": 1
+  },
+  {
+   "fieldname": "over_length_policy",
+   "fieldtype": "Data",
+   "label": "Over Length Policy",
+   "read_only": 1
+  },
+  {
+   "fieldname": "config_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "max_runs_per_day",
+   "fieldtype": "Int",
+   "label": "Max Runs Per Day",
+   "read_only": 1
+  },
+  {
+   "fieldname": "min_minutes_between_runs",
+   "fieldtype": "Int",
+   "label": "Min Minutes Between Runs",
+   "read_only": 1
+  },
+  {
+   "fieldname": "skip_recent_failures_runs",
+   "fieldtype": "Int",
+   "label": "Skip Recent Failures Runs",
+   "read_only": 1
+  },
+  {
+   "fieldname": "fallback_hourly_rate_usd",
+   "fieldtype": "Currency",
+   "label": "Fallback Hourly Rate USD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "est_startup_seconds",
+   "fieldtype": "Int",
+   "label": "Est Startup Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "est_seconds_per_clip",
+   "fieldtype": "Float",
+   "label": "Est Seconds Per Clip",
+   "read_only": 1
+  },
+  {
+   "fieldname": "estimate_safety_factor",
+   "fieldtype": "Float",
+   "label": "Estimate Safety Factor",
+   "read_only": 1
+  },
+  {
+   "fieldname": "max_cost_per_run_usd",
+   "fieldtype": "Currency",
+   "label": "Max Cost Per Run USD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "max_cost_per_day_usd",
+   "fieldtype": "Currency",
+   "label": "Max Cost Per Day USD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "max_cost_per_month_usd",
+   "fieldtype": "Currency",
+   "label": "Max Cost Per Month USD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_limit_max_seconds",
+   "fieldtype": "Int",
+   "label": "Pod Limit Max Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "startup_deadline_minutes",
+   "fieldtype": "Int",
+   "label": "Startup Deadline Minutes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "heartbeat_timeout_minutes",
+   "fieldtype": "Int",
+   "label": "Heartbeat Timeout Minutes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "stopping_grace_minutes",
+   "fieldtype": "Int",
+   "label": "Stopping Grace Minutes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "token_buffer_minutes",
+   "fieldtype": "Int",
+   "label": "Token Buffer Minutes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "termination_check_delay_seconds",
+   "fieldtype": "Int",
+   "label": "Termination Check Delay Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "model_revision",
+   "fieldtype": "Data",
+   "label": "Model Revision",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "decision_section",
+   "fieldtype": "Section Break",
+   "label": "Decision Record"
+  },
+  {
+   "fieldname": "skipped_unsupported_language",
+   "fieldtype": "Int",
+   "label": "Skipped Unsupported Language",
+   "read_only": 1
+  },
+  {
+   "fieldname": "unsupported_language_values",
+   "fieldtype": "Small Text",
+   "label": "Unsupported Language Values",
+   "read_only": 1
+  },
+  {
+   "fieldname": "skipped_empty_text",
+   "fieldtype": "Int",
+   "label": "Skipped Empty Text",
+   "read_only": 1
+  },
+  {
+   "fieldname": "skipped_recent_failure",
+   "fieldtype": "Int",
+   "label": "Skipped Recent Failure",
+   "read_only": 1
+  },
+  {
+   "fieldname": "skipped_flagged",
+   "fieldtype": "Int",
+   "label": "Skipped Flagged",
+   "read_only": 1
+  },
+  {
+   "fieldname": "deferred_over_budget",
+   "fieldtype": "Int",
+   "label": "Deferred Over Budget",
+   "read_only": 1
+  },
+  {
+   "fieldname": "estimated_cost_usd",
+   "fieldtype": "Currency",
+   "label": "Estimated Cost USD",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "manifest_section",
+   "fieldtype": "Section Break",
+   "label": "Manifest"
+  },
+  {
+   "fieldname": "manifest_json",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Manifest JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "manifest_count",
+   "fieldtype": "Int",
+   "label": "Manifest Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "manifest_served_at",
+   "fieldtype": "Datetime",
+   "label": "Manifest Served At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "served_count",
+   "fieldtype": "Int",
+   "label": "Served Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "runpod_section",
+   "fieldtype": "Section Break",
+   "label": "RunPod"
+  },
+  {
+   "fieldname": "pod_id",
+   "fieldtype": "Data",
+   "label": "Pod Id",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_name",
+   "fieldtype": "Data",
+   "label": "Pod Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "hourly_rate",
+   "fieldtype": "Currency",
+   "label": "Hourly Rate",
+   "read_only": 1
+  },
+  {
+   "fieldname": "gpu_type_allocated",
+   "fieldtype": "Data",
+   "label": "GPU Type Allocated",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_created_at",
+   "fieldtype": "Datetime",
+   "label": "Pod Created At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "first_contact_at",
+   "fieldtype": "Datetime",
+   "label": "First Contact At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_beat_at",
+   "fieldtype": "Datetime",
+   "label": "Last Beat At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_phase",
+   "fieldtype": "Data",
+   "label": "Last Phase",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remaining_reported",
+   "fieldtype": "Int",
+   "label": "Remaining Reported",
+   "read_only": 1
+  },
+  {
+   "fieldname": "runpod_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "results_section",
+   "fieldtype": "Section Break",
+   "label": "LMS-Verified Results"
+  },
+  {
+   "default": "0",
+   "fieldname": "written",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Written",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "already_set",
+   "fieldtype": "Int",
+   "label": "Already Set",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "stale",
+   "fieldtype": "Int",
+   "label": "Stale",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "hash_mismatch",
+   "fieldtype": "Int",
+   "label": "Hash Mismatch",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "not_in_manifest",
+   "fieldtype": "Int",
+   "label": "Not In Manifest",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "changed_during_write",
+   "fieldtype": "Int",
+   "label": "Changed During Write",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "pod_failed",
+   "fieldtype": "Int",
+   "label": "Pod Failed",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "not_processed",
+   "fieldtype": "Int",
+   "label": "Not Processed",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "pod_section",
+   "fieldtype": "Section Break",
+   "label": "Pod-Reported Stats"
+  },
+  {
+   "fieldname": "pod_uploaded",
+   "fieldtype": "Int",
+   "label": "Pod Uploaded",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_generated",
+   "fieldtype": "Int",
+   "label": "Pod Generated",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_decoded",
+   "fieldtype": "Int",
+   "label": "Pod Decoded",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_truncated",
+   "fieldtype": "Int",
+   "label": "Pod Truncated",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_retried",
+   "fieldtype": "Int",
+   "label": "Pod Retried",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_tokens",
+   "fieldtype": "Int",
+   "label": "Pod Tokens",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_audio_seconds",
+   "fieldtype": "Float",
+   "label": "Pod Audio Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_startup_seconds",
+   "fieldtype": "Float",
+   "label": "Pod Startup Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_run_seconds",
+   "fieldtype": "Float",
+   "label": "Pod Run Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_tokens_per_second",
+   "fieldtype": "Float",
+   "label": "Pod Tokens Per Second",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_gpu_sec_per_audio_min",
+   "fieldtype": "Float",
+   "label": "Pod GPU Sec Per Audio Min",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_skipped_existing",
+   "fieldtype": "Int",
+   "label": "Pod Skipped Existing",
+   "read_only": 1
+  },
+  {
+   "fieldname": "completion_reason",
+   "fieldtype": "Data",
+   "label": "Completion Reason",
+   "read_only": 1
+  },
+  {
+   "fieldname": "stats_json",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Stats JSON",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "failures_section",
+   "fieldtype": "Section Break",
+   "label": "Failures"
+  },
+  {
+   "fieldname": "failure_reasons",
+   "fieldtype": "Small Text",
+   "label": "Failure Reasons",
+   "read_only": 1
+  },
+  {
+   "fieldname": "failed_items",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Failed Items",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "cost_section",
+   "fieldtype": "Section Break",
+   "label": "Cost"
+  },
+  {
+   "fieldname": "pod_reported_gpu_seconds",
+   "fieldtype": "Float",
+   "label": "Pod Reported GPU Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "billed_seconds",
+   "fieldtype": "Float",
+   "label": "Billed Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "overhead_seconds",
+   "fieldtype": "Float",
+   "label": "Overhead Seconds",
+   "read_only": 1
+  },
+  {
+   "fieldname": "estimated_cost_usd_final",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Estimated Cost USD Final",
+   "read_only": 1
+  },
+  {
+   "fieldname": "pod_cost_proxy_usd",
+   "fieldtype": "Currency",
+   "label": "Pod Cost Proxy USD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cost_per_clip_usd",
+   "fieldtype": "Float",
+   "label": "Cost Per Clip USD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "cost_per_1000_usd",
+   "fieldtype": "Currency",
+   "label": "Cost Per 1000 USD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "gpu_sec_per_audio_min",
+   "fieldtype": "Float",
+   "label": "GPU Sec Per Audio Min",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "termination_section",
+   "fieldtype": "Section Break",
+   "label": "Termination"
+  },
+  {
+   "default": "Not Needed",
+   "fieldname": "termination_status",
+   "fieldtype": "Select",
+   "label": "Termination Status",
+   "options": "Not Needed\nPending\nVerified\nManual Action Needed",
+   "read_only": 1
+  },
+  {
+   "fieldname": "termination_attempts",
+   "fieldtype": "Int",
+   "label": "Termination Attempts",
+   "read_only": 1
+  },
+  {
+   "fieldname": "terminated_at",
+   "fieldtype": "Datetime",
+   "label": "Terminated At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_runpod_response",
+   "fieldtype": "Small Text",
+   "label": "Last RunPod Response",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_progress_at",
+   "fieldtype": "Datetime",
+   "label": "Last Progress At",
+   "read_only": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "log_section",
+   "fieldtype": "Section Break",
+   "label": "Log"
+  },
+  {
+   "fieldname": "run_log",
+   "fieldtype": "Code",
+   "label": "Run Log",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-06-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Tap Voice Run",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 0,
+   "write": 0
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}
