@@ -1,72 +1,56 @@
 #!/bin/sh
 
+# Run from ~/frappe-bench
+# Usage: sh run_tapvoice_tests.sh
+
 set -e
 
-BASE="tap_lms/tap_lms/doctype"
+SITE="lms.site"
+APP="tap_lms"
 
-if [ ! -d "$BASE" ]; then
-    echo "error: $BASE not found relative to current directory ($(pwd))." >&2
-    echo "Run this script from /workspaces/frappe_tap/, or edit BASE at the top of this script." >&2
-    exit 1
-fi
-
-USE_GIT=0
-if [ -d ".git" ] && command -v git >/dev/null 2>&1; then
-    USE_GIT=1
-fi
-
-mv_path() {
-    old="$1"
-    new="$2"
-    if [ ! -e "$old" ]; then
-        return 0
-    fi
-    if [ "$USE_GIT" = "1" ]; then
-        git mv "$old" "$new"
-    else
-        mv "$old" "$new"
-    fi
-    echo "renamed: $old -> $new"
-}
-
-rename_settings() {
-    old_dir="$BASE/tapvoice_settings"
-    new_dir="$BASE/tap_voice_settings"
-
-    if [ ! -d "$old_dir" ]; then
-        echo "skip: $old_dir does not exist"
-        return 0
-    fi
-
-    mv_path "$old_dir" "$new_dir"
-
-    mv_path "$new_dir/tapvoice_settings.json" "$new_dir/tap_voice_settings.json"
-    mv_path "$new_dir/tapvoice_settings.py"   "$new_dir/tap_voice_settings.py"
-    mv_path "$new_dir/tapvoice_settings.js"   "$new_dir/tap_voice_settings.js"
-}
-
-rename_run() {
-    old_dir="$BASE/tapvoice_run"
-    new_dir="$BASE/tap_voice_run"
-
-    if [ ! -d "$old_dir" ]; then
-        echo "skip: $old_dir does not exist"
-        return 0
-    fi
-
-    mv_path "$old_dir" "$new_dir"
-
-    mv_path "$new_dir/tapvoice_run.json"      "$new_dir/tap_voice_run.json"
-    mv_path "$new_dir/tapvoice_run.py"        "$new_dir/tap_voice_run.py"
-    mv_path "$new_dir/tapvoice_run.js"        "$new_dir/tap_voice_run.js"
-    mv_path "$new_dir/tapvoice_run_list.js"   "$new_dir/tap_voice_run_list.js"
-    mv_path "$new_dir/test_tapvoice_run.py"   "$new_dir/test_tap_voice_run.py"
-}
-
-rename_settings
-rename_run
+echo "=== 1. Enabling tests on ${SITE} (safe to re-run) ==="
+bench --site "${SITE}" set-config allow_tests true
 
 echo ""
-echo "done. If this repo is checked out inside a frappe-bench apps folder, next run:"
-echo "  bench --site <your-site> clear-cache"
-echo "  bench --site <your-site> migrate"
+echo "=== 2. Clearing cache ==="
+bench --site "${SITE}" clear-cache
+
+echo ""
+echo "=== 3. Checking fixture file exists ==="
+FIXTURE="apps/${APP}/${APP}/tapvoice/test/fixtures/content_hash_vectors.json"
+if [ ! -f "$FIXTURE" ]; then
+    echo "MISSING: $FIXTURE"
+    echo "Copy the generated content_hash_vectors.json into that path before continuing."
+    exit 1
+fi
+echo "found: $FIXTURE"
+
+echo ""
+echo "=== 4. Checking doctype folders are correctly named ==="
+for name in tap_voice_settings tap_voice_run; do
+    if [ ! -d "apps/${APP}/${APP}/${APP}/doctype/${name}" ]; then
+        echo "MISSING doctype folder: ${name}"
+        exit 1
+    fi
+done
+echo "doctype folders OK"
+
+echo ""
+echo "=== 5. Running full tapvoice test module ==="
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_contract"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_text"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_tokens"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_runpod_client"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_eligibility"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_planner_budget"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_pod_api"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_deploy"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.tapvoice.test.test_reaper"
+
+echo ""
+echo "=== 6. Running doctype-level tests ==="
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.${APP}.doctype.tap_voice_run.test_tap_voice_run"
+bench --site "${SITE}" run-tests --app "${APP}" --module "${APP}.${APP}.doctype.secrets.test_secrets"
+
+echo ""
+echo "=== ALL DONE ==="
