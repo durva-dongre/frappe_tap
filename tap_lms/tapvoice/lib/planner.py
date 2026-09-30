@@ -8,13 +8,15 @@ DECISION_SKIP_NOTHING = "Skip: nothing to convert"
 DECISION_SKIP_MINIMUM = "Skip: below minimum"
 DECISION_SKIP_BUDGET = "Skip: budget"
 
+DEFAULT_MAX_SCAN = 5000
+
 
 def _is_urgent(age_hours, window_hours, run_interval_hours, urgent_margin_hours):
     return age_hours + run_interval_hours >= window_hours - urgent_margin_hours
 
 
-def plan_batch(settings, force=False):
-    found = find_eligible(settings)
+def plan_batch(settings, force=False, max_scan=DEFAULT_MAX_SCAN):
+    found = find_eligible(settings, max_scan)
 
     if not found["items"]:
         return {

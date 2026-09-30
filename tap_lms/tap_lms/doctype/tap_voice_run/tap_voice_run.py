@@ -8,6 +8,10 @@ class TapVoiceRun(Document):
     def before_insert(self):
         self.flags[ALLOWED_INTERNAL_FLAG] = True
 
+    def before_save(self):
+        if not self.flags.get(ALLOWED_INTERNAL_FLAG) and not self.is_new():
+            frappe.throw("Tap Voice Run records cannot be edited directly")
+
     def validate(self):
         if self.flags.get(ALLOWED_INTERNAL_FLAG):
             return

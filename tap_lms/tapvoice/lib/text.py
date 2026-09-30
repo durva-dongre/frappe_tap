@@ -53,7 +53,7 @@ def _truncate(text, limit):
     return "", True
 
 
-def prepare(raw_text, max_chars, policy):
+def prepare(raw_text, language, max_chars, policy):
     stripped_tags = strip_markup(raw_text)
     stripped = _strip_markdown_and_emoji(stripped_tags)
     cleaned = clean_text(stripped)

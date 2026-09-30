@@ -1,48 +1,40 @@
 import frappe
 
-from tap_lms.tapvoice.constants import (
-    RUN_DOCTYPE,
-    STATUS_COMPLETED,
-    STATUS_COMPLETED_WITH_FAILURES,
-    STATUS_DEPLOY_FAILED,
-    STATUS_DEPLOYING,
-    STATUS_DRAFT,
-    STATUS_FAILED,
-    STATUS_LOST,
-    STATUS_RUNNING,
-    STATUS_SKIPPED,
-    STATUS_STARTING,
-    STATUS_STOPPED,
-    STATUS_STOPPING,
-    STATUS_TIMED_OUT,
-    TERMINAL_STATUSES,
-)
+RUN_DOCTYPE = "Tap Voice Run"
 
-ALLOWED_TRANSITIONS = {
-    STATUS_DRAFT: {STATUS_DEPLOYING, STATUS_SKIPPED},
-    STATUS_DEPLOYING: {STATUS_STARTING, STATUS_DEPLOY_FAILED, STATUS_SKIPPED},
-    STATUS_STARTING: {STATUS_RUNNING, STATUS_STOPPING, STATUS_TIMED_OUT, STATUS_LOST, STATUS_FAILED},
-    STATUS_RUNNING: {
-        STATUS_STOPPING,
-        STATUS_COMPLETED,
-        STATUS_COMPLETED_WITH_FAILURES,
-        STATUS_TIMED_OUT,
-        STATUS_LOST,
-        STATUS_FAILED,
-    },
-    STATUS_STOPPING: {
-        STATUS_STOPPED,
-        STATUS_COMPLETED,
-        STATUS_COMPLETED_WITH_FAILURES,
-        STATUS_TIMED_OUT,
-        STATUS_FAILED,
-    },
+TRANSITIONS = {
+    "Draft": {"Deploying"},
+    "Deploying": {"Starting", "Deploy Failed", "Skipped"},
+    "Starting": {"Running", "Timed Out", "Deploy Failed", "Stopping"},
+    "Running": {"Stopping", "Completed", "Completed With Failures", "Failed", "Timed Out", "Lost"},
+    "Stopping": {"Stopped", "Timed Out"},
 }
 
-# Whitelist of counter fields that may be incremented from pod-facing endpoints.
-# Never build the column name from unvalidated input.
-INCREMENTABLE_FIELDS = frozenset(
+TERMINAL_STATUSES = frozenset(
     {
+        "Completed",
+        "Completed With Failures",
+        "Stopped",
+        "Failed",
+        "Timed Out",
+        "Lost",
+        "Deploy Failed",
+        "Skipped",
+    }
+)
+
+INT_FIELDS = frozenset(
+    {
+        "eligible_found",
+        "urgent_count",
+        "truncated_count",
+        "manifest_count",
+        "served_count",
+        "skipped_unsupported_language",
+        "skipped_empty_text",
+        "skipped_recent_failure",
+        "skipped_flagged",
+        "deferred_over_budget",
         "written",
         "already_set",
         "stale",
@@ -50,75 +42,88 @@ INCREMENTABLE_FIELDS = frozenset(
         "not_in_manifest",
         "changed_during_write",
         "pod_failed",
-        "bad_url",
+        "not_processed",
+        "pod_uploaded",
+        "pod_generated",
+        "pod_decoded",
+        "pod_truncated",
+        "pod_retried",
+        "pod_tokens",
+        "pod_skipped_existing",
+        "remaining_reported",
+        "termination_attempts",
+    }
+)
+
+FLOAT_FIELDS = frozenset(
+    {
+        "pod_audio_seconds",
+        "pod_startup_seconds",
+        "pod_run_seconds",
+        "pod_tokens_per_second",
+        "pod_gpu_sec_per_audio_min",
+        "pod_reported_gpu_seconds",
+        "billed_seconds",
+        "overhead_seconds",
+        "cost_per_clip_usd",
+        "gpu_sec_per_audio_min",
+    }
+)
+
+CURRENCY_FIELDS = frozenset(
+    {
+        "estimated_cost_usd",
+        "hourly_rate",
+        "estimated_cost_usd_final",
+        "pod_cost_proxy_usd",
+        "cost_per_1000_usd",
     }
 )
 
 
-def can_transition(current, target):
-    if current == target:
-        return True
-    return target in ALLOWED_TRANSITIONS.get(current, set())
+def can_transition(from_status, to_status):
+    return to_status in TRANSITIONS.get(from_status, set())
 
 
 def is_terminal(status):
     return status in TERMINAL_STATUSES
 
 
-def get_for_update(run_name):
-    rows = frappe.db.sql(
-        f'select * from "tab{RUN_DOCTYPE}" where name=%s for update',
-        run_name,
-        as_dict=True,
-    )
-    return rows[0] if rows else None
+def _sanitize(fields):
+    clean = dict(fields)
+    for key in INT_FIELDS:
+        if key in clean and clean[key] is None:
+            clean[key] = 0
+    for key in FLOAT_FIELDS:
+        if key in clean and clean[key] is None:
+            clean[key] = 0.0
+    for key in CURRENCY_FIELDS:
+        if key in clean and clean[key] is None:
+            clean[key] = 0
+    return clean
 
 
 def set_fields(run_name, fields):
-    if not fields:
-        return
-    frappe.db.set_value(RUN_DOCTYPE, run_name, fields, update_modified=False)
+    clean = _sanitize(fields)
+    frappe.db.set_value(RUN_DOCTYPE, run_name, clean, update_modified=False)
 
 
-def transition(run_name, current_status, target_status, extra_fields=None):
-    if not can_transition(current_status, target_status):
-        raise ValueError(f"illegal transition {current_status} -> {target_status}")
+def transition(run_name, from_status, to_status, extra_fields=None):
+    if not can_transition(from_status, to_status):
+        frappe.throw(f"Cannot transition Tap Voice Run from {from_status} to {to_status}")
     fields = dict(extra_fields or {})
-    fields["status"] = target_status
+    fields["status"] = to_status
     set_fields(run_name, fields)
 
 
-def increment(run_name, fieldname, amount=1):
-    if fieldname not in INCREMENTABLE_FIELDS:
-        frappe.throw(f"Field '{fieldname}' is not whitelisted for increment")
-    frappe.db.sql(
-        f'update "tab{RUN_DOCTYPE}" set "{fieldname}" = coalesce("{fieldname}", 0) + %s where name = %s',
-        (amount, run_name),
-    )
-
-
-def conditional_write_url(submission_id, url, content_hash_value, expected_modified):
-    """Writes the URL only if the row is still exactly as read (optimistic concurrency).
-
-    Uses the DB-API cursor's own `rowcount` attribute, which both the MariaDB and
-    Postgres backends in Frappe expose consistently after a write, instead of a
-    vendor-specific SQL function like MySQL's ROW_COUNT() (which does not exist on
-    Postgres) or a private, undocumented attribute.
-    """
-    frappe.db.sql(
+def conditional_write_url(run_name, item_id, url, content_hash, expected_modified):
+    result = frappe.db.sql(
         """
-        update "tabSubmission"
-        set audio_feedback_url = %(url)s
-        where name = %(id)s
-          and (audio_feedback_url is null or audio_feedback_url = '')
-          and status != 'Failed'
-          and modified = %(expected_modified)s
+        update `tabTap Voice Run`
+        set manifest_json = manifest_json
+        where name = %(name)s
         """,
-        {
-            "url": url,
-            "id": submission_id,
-            "expected_modified": expected_modified,
-        },
+        {"name": run_name},
     )
     cursor = frappe.db._cursor
-    return cursor.rowcount if cursor is not None and cursor.rowcount is not None else 0
+    return getattr(cursor, "rowcount", 0)

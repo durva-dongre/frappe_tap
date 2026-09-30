@@ -1,15 +1,21 @@
 import frappe
 
-from tap_lms.tapvoice.lib import runpod, settings as settings_lib
+from tap_lms.tapvoice.lib import secrets as secrets_lib
+from tap_lms.tapvoice.lib import settings as settings_lib
 from tap_lms.tapvoice.lib.planner import plan_batch
+from tap_lms.tapvoice.lib.runpod import AmbiguousCreateError, RunPodClient, RunPodError
 
 LOCK_KEY = "tapvoice:deploy:mutex"
 LOCK_TTL_SECONDS = 300
 
 
 def _acquire_mutex():
-    client = frappe.cache().redis
-    return bool(client.set(LOCK_KEY, "1", nx=True, ex=LOCK_TTL_SECONDS))
+    cache = frappe.cache()
+    acquired = cache.set_value(LOCK_KEY, "1", expires_in_sec=LOCK_TTL_SECONDS)
+    if acquired is False:
+        return False
+    current = cache.get_value(LOCK_KEY)
+    return current in ("1", b"1")
 
 
 def _release_mutex():
@@ -46,16 +52,17 @@ def deploy_new(trigger_type="Manual", triggered_by=None, force=False):
         run = _create_run(settings, trigger_type, triggered_by, plan, status="Deploying")
         frappe.db.commit()
 
+        client = RunPodClient(settings, secrets_lib.all_required())
         try:
-            pod = runpod.create_pod(settings, run.name, plan)
-        except runpod.AmbiguousCreateError:
-            existing = runpod.find_by_name(settings, run.name)
+            pod = client.create(_pod_payload(settings, run.name, plan))
+        except AmbiguousCreateError:
+            existing = client.find_by_name(run.name)
             if existing:
                 _record_pod(run.name, existing)
             else:
                 _mark_deploy_failed(run.name, "ambiguous create, no pod found on lookup")
                 return {"decision": "Deploy Failed", "run": run.name}
-        except runpod.RunPodError as exc:
+        except RunPodError as exc:
             _mark_deploy_failed(run.name, str(exc))
             return {"decision": "Deploy Failed", "run": run.name}
         else:
@@ -64,6 +71,20 @@ def deploy_new(trigger_type="Manual", triggered_by=None, force=False):
         return {"decision": "Deploy", "run": run.name}
     finally:
         _release_mutex()
+
+
+def _pod_payload(settings, run_name, plan):
+    return {
+        "name": run_name,
+        "imageName": settings.image_name,
+        "gpuTypeIds": [line.strip() for line in (settings.gpu_type_ids or "").splitlines() if line.strip()],
+        "gpuCount": settings.gpu_count,
+        "cloudType": settings.cloud_type or "SECURE",
+        "containerDiskInGb": settings.container_disk_gb,
+        "volumeInGb": settings.volume_gb,
+        "interruptible": bool(settings.interruptible),
+        "env": {},
+    }
 
 
 def _create_run(settings, trigger_type, triggered_by, plan, status):

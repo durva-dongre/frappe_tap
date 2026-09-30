@@ -1,162 +1,80 @@
 [
   {
-    "label": "english_basic",
+    "name": "base",
     "text": "Hello, this is a short calibration sentence.",
-    "cleaned_text": "Hello, this is a short calibration sentence.",
     "voice": "English (Female)",
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "5809e95a50b0e770c7ea1ea5e8683ac33c4d40bb3f2f0c63f48f7f07f963eaff"
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_BASE"
   },
   {
-    "label": "hindi_basic",
-    "text": "नमस्ते, यह एक छोटा परीक्षण है।",
-    "cleaned_text": "नमस्ते, यह एक छोटा परीक्षण है।",
-    "voice": "Hindi (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "85ee9280befceaee0113b4e9ec79eca23964db91c8f408ad661e2a1c8ea38157"
-  },
-  {
-    "label": "marathi_basic",
-    "text": "नमस्कार, ही एक छोटी चाचणी आहे.",
-    "cleaned_text": "नमस्कार, ही एक छोटी चाचणी आहे.",
-    "voice": "Marathi (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "5dc2c5b12ca7746cf5a3f304b98150ccaf30eb62cb764699c22c4c94c834e3fe"
-  },
-  {
-    "label": "kannada_basic",
-    "text": "ನಮಸ್ಕಾರ, ಇದು ಒಂದು ಸಣ್ಣ ಪರೀಕ್ಷೆ.",
-    "cleaned_text": "ನಮಸ್ಕಾರ, ಇದು ಒಂದು ಸಣ್ಣ ಪರೀಕ್ಷೆ.",
-    "voice": "Kannada (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "9cfbe0b917054be89d6f475ec70a7965d577c3cc4c72332819e73e3a9dc6d46c"
-  },
-  {
-    "label": "punjabi_basic",
-    "text": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ, ਇਹ ਇੱਕ ਛੋਟਾ ਟੈਸਟ ਹੈ।",
-    "cleaned_text": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ, ਇਹ ਇੱਕ ਛੋਟਾ ਟੈਸਟ ਹੈ।",
-    "voice": "Punjabi (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "de659bb9496d5e8eae13921b94950937bbad908d7a2d99490929e727926b07a2"
-  },
-  {
-    "label": "nfc_input",
-    "text": "café",
-    "cleaned_text": "café",
-    "voice": "English (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "46bc0fe0951828722b2081263935bf7da5b4ee0e4709d8ab303b045edf07f4e6"
-  },
-  {
-    "label": "nfd_input",
-    "text": "café",
-    "cleaned_text": "café",
-    "voice": "English (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "46bc0fe0951828722b2081263935bf7da5b4ee0e4709d8ab303b045edf07f4e6"
-  },
-  {
-    "label": "zero_width_chars",
-    "text": "Hello​world‌ test‍",
-    "cleaned_text": "Helloworld test",
-    "voice": "English (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "a9fd920d49085d221a57079629399c01d257754c100a18775a25f5441728ebc8"
-  },
-  {
-    "label": "tabs_and_newlines",
-    "text": "Line one\tLine two\nLine three",
-    "cleaned_text": "Line one Line two Line three",
-    "voice": "English (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "d7238291566e16fe1a2b653cdf890e4fcc00f39308e3cab6ac5ee20693f53181"
-  },
-  {
-    "label": "trailing_spaces",
-    "text": "Trailing space text   ",
-    "cleaned_text": "Trailing space text",
-    "voice": "English (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "6820fddbf65305387ec6f8e962a01f636dfe93464ec75ab5e2d00d864f6f1d79"
-  },
-  {
-    "label": "devanagari_danda",
-    "text": "यह एक वाक्य है।",
-    "cleaned_text": "यह एक वाक्य है।",
-    "voice": "Hindi (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "9c9f463e8c946c192dea0fd87a63ca371fa68d878d9b994e389df67800929722"
-  },
-  {
-    "label": "devanagari_double_danda",
-    "text": "यह एक वाक्य है॥",
-    "cleaned_text": "यह एक वाक्य है॥",
-    "voice": "Hindi (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "ce7791a73f6094058d52154265a69877649a0f03f6a01e2b8e6edd5661bc22d4"
-  },
-  {
-    "label": "same_text_rev1",
-    "text": "Same text different revision",
-    "cleaned_text": "Same text different revision",
-    "voice": "English (Female)",
-    "emotion": null,
-    "format": "ogg",
-    "model_revision": "rev1",
-    "expected_hash": "2a812f6525a6a7a7c8f5bef1b3b2a6a48a55257ff37c3ffd92d756846f39630f"
-  },
-  {
-    "label": "same_text_rev2",
-    "text": "Same text different revision",
-    "cleaned_text": "Same text different revision",
+    "name": "same_text_diff_revision",
+    "text": "Hello, this is a short calibration sentence.",
     "voice": "English (Female)",
     "emotion": null,
     "format": "ogg",
     "model_revision": "rev2",
-    "expected_hash": "521becb4f6b28bc92d36afed29497d79563c15d08eb8cdf5ab263944424ec405"
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_DIFF_REV"
   },
   {
-    "label": "with_emotion_happy",
-    "text": "Great job on this assignment!",
-    "cleaned_text": "Great job on this assignment!",
-    "voice": "English (Female)",
-    "emotion": "happy",
+    "name": "hindi_nfc",
+    "raw_text": "\u0928\u092e\u0938\u094d\u0924\u0947, \u092f\u0939 \u090f\u0915 \u091b\u094b\u091f\u093e \u092a\u0930\u0940\u0915\u094d\u0937\u0923 \u0939\u0948\u0964",
+    "text": "\u0928\u092e\u0938\u094d\u0924\u0947, \u092f\u0939 \u090f\u0915 \u091b\u094b\u091f\u093e \u092a\u0930\u0940\u0915\u094d\u0937\u0923 \u0939\u0948\u0964",
+    "voice": "Hindi (Female)",
+    "emotion": null,
     "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "d63452b15e215dfa34c07ae25236ec13de2502e717512b565a767058af828508"
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_HINDI"
   },
   {
-    "label": "wav_format",
-    "text": "Testing wav format output.",
-    "cleaned_text": "Testing wav format output.",
+    "name": "marathi_zero_width",
+    "raw_text": "\u0928\u092e\u0938\u094d\u0915\u093e\u0930,\u200b \u0939\u0940 \u090f\u0915 \u091b\u094b\u091f\u0940 \u091a\u093e\u091a\u0923\u0940 \u0906\u0939\u0947.",
+    "text": "\u0928\u092e\u0938\u094d\u0915\u093e\u0930, \u0939\u0940 \u090f\u0915 \u091b\u094b\u091f\u0940 \u091a\u093e\u091a\u0923\u0940 \u0906\u0939\u0947.",
+    "voice": "Marathi (Female)",
+    "emotion": null,
+    "format": "ogg",
+    "model_revision": "rev1",
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_MARATHI"
+  },
+  {
+    "name": "kannada_tabs_newlines",
+    "raw_text": "\u0928\u092e\u0938\u094d\u0915\u093e\u0930,\t\u0907\u0926\u0941\n\u0913\u0902\u0926\u0941 \u0938\u0923\u094d\u0923 \u092a\u0930\u0940\u0915\u094d\u0937\u0947.",
+    "text": "\u0928\u092e\u0938\u094d\u0915\u093e\u0930, \u0907\u0926\u0941 \u0913\u0902\u0926\u0941 \u0938\u0923\u094d\u0923 \u092a\u0930\u0940\u0915\u094d\u0937\u0947.",
+    "voice": "Kannada (Female)",
+    "emotion": null,
+    "format": "ogg",
+    "model_revision": "rev1",
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_KANNADA"
+  },
+  {
+    "name": "punjabi_trailing_space",
+    "raw_text": "\u0a38\u0a24 \u0a38\u0a3c\u0a5d\u0a40 \u0a05\u0a15\u0a3e\u0a32   ",
+    "text": "\u0a38\u0a24 \u0a38\u0a3c\u0a5d\u0a40 \u0a05\u0a15\u0a3e\u0a32",
+    "voice": "Punjabi (Female)",
+    "emotion": null,
+    "format": "ogg",
+    "model_revision": "rev1",
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_PUNJABI"
+  },
+  {
+    "name": "devanagari_danda",
+    "raw_text": "\u092a\u0939\u0932\u093e \u0935\u093e\u0915\u094d\u092f\u0964 \u0926\u0942\u0938\u0930\u093e \u0935\u093e\u0915\u094d\u092f\u0964",
+    "text": "\u092a\u0939\u0932\u093e \u0935\u093e\u0915\u094d\u092f\u0964 \u0926\u0942\u0938\u0930\u093e \u0935\u093e\u0915\u094d\u092f\u0964",
+    "voice": "Hindi (Female)",
+    "emotion": null,
+    "format": "ogg",
+    "model_revision": "rev1",
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_DANDA"
+  },
+  {
+    "name": "nfd_input",
+    "raw_text": "e\u0301clat",
+    "text": "\u00e9clat",
     "voice": "English (Female)",
     "emotion": null,
-    "format": "wav",
+    "format": "ogg",
     "model_revision": "rev1",
-    "expected_hash": "811f46ca0ef101f230c19975f9fedc03f90d828aae5ca137c243cd9074d36b1d"
+    "expected_hash": "REPLACE_WITH_GENERATED_HASH_NFD"
   }
 ]
