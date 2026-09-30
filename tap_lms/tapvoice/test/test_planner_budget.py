@@ -5,22 +5,31 @@ from tap_lms.tapvoice.constants import DECISION_DEPLOY, DECISION_SKIP_BELOW_MINI
 from tap_lms.tapvoice.lib import planner as planner_lib
 from tap_lms.tapvoice.lib.settings import load as load_settings
 
+TEST_MARKER = "planner-budget-test-marker"
+
 
 class TestPlanner(FrappeTestCase):
     def setUp(self):
+        frappe.db.delete(
+            "Submission", {"overall_feedback_translated": ["like", f"%{TEST_MARKER}%"]}
+        )
+        frappe.db.commit()
         self._created = []
 
     def tearDown(self):
         for name in self._created:
             frappe.delete_doc("Submission", name, force=True, ignore_permissions=True)
-        frappe.db.rollback()
+        frappe.db.delete(
+            "Submission", {"overall_feedback_translated": ["like", f"%{TEST_MARKER}%"]}
+        )
+        frappe.db.commit()
 
     def _make_submission(self, age_hours=1):
         doc = frappe.get_doc(
             {
                 "doctype": "Submission",
                 "status": "Completed",
-                "overall_feedback_translated": "Good feedback for testing purposes here.",
+                "overall_feedback_translated": f"Good feedback for testing purposes here. {TEST_MARKER}",
                 "translation_language": "english",
                 "audio_feedback_url": "",
             }
@@ -36,6 +45,9 @@ class TestPlanner(FrappeTestCase):
     def _settings(self, **overrides):
         settings = load_settings()
         settings.window_hours = 72
+        settings.max_cost_per_run_usd = 100
+        settings.max_cost_per_day_usd = 100
+        settings.max_cost_per_month_usd = 1000
         for key, value in overrides.items():
             setattr(settings, key, value)
         return settings
@@ -53,9 +65,6 @@ class TestPlanner(FrappeTestCase):
             window_hours=72,
             run_interval_hours=12,
             urgent_margin_hours=1,
-            max_cost_per_run_usd=100,
-            max_cost_per_day_usd=100,
-            max_cost_per_month_usd=1000,
         )
         plan = planner_lib.plan_batch(settings)
         self.assertEqual(plan.decision, DECISION_DEPLOY)
@@ -93,4 +102,4 @@ class TestPlanner(FrappeTestCase):
             max_cost_per_month_usd=10000,
         )
         plan = planner_lib.plan_batch(settings)
-        self.assertLessEqual(len(plan.items), 2)
+        self.assertLessEqual(len(plan.items), 2) 
