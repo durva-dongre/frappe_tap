@@ -6,7 +6,7 @@ ALLOWED_INTERNAL_FLAG = "_tapvoice_internal_write"
 
 class TapVoiceRun(Document):
     def before_insert(self):
-        setattr(self.flags, ALLOWED_INTERNAL_FLAG, True)
+        self.flags[ALLOWED_INTERNAL_FLAG] = True
 
     def validate(self):
         if self.flags.get(ALLOWED_INTERNAL_FLAG):

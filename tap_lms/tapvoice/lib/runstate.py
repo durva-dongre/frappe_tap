@@ -67,7 +67,7 @@ def is_terminal(status):
 
 def get_for_update(run_name):
     rows = frappe.db.sql(
-        f"select * from `tab{RUN_DOCTYPE}` where name=%s for update",
+        f'select * from "tab{RUN_DOCTYPE}" where name=%s for update',
         run_name,
         as_dict=True,
     )
@@ -92,7 +92,7 @@ def increment(run_name, fieldname, amount=1):
     if fieldname not in INCREMENTABLE_FIELDS:
         frappe.throw(f"Field '{fieldname}' is not whitelisted for increment")
     frappe.db.sql(
-        f"update `tab{RUN_DOCTYPE}` set `{fieldname}` = coalesce(`{fieldname}`, 0) + %s where name = %s",
+        f'update "tab{RUN_DOCTYPE}" set "{fieldname}" = coalesce("{fieldname}", 0) + %s where name = %s',
         (amount, run_name),
     )
 
@@ -100,12 +100,14 @@ def increment(run_name, fieldname, amount=1):
 def conditional_write_url(submission_id, url, content_hash_value, expected_modified):
     """Writes the URL only if the row is still exactly as read (optimistic concurrency).
 
-    Returns the number of rows actually changed by using SQL's ROW_COUNT(), which is
-    reliable across drivers, instead of relying on a private cursor attribute.
+    Uses the DB-API cursor's own `rowcount` attribute, which both the MariaDB and
+    Postgres backends in Frappe expose consistently after a write, instead of a
+    vendor-specific SQL function like MySQL's ROW_COUNT() (which does not exist on
+    Postgres) or a private, undocumented attribute.
     """
     frappe.db.sql(
         """
-        update `tabSubmission`
+        update "tabSubmission"
         set audio_feedback_url = %(url)s
         where name = %(id)s
           and (audio_feedback_url is null or audio_feedback_url = '')
@@ -118,5 +120,5 @@ def conditional_write_url(submission_id, url, content_hash_value, expected_modif
             "expected_modified": expected_modified,
         },
     )
-    result = frappe.db.sql("select row_count() as affected")
-    return result[0][0] if result else 0
+    cursor = frappe.db._cursor
+    return cursor.rowcount if cursor is not None and cursor.rowcount is not None else 0

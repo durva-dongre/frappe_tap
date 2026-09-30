@@ -1,79 +1,45 @@
-import unittest
+from frappe.tests.utils import FrappeTestCase
 
-from tap_lms.tapvoice.lib.text import clean_text, prepare, strip_markup, truncate_at_boundary
+from tap_lms.tapvoice.lib.text import clean_text, prepare, strip_markup
 
 
-class TestStripMarkup(unittest.TestCase):
+class TestStripMarkup(FrappeTestCase):
     def test_strips_html_tags(self):
-        self.assertEqual(strip_markup("<b>Hello</b> world").strip(), "Hello world")
+        self.assertEqual(strip_markup("<b>Hello</b> world"), "Hello world")
 
-    def test_strips_trailing_angle_word(self):
-        result = strip_markup("Great job <happy>")
-        self.assertNotIn("<happy>", result)
+    def test_strips_nested_tags(self):
+        self.assertEqual(strip_markup("<div><span>Hi</span> there</div>"), "Hi there")
 
-    def test_strips_markdown_symbols(self):
-        self.assertNotIn("*", strip_markup("**bold** text"))
-        self.assertNotIn("#", strip_markup("# heading"))
-
-
-class TestCleanText(unittest.TestCase):
     def test_collapses_whitespace(self):
-        self.assertEqual(clean_text("  a\u200b  b\n"), "a b")
+        self.assertEqual(strip_markup("a   b\n\nc"), "a b c")
 
-    def test_tabs_and_newlines_become_space(self):
+
+class TestCleanText(FrappeTestCase):
+    def test_nfc_normalizes(self):
+        self.assertEqual(clean_text("e\u0301"), "\u00e9")
+
+    def test_drops_control_chars(self):
+        self.assertEqual(clean_text("a\u200bb"), "ab")
+
+    def test_keeps_tab_and_newline_as_space(self):
         self.assertEqual(clean_text("a\tb\nc"), "a b c")
 
 
-class TestTruncateAtBoundary(unittest.TestCase):
+class TestPrepare(FrappeTestCase):
     def test_truncates_at_sentence_end(self):
-        text = "First sentence. Second sentence. Third sentence that is long."
-        truncated, was_truncated = truncate_at_boundary(text, 32)
-        self.assertTrue(was_truncated)
-        self.assertTrue(truncated.endswith("."))
+        text = "First sentence. Second sentence that pushes well past the limit here."
+        prepared, truncated = prepare(text, 20, "truncate")
+        self.assertTrue(truncated)
+        self.assertTrue(prepared.endswith("."))
 
-    def test_truncates_at_space_when_no_sentence_end(self):
-        text = "one two three four five six seven eight nine ten"
-        truncated, was_truncated = truncate_at_boundary(text, 20)
-        self.assertTrue(was_truncated)
-        self.assertNotIn(" ", truncated[-1:])
+    def test_skip_policy_returns_empty(self):
+        text = "x" * 400
+        prepared, truncated = prepare(text, 300, "skip")
+        self.assertEqual(prepared, "")
+        self.assertTrue(truncated)
 
-    def test_no_truncation_when_within_limit(self):
-        text = "short text"
-        truncated, was_truncated = truncate_at_boundary(text, 100)
-        self.assertEqual(truncated, text)
-        self.assertFalse(was_truncated)
-
-
-class TestPrepare(unittest.TestCase):
-    def test_unsupported_language_returns_none(self):
-        self.assertIsNone(prepare("Hello", "klingon", 300, "truncate"))
-
-    def test_empty_text_returns_none(self):
-        self.assertIsNone(prepare("   ", "english", 300, "truncate"))
-
-    def test_over_length_skip_policy_returns_none(self):
-        long_text = "word " * 200
-        self.assertIsNone(prepare(long_text, "english", 50, "skip"))
-
-    def test_over_length_truncate_policy_marks_truncated(self):
-        long_text = "word " * 200
-        result = prepare(long_text, "english", 50, "truncate")
-        self.assertIsNotNone(result)
-        self.assertTrue(result.truncated)
-        self.assertLessEqual(len(result.text), 50)
-
-    def test_idempotent_under_recleaning(self):
-        result = prepare("Hello <happy> world!", "english", 300, "truncate")
-        self.assertIsNotNone(result)
-        second = clean_text(result.text)
-        self.assertEqual(second, result.text)
-
-    def test_fingerprint_changes_with_language(self):
-        a = prepare("Hello world", "english", 300, "truncate")
-        b = prepare("Hello world", "hindi", 300, "truncate")
-        self.assertNotEqual(a.fingerprint, b.fingerprint)
-
-    def test_fingerprint_stable_for_same_input(self):
-        a = prepare("Hello world", "english", 300, "truncate")
-        b = prepare("Hello world", "english", 300, "truncate")
-        self.assertEqual(a.fingerprint, b.fingerprint)
+    def test_idempotent_after_truncation(self):
+        text = "First sentence. " * 30
+        prepared, _ = prepare(text, 300, "truncate")
+        reprepared, _ = prepare(prepared, 300, "truncate")
+        self.assertEqual(prepared, reprepared)

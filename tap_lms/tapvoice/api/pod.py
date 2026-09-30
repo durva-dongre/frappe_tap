@@ -56,6 +56,12 @@ def _no_store():
     frappe.local.response["Cache-Control"] = "no-store"
 
 
+def _num(value, default=0):
+    """Coerce a possibly-missing pod stat to a safe numeric default so it never violates
+    a NOT NULL column. The pod may omit a key entirely (e.g. stats={} on early failure)."""
+    return value if value is not None else default
+
+
 @frappe.whitelist(allow_guest=True, methods=["POST"])
 def manifest():
     _no_store()
@@ -224,10 +230,10 @@ def progress():
         "already_set": 0,
         "stale": 0,
         "hash_mismatch": 0,
-        "bad_url": 0,
         "not_in_manifest": 0,
         "changed_during_write": 0,
         "pod_failed": 0,
+        "bad_url": 0,
     }
     failed_items = {}
     failure_reasons = {}
@@ -418,23 +424,25 @@ def complete():
 
     final_status = _final_status(reason, run)
 
+    # Every numeric field here is coerced to a safe default (0 / 0.0) because the
+    # pod may report stats={} on an early failure, and these columns are NOT NULL.
     fields = {
         "completion_reason": reason,
-        "pod_reported_gpu_seconds": gpu_seconds,
+        "pod_reported_gpu_seconds": _num(gpu_seconds, 0.0),
         "stats_json": frappe.as_json(stats),
         "not_processed": not_processed,
-        "pod_uploaded": stats.get("uploaded"),
-        "pod_generated": stats.get("generated"),
-        "pod_decoded": stats.get("decoded"),
-        "pod_truncated": stats.get("truncated"),
-        "pod_retried": stats.get("retried"),
-        "pod_tokens": stats.get("tokens"),
-        "pod_audio_seconds": stats.get("audio_seconds"),
-        "pod_startup_seconds": stats.get("startup_seconds"),
-        "pod_run_seconds": stats.get("run_seconds"),
-        "pod_tokens_per_second": stats.get("tokens_per_second"),
-        "pod_gpu_sec_per_audio_min": stats.get("gpu_seconds_per_audio_minute"),
-        "pod_skipped_existing": stats.get("skipped_existing"),
+        "pod_uploaded": _num(stats.get("uploaded"), 0),
+        "pod_generated": _num(stats.get("generated"), 0),
+        "pod_decoded": _num(stats.get("decoded"), 0),
+        "pod_truncated": _num(stats.get("truncated"), 0),
+        "pod_retried": _num(stats.get("retried"), 0),
+        "pod_tokens": _num(stats.get("tokens"), 0),
+        "pod_audio_seconds": _num(stats.get("audio_seconds"), 0.0),
+        "pod_startup_seconds": _num(stats.get("startup_seconds"), 0.0),
+        "pod_run_seconds": _num(stats.get("run_seconds"), 0.0),
+        "pod_tokens_per_second": _num(stats.get("tokens_per_second"), 0.0),
+        "pod_gpu_sec_per_audio_min": _num(stats.get("gpu_seconds_per_audio_minute"), 0.0),
+        "pod_skipped_existing": _num(stats.get("skipped_existing"), 0),
         "termination_status": "Pending",
     }
 
