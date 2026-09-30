@@ -39,6 +39,21 @@ ALLOWED_TRANSITIONS = {
     },
 }
 
+# Whitelist of counter fields that may be incremented from pod-facing endpoints.
+# Never build the column name from unvalidated input.
+INCREMENTABLE_FIELDS = frozenset(
+    {
+        "written",
+        "already_set",
+        "stale",
+        "hash_mismatch",
+        "not_in_manifest",
+        "changed_during_write",
+        "pod_failed",
+        "bad_url",
+    }
+)
+
 
 def can_transition(current, target):
     if current == target:
@@ -74,6 +89,8 @@ def transition(run_name, current_status, target_status, extra_fields=None):
 
 
 def increment(run_name, fieldname, amount=1):
+    if fieldname not in INCREMENTABLE_FIELDS:
+        frappe.throw(f"Field '{fieldname}' is not whitelisted for increment")
     frappe.db.sql(
         f"update `tab{RUN_DOCTYPE}` set `{fieldname}` = coalesce(`{fieldname}`, 0) + %s where name = %s",
         (amount, run_name),
@@ -81,6 +98,11 @@ def increment(run_name, fieldname, amount=1):
 
 
 def conditional_write_url(submission_id, url, content_hash_value, expected_modified):
+    """Writes the URL only if the row is still exactly as read (optimistic concurrency).
+
+    Returns the number of rows actually changed by using SQL's ROW_COUNT(), which is
+    reliable across drivers, instead of relying on a private cursor attribute.
+    """
     frappe.db.sql(
         """
         update `tabSubmission`
@@ -96,5 +118,5 @@ def conditional_write_url(submission_id, url, content_hash_value, expected_modif
             "expected_modified": expected_modified,
         },
     )
-    cursor = getattr(frappe.db, "_cursor", None)
-    return cursor.rowcount if cursor is not None else 0
+    result = frappe.db.sql("select row_count() as affected")
+    return result[0][0] if result else 0

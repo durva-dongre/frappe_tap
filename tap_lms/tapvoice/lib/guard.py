@@ -13,6 +13,9 @@ RATE_LIMITS = {
     "complete": (10, 60),
 }
 
+BAD_AUTH_WINDOW_SECONDS = 300
+BAD_AUTH_MAX = 20
+
 
 class GuardStop(Exception):
     def __init__(self, http_code, message=GENERIC_AUTH_ERROR):
@@ -25,25 +28,20 @@ def _client_ip():
     return frappe.local.request_ip or "unknown"
 
 
-def _incr(cache, key, window):
-    try:
-        count = cache.incrby(key, 1)
-    except AttributeError:
-        current = cache.get_value(key)
-        count = (int(current) if current else 0) + 1
-        cache.set_value(key, count)
-    if count == 1:
-        try:
-            cache.expire(key, window)
-        except Exception:
-            pass
+def _incr_with_ttl(cache_key, window_seconds):
+    """Portable increment-with-expiry using only get_value/set_value, since incrby/expire
+    are not guaranteed to exist on every Frappe cache backend version."""
+    cache = frappe.cache()
+    current = cache.get_value(cache_key)
+    count = (int(current) if current else 0) + 1
+    cache.set_value(cache_key, count, expires_in_sec=window_seconds)
     return count
 
 
 def _check_rate_limit(endpoint, key):
     limit, window = RATE_LIMITS.get(endpoint, (60, 60))
     cache_key = f"tapvoice:rate:{endpoint}:{key}"
-    count = _incr(frappe.cache(), cache_key, window)
+    count = _incr_with_ttl(cache_key, window)
     if count > limit:
         raise GuardStop(429, "rate_limited")
 
@@ -56,8 +54,8 @@ def _check_body_size():
 
 def _bad_auth_throttle(ip):
     cache_key = f"tapvoice:badauth:{ip}"
-    count = _incr(frappe.cache(), cache_key, 300)
-    if count > 20:
+    count = _incr_with_ttl(cache_key, BAD_AUTH_WINDOW_SECONDS)
+    if count > BAD_AUTH_MAX:
         raise GuardStop(429, "rate_limited")
 
 

@@ -90,6 +90,26 @@ def _window_start(window_hours):
     return frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=-window_hours)
 
 
+def _fetch_candidate_rows(basis_column, window_start, max_scan):
+    """audio_feedback_url must match both NULL and empty string. Some Frappe versions
+    translate ["in", ["", None]] to SQL IS NULL OR IN (...) correctly, others do not,
+    so this builds the condition explicitly with raw SQL to guarantee correctness."""
+    field_list = ", ".join(f"`{f}`" for f in FETCH_FIELDS)
+    query = f"""
+        select {field_list}
+        from `tab{SUBMISSION_DOCTYPE}`
+        where `{basis_column}` >= %(window_start)s
+          and (audio_feedback_url is null or audio_feedback_url = '')
+        order by `{basis_column}` asc
+        limit %(max_scan)s
+    """
+    return frappe.db.sql(
+        query,
+        {"window_start": window_start, "max_scan": max_scan},
+        as_dict=True,
+    )
+
+
 def find_eligible(settings, max_scan):
     basis_column = BASIS_COLUMNS.get(settings.window_basis, "creation")
     window_start = _window_start(settings.window_hours)
@@ -97,18 +117,7 @@ def find_eligible(settings, max_scan):
     max_chars = settings.max_text_chars()
     policy = settings.over_length_policy
 
-    filters = [
-        [basis_column, ">=", window_start],
-        ["audio_feedback_url", "in", ["", None]],
-    ]
-
-    rows = frappe.get_all(
-        SUBMISSION_DOCTYPE,
-        filters=filters,
-        fields=list(FETCH_FIELDS),
-        order_by=f"{basis_column} asc",
-        limit_page_length=max_scan,
-    )
+    rows = _fetch_candidate_rows(basis_column, window_start, max_scan)
 
     result = EligibilityResult()
     now = frappe.utils.now_datetime()

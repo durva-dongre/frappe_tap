@@ -5,6 +5,7 @@ from tap_lms.tapvoice.constants import (
     RUN_DOCTYPE,
     SETTINGS_DOCTYPE,
     STATUS_COMPLETED_WITH_FAILURES,
+    STATUS_DRAFT,
     STATUS_SKIPPED,
     STATUS_STOPPED,
 )
@@ -29,14 +30,8 @@ def evaluate(latest_run_name):
     settings_doc = frappe.get_single(SETTINGS_DOCTYPE)
     recent = frappe.get_all(
         RUN_DOCTYPE,
-        filters={"status": ["not in", ["Draft", STATUS_SKIPPED, STATUS_STOPPED]]},
-        fields=[
-            "name",
-            "status",
-            "written",
-            "pod_failed",
-            "not_processed",
-        ],
+        filters={"status": ["not in", [STATUS_DRAFT, STATUS_SKIPPED, STATUS_STOPPED]]},
+        fields=["name", "status", "written", "pod_failed", "not_processed"],
         order_by="creation desc",
         limit_page_length=settings_doc.max_consecutive_bad_runs,
     )
@@ -51,7 +46,7 @@ def evaluate(latest_run_name):
 def _trip(settings_doc):
     if not settings_doc.enabled:
         return
-    frappe.db.set_value("Tap Voice Settings", None, "enabled", 0)
+    frappe.db.set_single_value(SETTINGS_DOCTYPE, "enabled", 0)
     frappe.db.commit()
     if settings_doc.alert_email:
         frappe.sendmail(

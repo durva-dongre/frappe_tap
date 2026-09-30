@@ -6,6 +6,7 @@ from tap_lms.tapvoice.constants import (
     DECISION_SKIP_BLOCKED,
     DECISION_SKIP_DISABLED,
     RUN_DOCTYPE,
+    SECRET_TTS_GCS_SERVICE_ACCOUNT_JSON_B64,
     SECRET_TTS_POD_SHARED_SECRET,
     STATUS_DEPLOY_FAILED,
     STATUS_DEPLOYING,
@@ -178,9 +179,11 @@ def _continue_deploy(run_name, from_draft=False):
         return {"deployed": False, "reason": "recount_empty"}
 
     token_secret = secrets_lib.get(SECRET_TTS_POD_SHARED_SECRET)
-    run_token = tokens_lib.issue(run_name, token_secret, settings.pod_limit_max_seconds // 60 + settings.token_buffer_minutes)
+    run_token = tokens_lib.issue(
+        run_name, token_secret, settings.pod_limit_max_seconds // 60 + settings.token_buffer_minutes
+    )
 
-    gcs_b64 = secrets_lib.get("tts_gcs_service_account_json_b64")
+    gcs_b64 = secrets_lib.get(SECRET_TTS_GCS_SERVICE_ACCOUNT_JSON_B64)
     pod_api_key = secrets_lib.runpod_pod_api_key()
 
     env = {
@@ -195,7 +198,10 @@ def _continue_deploy(run_name, from_draft=False):
         "GCS_SERVICE_ACCOUNT_JSON_B64": gcs_b64,
         "RUNPOD_API_KEY": pod_api_key,
         "POD_LIMIT_SECONDS": str(
-            min(settings.pod_limit_max_seconds, int(len(surviving) * settings.seconds_per_item_cap) + settings.est_startup_seconds * 2)
+            min(
+                settings.pod_limit_max_seconds,
+                int(len(surviving) * settings.seconds_per_item_cap) + settings.est_startup_seconds * 2,
+            )
         ),
         "SECONDS_PER_ITEM_CAP": str(settings.seconds_per_item_cap),
         "MAX_NUM_SEQS": str(settings.max_num_seqs),
