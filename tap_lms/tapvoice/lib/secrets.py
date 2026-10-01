@@ -1,8 +1,10 @@
 import frappe
+from frappe.utils.password import decrypt
 
 from tap_lms.tapvoice.constants import REQUIRED_SECRET_KEYS, SECRET_RUNPOD_API_KEY, SECRET_RUNPOD_POD_API_KEY
 
 SECRETS_DOCTYPE = "Secrets"
+ENC_PREFIX = "enc:"
 
 
 class SecretMissing(Exception):
@@ -14,10 +16,18 @@ class SecretMissing(Exception):
 def get(key):
     if not frappe.db.exists(SECRETS_DOCTYPE, key):
         raise SecretMissing(key)
-    doc = frappe.get_doc(SECRETS_DOCTYPE, key)
-    if not doc.enabled:
+    row = frappe.db.get_value(SECRETS_DOCTYPE, key, ["value", "enabled"], as_dict=True)
+    if not row or not row.enabled:
         raise SecretMissing(key)
-    value = doc.get_password("value")
+    raw = (row.value or "").strip()
+    if raw.startswith(ENC_PREFIX):
+        try:
+            value = decrypt(raw[len(ENC_PREFIX):])
+        except Exception:
+            raise SecretMissing(key)
+    else:
+        value = raw
+    value = (value or "").strip()
     if not value:
         raise SecretMissing(key)
     return value
