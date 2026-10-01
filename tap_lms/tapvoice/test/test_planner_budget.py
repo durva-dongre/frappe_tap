@@ -5,23 +5,14 @@ from tap_lms.tapvoice.constants import DECISION_DEPLOY, DECISION_SKIP_BELOW_MINI
 from tap_lms.tapvoice.lib import planner as planner_lib
 from tap_lms.tapvoice.lib.settings import load as load_settings
 
-TEST_MARKER = "planner-budget-test-marker"
-
 
 class TestPlanner(FrappeTestCase):
     def setUp(self):
-        frappe.db.delete(
-            "Submission", {"overall_feedback_translated": ["like", f"%{TEST_MARKER}%"]}
-        )
-        frappe.db.commit()
         self._created = []
 
     def tearDown(self):
         for name in self._created:
             frappe.delete_doc("Submission", name, force=True, ignore_permissions=True)
-        frappe.db.delete(
-            "Submission", {"overall_feedback_translated": ["like", f"%{TEST_MARKER}%"]}
-        )
         frappe.db.commit()
 
     def _make_submission(self, age_hours=1):
@@ -29,7 +20,7 @@ class TestPlanner(FrappeTestCase):
             {
                 "doctype": "Submission",
                 "status": "Completed",
-                "overall_feedback_translated": f"Good feedback for testing purposes here. {TEST_MARKER}",
+                "overall_feedback_translated": "Good feedback for testing purposes here.",
                 "translation_language": "english",
                 "audio_feedback_url": "",
             }
@@ -52,10 +43,13 @@ class TestPlanner(FrappeTestCase):
             setattr(settings, key, value)
         return settings
 
+    def _plan(self, settings, force=False):
+        return planner_lib.plan_batch(settings, force=force, only_names=list(self._created))
+
     def test_below_minimum_skips(self):
         self._make_submission()
         settings = self._settings(min_items_to_deploy=50, run_interval_hours=12, urgent_margin_hours=1)
-        plan = planner_lib.plan_batch(settings)
+        plan = self._plan(settings)
         self.assertEqual(plan.decision, DECISION_SKIP_BELOW_MINIMUM)
 
     def test_urgent_item_forces_deploy_even_below_minimum(self):
@@ -66,7 +60,7 @@ class TestPlanner(FrappeTestCase):
             run_interval_hours=12,
             urgent_margin_hours=1,
         )
-        plan = planner_lib.plan_batch(settings)
+        plan = self._plan(settings)
         self.assertEqual(plan.decision, DECISION_DEPLOY)
         self.assertGreaterEqual(plan.urgent_count, 1)
 
@@ -79,15 +73,15 @@ class TestPlanner(FrappeTestCase):
             max_cost_per_day_usd=0.0,
             max_cost_per_month_usd=0.0,
         )
-        plan = planner_lib.plan_batch(settings)
+        plan = self._plan(settings)
         self.assertEqual(plan.decision, DECISION_SKIP_BUDGET)
 
     def test_preview_matches_deploy_decision(self):
         for _ in range(3):
             self._make_submission()
         settings = self._settings(min_items_to_deploy=1)
-        plan_a = planner_lib.plan_batch(settings)
-        plan_b = planner_lib.plan_batch(settings)
+        plan_a = self._plan(settings)
+        plan_b = self._plan(settings)
         self.assertEqual(plan_a.decision, plan_b.decision)
         self.assertEqual(len(plan_a.items), len(plan_b.items))
 
@@ -101,5 +95,5 @@ class TestPlanner(FrappeTestCase):
             max_cost_per_day_usd=1000,
             max_cost_per_month_usd=10000,
         )
-        plan = planner_lib.plan_batch(settings)
-        self.assertLessEqual(len(plan.items), 2) 
+        plan = self._plan(settings)
+        self.assertLessEqual(len(plan.items), 2)

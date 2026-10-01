@@ -54,8 +54,8 @@ def _is_urgent(age_hours, window_hours, run_interval_hours, urgent_margin_hours)
     return age_hours + run_interval_hours >= window_hours - urgent_margin_hours
 
 
-def plan_batch(settings, force=False, max_scan=DEFAULT_MAX_SCAN):
-    found = find_eligible(settings, max_scan)
+def plan_batch(settings, force=False, max_scan=DEFAULT_MAX_SCAN, only_names=None):
+    found = find_eligible(settings, max_scan, only_names=only_names)
 
     if not found.items:
         return Plan(

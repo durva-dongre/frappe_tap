@@ -74,7 +74,11 @@ def _excluded_ids(recent_run_count):
     return excluded
 
 
-def find_eligible(settings, max_scan):
+def find_eligible(settings, max_scan, only_names=None):
+    """only_names restricts the scan to a specific set of Submission ids. This is used only
+    by tests, so a shared database with real data doesn't make eligibility assertions depend
+    on how many unrelated rows happen to already exist; production code never passes it, so
+    the normal full-table scan behavior is unchanged there."""
     basis_field = settings.window_basis or "creation"
     window_start = frappe.utils.add_to_date(
         frappe.utils.now_datetime(), hours=-int(settings.window_hours)
@@ -85,6 +89,8 @@ def find_eligible(settings, max_scan):
         [basis_field, ">=", window_start],
         ["audio_feedback_url", "in", ["", None]],
     ]
+    if only_names is not None:
+        filters.append(["name", "in", list(only_names)])
 
     rows = frappe.get_all(
         SUBMISSION_DOCTYPE,
