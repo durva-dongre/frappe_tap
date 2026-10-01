@@ -4,6 +4,8 @@ import frappe
 
 from tap_lms.tapvoice.constants import ACTIVE_STATUSES, RUN_DOCTYPE, STATUS_COMPLETED, STATUS_COMPLETED_WITH_FAILURES
 
+MAX_ACTIVE_RUNS_COUNTED = 1
+
 
 @dataclass(frozen=True)
 class BudgetEstimate:
@@ -77,19 +79,29 @@ def _month_bounds():
     return frappe.utils.get_datetime(start), now
 
 
+def _active_run_contribution(settings, active_count):
+    """At most one active run's worst case counts toward the cap, since the reaper and the
+    deploy mutex both guarantee at most one active run in healthy operation. Counting every
+    active row without bound means stuck or leftover rows from a crashed reaper permanently
+    exhaust the budget ceiling instead of a human noticing and clearing them."""
+    counted = min(active_count, MAX_ACTIVE_RUNS_COUNTED)
+    return counted * settings.max_cost_per_run_usd
+
+
 def _sum_spend(start, end, settings):
     rows = frappe.get_all(
         RUN_DOCTYPE,
         filters={"creation": ["between", [start, end]]},
         fields=["status", "estimated_cost_usd_final", "estimated_cost_usd"],
     )
-    total = 0.0
+    finished_total = 0.0
+    active_count = 0
     for row in rows:
         if row.status in ACTIVE_STATUSES:
-            total += settings.max_cost_per_run_usd
+            active_count += 1
         else:
-            total += row.estimated_cost_usd_final or row.estimated_cost_usd or 0.0
-    return total
+            finished_total += row.estimated_cost_usd_final or row.estimated_cost_usd or 0.0
+    return finished_total + _active_run_contribution(settings, active_count)
 
 
 def today_spend(settings):
