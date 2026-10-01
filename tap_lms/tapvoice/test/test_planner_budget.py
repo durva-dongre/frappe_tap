@@ -53,7 +53,9 @@ class TestPlanner(FrappeTestCase):
         self.assertEqual(plan.decision, DECISION_SKIP_BELOW_MINIMUM)
 
     def test_urgent_item_forces_deploy_even_below_minimum(self):
-        self._make_submission(age_hours=50)
+        # Urgent threshold: age_hours >= window_hours - urgent_margin_hours - run_interval_hours
+        # = 72 - 1 - 12 = 59. Use 65h so it's clearly past the line, not borderline.
+        self._make_submission(age_hours=65)
         settings = self._settings(
             min_items_to_deploy=50,
             window_hours=72,
