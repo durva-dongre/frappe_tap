@@ -137,7 +137,7 @@ def conditional_write_url(item_id, url, content_hash, expected_modified):
         set audio_feedback_url = %(url)s
         where name = %(name)s
           and (audio_feedback_url is null or audio_feedback_url = '')
-          and status != 'Failed'
+          and (status is null or status != 'Failed')
           and modified = %(expected_modified)s
         """,
         {"name": item_id, "url": url, "expected_modified": expected_modified},

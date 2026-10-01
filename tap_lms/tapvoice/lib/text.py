@@ -1,5 +1,9 @@
+import hashlib
 import re
 import unicodedata
+from collections import namedtuple
+
+from tap_lms.tapvoice.lib import languages
 
 _TAG_RE = re.compile(r"<[^>]*>")
 _WS_RE = re.compile(r"\s+")
@@ -13,6 +17,8 @@ _EMOJI_RE = re.compile(
     flags=re.UNICODE,
 )
 _SENTENCE_END_RE = re.compile(r"[.!?\u0964]")
+
+PreparedText = namedtuple("PreparedText", "text language fingerprint truncated")
 
 
 def strip_markup(text):
@@ -63,3 +69,18 @@ def prepare(raw_text, max_chars, policy):
     truncated, was_truncated = _truncate(cleaned, max_chars)
     reclaimed = clean_text(truncated)
     return reclaimed, was_truncated
+
+
+def fingerprint(text, language):
+    payload = f"{language}\x1f{text}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def prepare_item(raw_text, raw_language, max_chars, policy):
+    language = languages.normalize(raw_language)
+    if language is None:
+        return None
+    cleaned, truncated = prepare(raw_text or "", max_chars, policy)
+    if not cleaned:
+        return None
+    return PreparedText(cleaned, language, fingerprint(cleaned, language), truncated)

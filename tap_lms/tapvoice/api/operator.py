@@ -20,6 +20,17 @@ def _require_system_manager():
         frappe.throw("Not permitted", frappe.PermissionError)
 
 
+def _image_is_immutable(image_name):
+    name = (image_name or "").strip().lower()
+    if not name:
+        return False
+    if "@sha256:" in name:
+        return True
+    last = name.rsplit("/", 1)[-1]
+    tag = last.split(":", 1)[1] if ":" in last else ""
+    return tag not in ("", "stable", "latest")
+
+
 @frappe.whitelist()
 def preview_eligible():
     _require_system_manager()
@@ -34,7 +45,6 @@ def preview_eligible():
         "skipped_unsupported_language": plan.skipped_unsupported_language,
         "unsupported_language_values": plan.unsupported_language_values,
         "skipped_empty_text": plan.skipped_empty_text,
-        "skipped_over_length": plan.skipped_over_length,
         "skipped_recent_failure": plan.skipped_recent_failure,
         "skipped_flagged": plan.skipped_flagged,
         "deferred_over_budget": plan.deferred_over_budget,
@@ -159,6 +169,16 @@ def check_setup():
     results["alert_email"] = {"ok": bool(settings.alert_email)}
 
     results["gpu_type_ids"] = {"ok": bool(settings.gpu_type_ids)}
+
+    results["image_name"] = {
+        "ok": _image_is_immutable(settings.image_name),
+        "value": settings.image_name or "empty",
+    }
+
+    results["model_revision"] = {
+        "ok": bool((settings.model_revision or "").strip()),
+        "value": settings.model_revision or "empty",
+    }
 
     max_len = len(settings.cdn_base_url) + 1 + len(settings.gcs_prefix) + 1 + len("marathi") + 1 + 32 + 4
     results["url_length"] = {"ok": max_len <= MAX_URL_LENGTH, "max_len": max_len}

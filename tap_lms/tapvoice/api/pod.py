@@ -44,7 +44,7 @@ from tap_lms.tapvoice.lib import contract, runlog, runstate
 from tap_lms.tapvoice.lib.eligibility import SUBMISSION_DOCTYPE
 from tap_lms.tapvoice.lib.guard import GuardStop, enter
 from tap_lms.tapvoice.lib.settings import load as load_settings
-from tap_lms.tapvoice.lib.text import prepare as prepare_text
+from tap_lms.tapvoice.lib.text import prepare_item
 
 
 def _respond_stop(exc):
@@ -57,9 +57,26 @@ def _no_store():
 
 
 def _num(value, default=0):
-    """Coerce a possibly-missing pod stat to a safe numeric default so it never violates
-    a NOT NULL column. The pod may omit a key entirely (e.g. stats={} on early failure)."""
     return value if value is not None else default
+
+
+def _load_manifest(run):
+    try:
+        items = frappe.parse_json(run.manifest_json) or []
+    except Exception:
+        items = []
+    return [entry for entry in items if isinstance(entry, dict) and entry.get("id")]
+
+
+def _accounted(run):
+    return (
+        (run.written or 0)
+        + (run.already_set or 0)
+        + (run.stale or 0)
+        + (run.hash_mismatch or 0)
+        + (run.changed_during_write or 0)
+        + (run.pod_failed or 0)
+    )
 
 
 @frappe.whitelist(allow_guest=True, methods=["POST"])
@@ -85,13 +102,9 @@ def manifest():
         fields["manifest_served_at"] = frappe.utils.now_datetime()
     runstate.set_fields(run.name, fields)
 
-    try:
-        manifest_items = frappe.parse_json(run.manifest_json) or []
-    except Exception:
-        manifest_items = []
-
+    manifest_items = _load_manifest(run)
     ids = [entry["id"] for entry in manifest_items]
-    fingerprint_by_id = {entry["id"]: entry["fingerprint"] for entry in manifest_items}
+    fingerprint_by_id = {entry["id"]: entry.get("fingerprint") for entry in manifest_items}
 
     if not ids:
         runlog.append(run.name, "manifest served 0 items")
@@ -100,7 +113,13 @@ def manifest():
     rows = frappe.get_all(
         SUBMISSION_DOCTYPE,
         filters={"name": ["in", ids]},
-        fields=["name", "status", "overall_feedback_translated", "translation_language", "audio_feedback_url"],
+        fields=[
+            "name",
+            "status",
+            "overall_feedback_translated",
+            "translation_language",
+            "audio_feedback_url",
+        ],
     )
     rows_by_id = {row.name: row for row in rows}
 
@@ -108,17 +127,11 @@ def manifest():
     stale = 0
     for item_id in ids:
         row = rows_by_id.get(item_id)
-        if row is None:
+        if row is None or row.status == STATUS_FAILED or row.audio_feedback_url:
             stale += 1
             continue
-        if row.status == STATUS_FAILED:
-            stale += 1
-            continue
-        if row.audio_feedback_url:
-            stale += 1
-            continue
-        prepared = prepare_text(
-            row.overall_feedback_translated or "",
+        prepared = prepare_item(
+            row.overall_feedback_translated,
             row.translation_language,
             settings.max_text_chars(),
             settings.over_length_policy,
@@ -140,15 +153,27 @@ def manifest():
     return {"items": out_items}
 
 
-def _expected_for(item_id, manifest_by_id, settings):
+def _expected_for(item_id, manifest_by_id, sub_row, settings):
     entry = manifest_by_id.get(item_id)
-    if entry is None:
-        return None, None, None
-    expected_hash = contract.expected_hash(entry["text"], entry["language"], settings.model_revision)
-    expected_url = contract.expected_url(
-        entry["text"], entry["language"], settings.model_revision, settings.gcs_prefix, settings.cdn_base_url
+    if entry is None or sub_row is None:
+        return None, None
+    prepared = prepare_item(
+        sub_row.overall_feedback_translated,
+        sub_row.translation_language,
+        settings.max_text_chars(),
+        settings.over_length_policy,
     )
-    return entry, expected_hash, expected_url
+    if prepared is None or prepared.fingerprint != entry.get("fingerprint"):
+        return None, None
+    expected_hash = contract.expected_hash(prepared.text, prepared.language, settings.model_revision)
+    expected_url = contract.expected_url(
+        prepared.text,
+        prepared.language,
+        settings.model_revision,
+        settings.gcs_prefix,
+        settings.cdn_base_url,
+    )
+    return expected_hash, expected_url
 
 
 def _head_check(url):
@@ -205,14 +230,13 @@ def progress():
     settings = load_settings()
     payload = frappe.local.form_dict
     records = payload.get("records") or []
+    if not isinstance(records, list):
+        records = []
+    records = [r for r in records if isinstance(r, dict)]
     if len(records) > PROGRESS_MAX_RECORDS:
         records = records[:PROGRESS_MAX_RECORDS]
 
-    try:
-        manifest_items = frappe.parse_json(run.manifest_json) or []
-    except Exception:
-        manifest_items = []
-    manifest_by_id = {entry["id"]: entry for entry in manifest_items}
+    manifest_by_id = {entry["id"]: entry for entry in _load_manifest(run)}
 
     ids = [r.get("id") for r in records if r.get("id")]
     submission_rows = {}
@@ -220,7 +244,14 @@ def progress():
         rows = frappe.get_all(
             SUBMISSION_DOCTYPE,
             filters={"name": ["in", ids]},
-            fields=["name", "status", "modified", "audio_feedback_url"],
+            fields=[
+                "name",
+                "status",
+                "modified",
+                "audio_feedback_url",
+                "overall_feedback_translated",
+                "translation_language",
+            ],
         )
         submission_rows = {row.name: row for row in rows}
 
@@ -249,14 +280,13 @@ def progress():
             continue
 
         if status == "failed":
-            reason = record.get("error") or "unknown"
+            reason = str(record.get("error") or "unknown")
             failed_items[item_id] = reason
             failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
             counters["pod_failed"] += 1
             results[position] = {"id": item_id, "outcome": OUTCOME_RECORDED_FAILURE}
             continue
 
-        entry, expected_hash, expected_url = _expected_for(item_id, manifest_by_id, settings)
         sub_row = submission_rows.get(item_id)
 
         if sub_row is None:
@@ -266,6 +296,12 @@ def progress():
 
         if sub_row.status == STATUS_FAILED:
             results[position] = {"id": item_id, "outcome": OUTCOME_SUBMISSION_FAILED}
+            continue
+
+        expected_hash, expected_url = _expected_for(item_id, manifest_by_id, sub_row, settings)
+        if expected_hash is None:
+            results[position] = {"id": item_id, "outcome": OUTCOME_STALE}
+            counters["stale"] += 1
             continue
 
         reported_hash = record.get("content_hash")
@@ -312,7 +348,7 @@ def progress():
                 counters["changed_during_write"] += 1
 
     for key, value in counters.items():
-        if value:
+        if value and key != "bad_url":
             runstate.increment(run.name, key, value)
 
     if failed_items:
@@ -332,7 +368,9 @@ def progress():
             existing_reasons[reason] = existing_reasons.get(reason, 0) + count
         if len(existing_reasons) > FAILURE_REASONS_MAX_ENTRIES:
             existing_reasons = dict(
-                sorted(existing_reasons.items(), key=lambda pair: pair[1], reverse=True)[:FAILURE_REASONS_MAX_ENTRIES]
+                sorted(existing_reasons.items(), key=lambda pair: pair[1], reverse=True)[
+                    :FAILURE_REASONS_MAX_ENTRIES
+                ]
             )
         runstate.set_fields(run.name, {"failure_reasons": frappe.as_json(existing_reasons)})
 
@@ -374,17 +412,10 @@ def beat():
 
 
 def _final_status(pod_reason, run):
+    pod_reason = str(pod_reason or "")
     if pod_reason in (POD_REASON_COMPLETED, POD_REASON_EMPTY):
         manifest_count = run.manifest_count or 0
-        accounted = (
-            (run.written or 0)
-            + (run.already_set or 0)
-            + (run.stale or 0)
-            + (run.hash_mismatch or 0)
-            + (run.changed_during_write or 0)
-            + (run.pod_failed or 0)
-        )
-        if manifest_count == 0 or accounted >= manifest_count:
+        if manifest_count == 0 or _accounted(run) >= manifest_count:
             return STATUS_COMPLETED
         return STATUS_COMPLETED_WITH_FAILURES
     if pod_reason == POD_REASON_COMPLETED_WITH_FAILURES:
@@ -407,27 +438,19 @@ def complete():
         return _respond_stop(exc)
 
     payload = frappe.local.form_dict
-    reason = payload.get("reason") or "exception"
+    reason = str(payload.get("reason") or "exception")
     gpu_seconds = payload.get("gpu_seconds")
-    stats = payload.get("stats") or {}
+    stats = payload.get("stats")
+    if not isinstance(stats, dict):
+        stats = {}
 
     manifest_count = run.manifest_count or 0
-    accounted = (
-        (run.written or 0)
-        + (run.already_set or 0)
-        + (run.stale or 0)
-        + (run.hash_mismatch or 0)
-        + (run.changed_during_write or 0)
-        + (run.pod_failed or 0)
-    )
-    not_processed = max(0, manifest_count - accounted)
+    not_processed = max(0, manifest_count - _accounted(run))
 
     final_status = _final_status(reason, run)
 
-    # Every numeric field here is coerced to a safe default (0 / 0.0) because the
-    # pod may report stats={} on an early failure, and these columns are NOT NULL.
     fields = {
-        "completion_reason": reason,
+        "completion_reason": reason[:140],
         "pod_reported_gpu_seconds": _num(gpu_seconds, 0.0),
         "stats_json": frappe.as_json(stats),
         "not_processed": not_processed,

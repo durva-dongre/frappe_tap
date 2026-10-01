@@ -4,6 +4,7 @@ from frappe.model.document import Document
 MAX_URL_LENGTH = 140
 MAX_TEXT_CHARS_HARD_LIMIT = 300
 POD_MAX_ITEMS = 5000
+MUTABLE_TAGS = ("", "stable", "latest")
 
 
 class TapVoiceSettings(Document):
@@ -50,8 +51,16 @@ class TapVoiceSettings(Document):
             frappe.throw("Window Hours must be positive")
 
     def _validate_image_name(self):
-        if self.image_name and self.image_name.strip().lower() in ("stable", "latest"):
-            frappe.throw("Image Name must be an immutable tag or digest, not 'stable' or 'latest'")
+        name = (self.image_name or "").strip().lower()
+        if not name or "@sha256:" in name:
+            return
+        last_part = name.rsplit("/", 1)[-1]
+        tag = last_part.split(":", 1)[1] if ":" in last_part else ""
+        if tag in MUTABLE_TAGS:
+            frappe.throw(
+                "Image Name needs an immutable tag (such as a short SHA) or a digest, "
+                "not 'stable', 'latest' or no tag"
+            )
 
     def _validate_alert_email_required(self):
         if self.enabled and not (self.alert_email or "").strip():
