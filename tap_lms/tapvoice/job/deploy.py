@@ -16,16 +16,22 @@ from tap_lms.tapvoice.constants import (
     TERMINATION_MANUAL_ACTION_NEEDED,
     TERMINATION_PENDING,
 )
-from tap_lms.tapvoice.lib import runstate, tokens
+from tap_lms.tapvoice.lib import runlog, runstate, tokens
 from tap_lms.tapvoice.lib import secrets as secrets_lib
 from tap_lms.tapvoice.lib import settings as settings_lib
 from tap_lms.tapvoice.lib import text as text_lib
 from tap_lms.tapvoice.lib.planner import plan_batch
-from tap_lms.tapvoice.lib.runpod import RunPodClient, RunPodError, build_create_payload
+from tap_lms.tapvoice.lib.runpod import (
+    RunPodClient,
+    RunPodError,
+    build_create_payload,
+    is_capacity_error,
+)
 
 LOCK_KEY = "tapvoice:deploy:mutex"
 LOCK_TTL_SECONDS = 300
 DECISION_SKIP_LIMITS = "Skip: limits"
+WAITING_FOR_CAPACITY = "waiting_for_capacity"
 
 
 def _acquire_mutex():
@@ -165,6 +171,8 @@ def _launch(settings, run_name, count):
                 _record_pod(run_name, existing)
                 frappe.db.commit()
                 return {"deployed": True, "adopted": True, "run": run_name}
+            if is_capacity_error(exc):
+                return _schedule_capacity_retry(settings, run_name, str(exc))
             _mark_deploy_failed(run_name, str(exc))
             frappe.db.commit()
             return {"deployed": False, "reason": STATUS_DEPLOY_FAILED, "run": run_name}
@@ -176,6 +184,63 @@ def _launch(settings, run_name, count):
         _mark_deploy_failed(run_name, f"{type(exc).__name__}: {exc}")
         frappe.db.commit()
         return {"deployed": False, "reason": STATUS_DEPLOY_FAILED, "run": run_name}
+
+
+def _schedule_capacity_retry(settings, run_name, detail):
+    row = frappe.db.get_value(
+        RUN_DOCTYPE, run_name, ["capacity_wait_started_at", "capacity_retry_count"], as_dict=True
+    )
+    now = frappe.utils.now_datetime()
+    started = row.capacity_wait_started_at or now
+    attempts = (row.capacity_retry_count or 0) + 1
+    deadline = frappe.utils.add_to_date(started, minutes=int(settings.capacity_retry_max_minutes or 60))
+    next_at = frappe.utils.add_to_date(now, minutes=int(settings.capacity_retry_interval_minutes or 3))
+    if next_at > deadline:
+        runlog.append(run_name, f"no capacity after {attempts} attempts, giving up")
+        _mark_deploy_failed(run_name, f"no_capacity_after_{attempts}_attempts")
+        frappe.db.commit()
+        return {"deployed": False, "reason": STATUS_DEPLOY_FAILED, "run": run_name}
+    runstate.set_fields(
+        run_name,
+        {
+            "capacity_wait_started_at": started,
+            "capacity_retry_count": attempts,
+            "next_capacity_retry_at": next_at,
+            "status_reason": f"{WAITING_FOR_CAPACITY} attempt {attempts}",
+        },
+    )
+    runlog.append(run_name, f"no capacity (attempt {attempts}), retry at {next_at}: {detail}")
+    frappe.db.commit()
+    return {
+        "deployed": False,
+        "reason": WAITING_FOR_CAPACITY,
+        "run": run_name,
+        "retry_at": str(next_at),
+    }
+
+
+def retry_capacity(run_name):
+    if not _acquire_mutex():
+        return {"deployed": False, "reason": DECISION_SKIP_BLOCKED}
+    try:
+        settings = settings_lib.load_fresh()
+        row = frappe.db.get_value(
+            RUN_DOCTYPE, run_name, ["status", "pod_id", "manifest_count"], as_dict=True
+        )
+        if not row or row.status != STATUS_DEPLOYING or row.pod_id:
+            return {"deployed": False, "reason": "not_waiting"}
+        if not settings.kill_switch_on():
+            _mark_deploy_failed(run_name, "disabled_while_waiting_for_capacity")
+            frappe.db.commit()
+            return {"deployed": False, "reason": DECISION_SKIP_DISABLED, "run": run_name}
+        lease = frappe.utils.add_to_date(
+            frappe.utils.now_datetime(), minutes=int(settings.capacity_retry_interval_minutes or 3)
+        )
+        runstate.set_fields(run_name, {"next_capacity_retry_at": lease})
+        frappe.db.commit()
+        return _launch(settings, run_name, row.manifest_count or 0)
+    finally:
+        _release_mutex()
 
 
 def deploy_new(trigger_type="Manual", triggered_by=None, force=False):
@@ -233,6 +298,7 @@ def _record_pod(run_name, pod):
             "hourly_rate": pod.get("costPerHr") or 0,
             "gpu_type_allocated": pod.get("gpuTypeId") or "",
             "pod_created_at": frappe.utils.now_datetime(),
+            "next_capacity_retry_at": None,
             "status": STATUS_STARTING,
         },
     )
@@ -241,5 +307,9 @@ def _record_pod(run_name, pod):
 def _mark_deploy_failed(run_name, reason):
     runstate.set_fields(
         run_name,
-        {"status": STATUS_DEPLOY_FAILED, "status_reason": str(reason)[:140]},
+        {
+            "status": STATUS_DEPLOY_FAILED,
+            "status_reason": str(reason)[:140],
+            "next_capacity_retry_at": None,
+        },
     )

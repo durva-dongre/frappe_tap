@@ -18,6 +18,7 @@ class TapVoiceSettings(Document):
         self._validate_image_name()
         self._validate_alert_email_required()
         self._validate_url_length()
+        self._validate_capacity_retry()
         self._warn_model_revision_change()
 
     def _validate_text_limit(self):
@@ -75,6 +76,12 @@ class TapVoiceSettings(Document):
             frappe.throw(
                 f"Longest possible clip URL is {max_len} chars, exceeds the {MAX_URL_LENGTH} char field limit"
             )
+
+    def _validate_capacity_retry(self):
+        if (self.capacity_retry_interval_minutes or 0) < 1:
+            frappe.throw("Capacity Retry Interval Minutes must be at least 1")
+        if (self.capacity_retry_max_minutes or 0) < (self.capacity_retry_interval_minutes or 0):
+            frappe.throw("Capacity Retry Max Minutes must be at least the retry interval")
 
     def _warn_model_revision_change(self):
         if self.is_new():

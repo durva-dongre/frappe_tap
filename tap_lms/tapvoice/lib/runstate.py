@@ -52,6 +52,7 @@ INT_FIELDS = frozenset(
         "pod_skipped_existing",
         "remaining_reported",
         "termination_attempts",
+        "capacity_retry_count",
     }
 )
 

@@ -39,6 +39,8 @@
   "time_column_break",
   "token_buffer_minutes",
   "termination_check_delay_seconds",
+  "capacity_retry_interval_minutes",
+  "capacity_retry_max_minutes",
   "breaker_section",
   "max_consecutive_bad_runs",
   "bad_run_success_floor_percent",
@@ -274,6 +276,18 @@
    "fieldname": "termination_check_delay_seconds",
    "fieldtype": "Int",
    "label": "Termination Check Delay Seconds"
+  },
+  {
+   "default": "3",
+   "fieldname": "capacity_retry_interval_minutes",
+   "fieldtype": "Int",
+   "label": "Capacity Retry Interval Minutes"
+  },
+  {
+   "default": "60",
+   "fieldname": "capacity_retry_max_minutes",
+   "fieldtype": "Int",
+   "label": "Capacity Retry Max Minutes"
   },
   {
    "fieldname": "breaker_section",

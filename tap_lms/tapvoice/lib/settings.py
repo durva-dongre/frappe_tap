@@ -30,6 +30,8 @@ SNAPSHOT_FIELDS = (
     "stopping_grace_minutes",
     "token_buffer_minutes",
     "termination_check_delay_seconds",
+    "capacity_retry_interval_minutes",
+    "capacity_retry_max_minutes",
     "max_consecutive_bad_runs",
     "bad_run_success_floor_percent",
     "alert_email",

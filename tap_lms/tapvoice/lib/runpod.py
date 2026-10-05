@@ -1,10 +1,23 @@
 import requests
 
+CAPACITY_MARKERS = (
+    "no instances currently available",
+    "no available gpu",
+    "insufficient capacity",
+)
+
 
 class RunPodError(Exception):
     def __init__(self, message, status_code=None):
         super().__init__(message)
         self.status_code = status_code
+
+
+def is_capacity_error(exc):
+    if not isinstance(exc, RunPodError):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in CAPACITY_MARKERS)
 
 
 class RunPodClient:

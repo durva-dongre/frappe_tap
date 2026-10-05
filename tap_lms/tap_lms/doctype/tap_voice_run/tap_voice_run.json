@@ -45,6 +45,8 @@
   "stopping_grace_minutes",
   "token_buffer_minutes",
   "termination_check_delay_seconds",
+  "capacity_retry_interval_minutes",
+  "capacity_retry_max_minutes",
   "model_revision",
   "decision_section",
   "skipped_unsupported_language",
@@ -69,6 +71,9 @@
   "last_beat_at",
   "last_phase",
   "remaining_reported",
+  "capacity_retry_count",
+  "capacity_wait_started_at",
+  "next_capacity_retry_at",
   "runpod_column_break",
   "results_section",
   "written",
@@ -354,6 +359,18 @@
    "read_only": 1
   },
   {
+   "fieldname": "capacity_retry_interval_minutes",
+   "fieldtype": "Int",
+   "label": "Capacity Retry Interval Minutes",
+   "read_only": 1
+  },
+  {
+   "fieldname": "capacity_retry_max_minutes",
+   "fieldtype": "Int",
+   "label": "Capacity Retry Max Minutes",
+   "read_only": 1
+  },
+  {
    "fieldname": "model_revision",
    "fieldtype": "Data",
    "label": "Model Revision",
@@ -495,6 +512,25 @@
    "fieldname": "remaining_reported",
    "fieldtype": "Int",
    "label": "Remaining Reported",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "capacity_retry_count",
+   "fieldtype": "Int",
+   "label": "Capacity Retry Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "capacity_wait_started_at",
+   "fieldtype": "Datetime",
+   "label": "Capacity Wait Started At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "next_capacity_retry_at",
+   "fieldtype": "Datetime",
+   "label": "Next Capacity Retry At",
    "read_only": 1
   },
   {

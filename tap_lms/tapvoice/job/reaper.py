@@ -48,6 +48,22 @@ def _finalize(run, target_status, extra=None):
     frappe.db.commit()
 
 
+def _handle_capacity_wait(run, run_name, now):
+    retry_at = run.next_capacity_retry_at
+    if retry_at and now >= frappe.utils.get_datetime(retry_at):
+        frappe.enqueue(
+            "tap_lms.tapvoice.job.deploy.retry_capacity",
+            queue="long",
+            job_id=f"tapvoice-capacity-retry-{run_name}",
+            deduplicate=True,
+            run_name=run_name,
+            enqueue_after_commit=True,
+        )
+        runlog.append(run_name, "reaper: capacity retry enqueued")
+        return True
+    return False
+
+
 def reap_one(run_name):
     settings = load_settings()
     run = frappe.get_doc(RUN_DOCTYPE, run_name)
@@ -95,6 +111,8 @@ def reap_one(run_name):
                 return True
 
     if run.status == STATUS_DEPLOYING and not run.pod_id:
+        if run.capacity_wait_started_at:
+            return _handle_capacity_wait(run, run_name, now)
         age_minutes = frappe.utils.time_diff_in_hours(now, run.creation) * 60
         if age_minutes > 5:
             adopted = client.find_by_name(run_name)
