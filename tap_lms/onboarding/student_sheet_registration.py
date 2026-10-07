@@ -33,6 +33,8 @@ from tap_lms.onboarding.glific_contact_upload import (
 from tap_lms.tap_lms.doctype.student.student import _reserve_next_student_name
 
 
+COURSE_SOURCE_SPREADSHEET_ID = "1rtaPJ23KcKfSbt6VY_Lu0HwgAOWwnzOHv5mup7wE3TU"
+
 FIXED_STUDENT_REGISTRATION_SHEETS = [
     {
         "language": "English",
@@ -57,6 +59,11 @@ FIXED_STUDENT_REGISTRATION_SHEETS = [
     {
         "language": "Marathi",
         "spreadsheet_id": "1QH7Hi7tqe8c-ABAD5spIfA4dXJjxuOhzukua5nQP98c",
+        "sheet_id": 0,
+    },
+    {
+        "language": "Hindi",
+        "spreadsheet_id": COURSE_SOURCE_SPREADSHEET_ID,
         "sheet_id": 0,
     },
 ]
@@ -328,6 +335,10 @@ def _prepare_source_row(
         "gender_raw": source_row.get("gender") or "",
         "grade_raw": source_row.get("grade") or "",
         "shall_we_begin": source_row.get("shall_we_begin") or "",
+        "course": (
+            str(source_row.get("course") or "").strip()
+            if sheet.spreadsheet_id == COURSE_SOURCE_SPREADSHEET_ID else ""
+        ),
     }
 
     if not _contains_agree(base["shall_we_begin"]):
@@ -378,11 +389,21 @@ def _prepare_source_row(
     base["batch"] = batch
     base["model_id"] = str(getattr(school_enrollment, "model", None) or "").strip()
 
-    course_result = _get_course_from_school_enrollment(school_enrollment, grade)
-    if course_result.get("error"):
-        return _prepared_error(base, course_result["error"])
-    base["course_names"] = course_result["course_names"]
-    base["course_vertical"] = course_result["course_vertical"]
+    if sheet.spreadsheet_id == COURSE_SOURCE_SPREADSHEET_ID:
+        course = base["course"]
+        if not course:
+            return _prepared_error(base, "Missing course")
+        course_vertical = frappe.db.get_value("Course Verticals", {"name2": course}, "name")
+        if not course_vertical:
+            return _prepared_error(base, f"Course vertical not found: {course}")
+        base["course_names"] = [course]
+        base["course_vertical"] = course_vertical
+    else:
+        course_result = _get_course_from_school_enrollment(school_enrollment, grade)
+        if course_result.get("error"):
+            return _prepared_error(base, course_result["error"])
+        base["course_names"] = course_result["course_names"]
+        base["course_vertical"] = course_result["course_vertical"]
     base["prepare_status"] = "Ready"
     base["message"] = ""
     return base
@@ -510,7 +531,10 @@ def _read_source_sheet(session: AuthorizedSession, config: dict, ensure_status_c
         raise frappe.ValidationError(f"Sheet is empty: {config['spreadsheet_id']}")
 
     header = [str(value or "").strip() for value in values[0]]
-    header_map = _resolve_source_header_map(header)
+    header_map = _resolve_source_header_map(
+        header,
+        include_course=config["spreadsheet_id"] == COURSE_SOURCE_SPREADSHEET_ID,
+    )
     status_column_index = _find_header_index(header, REGISTRATION_STATUS_COLUMN)
     if status_column_index is None:
         if not ensure_status_column:
@@ -561,18 +585,21 @@ def _read_source_sheet(session: AuthorizedSession, config: dict, ensure_status_c
     )
 
 
-def _resolve_source_header_map(header: list[str]) -> dict[str, int]:
+def _resolve_source_header_map(header: list[str], include_course: bool = False) -> dict[str, int]:
+    source_columns = dict(SOURCE_COLUMNS)
+    if include_course:
+        source_columns["course"] = "course"
     header_indexes = {
         _normalize_header(value): index
         for index, value in enumerate(header)
         if str(value or "").strip()
     }
-    missing = [column for column in SOURCE_COLUMNS if column not in header_indexes]
+    missing = [column for column in source_columns if column not in header_indexes]
     if missing:
         raise frappe.ValidationError(f"Source sheet is missing required columns: {missing}")
     return {
         target_key: header_indexes[column_name]
-        for column_name, target_key in SOURCE_COLUMNS.items()
+        for column_name, target_key in source_columns.items()
     }
 
 
@@ -1407,7 +1434,10 @@ def _glific_contact_row(row: dict) -> dict:
         "batch_id": batch_id or "",
         "grade": row.get("grade") or "",
         "level": row.get("level") or "",
-        "course": course or "",
+        "course": (
+            row.get("course") or ""
+            if row.get("spreadsheet_id") == COURSE_SOURCE_SPREADSHEET_ID else ""
+        ),
         "student_id": row.get("student_id") or "",
         "collection": collection,
     }

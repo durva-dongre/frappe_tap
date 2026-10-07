@@ -54,7 +54,13 @@ STATE_RESPONSE_PAYLOAD_MAP = {
     "TELANGANA": {
         "student_registration_url": "NULL",
         "student_consent_url": "NULL",
+        "extra": "pdf"
     },
+    "PUNJAB": {
+        "student_registration_url": "NULL",
+        "student_consent_url": "NULL",
+        "extra": "NULL"
+    }
 }
 
 
