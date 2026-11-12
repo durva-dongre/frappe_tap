@@ -32,6 +32,8 @@
   "rigour",
   "organization_section",
   "school_id",
+  "state_id",
+  "district_id",
   "organization_column_break",
   "shared_users",
   "whatsapp_consent",
@@ -51,7 +53,9 @@
   "data_mismatch",
   "peer_groups",
   "access_rate",
-  "submission_rate"
+  "submission_rate",
+  "event_enrollments_section",
+  "event_enrollments"
  ],
  "fields": [
   {
@@ -168,6 +172,18 @@
    "options": "School"
   },
   {
+   "fieldname": "state_id",
+   "fieldtype": "Link",
+   "label": "State",
+   "options": "State"
+  },
+  {
+   "fieldname": "district_id",
+   "fieldtype": "Link",
+   "label": "District",
+   "options": "District"
+  },
+  {
    "fieldname": "organization_column_break",
    "fieldtype": "Column Break"
   },
@@ -271,11 +287,22 @@
    "fieldtype": "Percent",
    "label": "Submission Rate",
    "read_only": 1
+  },
+  {
+   "fieldname": "event_enrollments_section",
+   "fieldtype": "Section Break",
+   "label": "Event Enrollments"
+  },
+  {
+   "fieldname": "event_enrollments",
+   "fieldtype": "Table",
+   "label": "Event Enrollments",
+   "options": "Student Event Enrollment"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-14 15:21:07.838053",
+ "modified": "2026-11-02 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Student",

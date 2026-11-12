@@ -1,0 +1,46 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:{#####}",
+ "creation": "2026-11-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "language",
+  "translated_event_name",
+  "translated_pop_up_text"
+ ],
+ "fields": [
+  {
+   "fieldname": "language",
+   "fieldtype": "Link",
+   "label": "Language",
+   "options": "TAP Language",
+   "reqd": 1
+  },
+  {
+   "fieldname": "translated_event_name",
+   "fieldtype": "Data",
+   "label": "Translated Event Name"
+  },
+  {
+   "fieldname": "translated_pop_up_text",
+   "fieldtype": "Text",
+   "label": "Translated Pop Up Text"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Event Campaign Translation",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

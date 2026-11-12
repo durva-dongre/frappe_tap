@@ -1,0 +1,134 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "format:EV-{#####}",
+ "creation": "2026-11-01 00:00:00.000000",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "event_name",
+  "learning_unit",
+  "pop_up_text",
+  "enrolled_count",
+  "column_break_main",
+  "status",
+  "start_date",
+  "end_date",
+  "region_section",
+  "region_scope",
+  "region_list",
+  "translations_section",
+  "event_translations"
+ ],
+ "fields": [
+  {
+   "fieldname": "event_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Event Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "learning_unit",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Learning Unit",
+   "options": "LearningUnit",
+   "reqd": 1
+  },
+  {
+   "fieldname": "pop_up_text",
+   "fieldtype": "Text",
+   "label": "Pop Up Text"
+  },
+  {
+   "default": "0",
+   "fieldname": "enrolled_count",
+   "fieldtype": "Int",
+   "label": "Enrolled Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Drafted",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Drafted\nPublished\nOn going\nCompleted"
+  },
+  {
+   "fieldname": "start_date",
+   "fieldtype": "Date",
+   "in_standard_filter": 1,
+   "label": "Start Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "end_date",
+   "fieldtype": "Date",
+   "in_standard_filter": 1,
+   "label": "End Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "region_section",
+   "fieldtype": "Section Break",
+   "label": "Region"
+  },
+  {
+   "fieldname": "region_scope",
+   "fieldtype": "Select",
+   "label": "Region Scope",
+   "options": "State\nDistrict\nZone\nSchool"
+  },
+  {
+   "fieldname": "region_list",
+   "fieldtype": "JSON",
+   "label": "Region List"
+  },
+  {
+   "fieldname": "translations_section",
+   "fieldtype": "Section Break",
+   "label": "Translations"
+  },
+  {
+   "fieldname": "event_translations",
+   "fieldtype": "Table",
+   "label": "Event Translations",
+   "options": "Event Campaign Translation"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-11-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Event Campaign",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

@@ -1,0 +1,101 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-11-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "learning_unit",
+  "unit_type",
+  "progress_column_break",
+  "video_section",
+  "video_watched",
+  "submission",
+  "submission_attempts",
+  "quiz_section",
+  "quiz_json",
+  "completed_at",
+  "unit_status"
+ ],
+ "fields": [
+  {
+   "fieldname": "learning_unit",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Learning Unit",
+   "options": "LearningUnit",
+   "reqd": 1
+  },
+  {
+   "default": "program",
+   "fieldname": "unit_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Unit Type",
+   "options": "program\nevent"
+  },
+  {
+   "fieldname": "progress_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "video_section",
+   "fieldtype": "Section Break",
+   "label": "Video"
+  },
+  {
+   "default": "0",
+   "fieldname": "video_watched",
+   "fieldtype": "Check",
+   "label": "Video Watched"
+  },
+  {
+   "fieldname": "submission",
+   "fieldtype": "Link",
+   "label": "Submission",
+   "options": "Submission"
+  },
+  {
+   "default": "0",
+   "fieldname": "submission_attempts",
+   "fieldtype": "Int",
+   "label": "Submission Attempts"
+  },
+  {
+   "fieldname": "quiz_section",
+   "fieldtype": "Section Break",
+   "label": "Quiz"
+  },
+  {
+   "fieldname": "quiz_json",
+   "fieldtype": "JSON",
+   "label": "Quiz JSON"
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At"
+  },
+  {
+   "default": "Not Started",
+   "fieldname": "unit_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Unit Status",
+   "options": "Not Started\nIn Progress\nCompleted\nStopped"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-11-11 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Unit Progress",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

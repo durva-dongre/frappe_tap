@@ -1,0 +1,163 @@
+{
+ "actions": [],
+ "creation": "2026-11-01 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "tapapp_section",
+  "points_video_complete",
+  "points_per_correct_answer",
+  "points_submission_first_attempt",
+  "points_submission_review_valid",
+  "gems_submission_review_valid",
+  "tapapp_column_break",
+  "max_submission_attempts",
+  "max_video_points",
+  "max_quiz_points",
+  "max_submission_points",
+  "storage_section",
+  "gcs_bucket",
+  "gcs_project_id",
+  "gcs_service_account_json",
+  "storage_column_break",
+  "r2_account_id",
+  "r2_access_key_id",
+  "r2_secret_access_key",
+  "r2_bucket",
+  "worker_internal_api_url",
+  "worker_internal_api_secret"
+ ],
+ "fields": [
+  {
+   "fieldname": "tapapp_section",
+   "fieldtype": "Section Break",
+   "label": "TapApp"
+  },
+  {
+   "default": "10",
+   "fieldname": "points_video_complete",
+   "fieldtype": "Int",
+   "label": "Points Video Complete"
+  },
+  {
+   "default": "1",
+   "fieldname": "points_per_correct_answer",
+   "fieldtype": "Int",
+   "label": "Points Per Correct Answer"
+  },
+  {
+   "default": "25",
+   "fieldname": "points_submission_first_attempt",
+   "fieldtype": "Int",
+   "label": "Points Submission First Attempt"
+  },
+  {
+   "default": "10",
+   "fieldname": "points_submission_review_valid",
+   "fieldtype": "Int",
+   "label": "Points Submission Review Valid"
+  },
+  {
+   "default": "1",
+   "fieldname": "gems_submission_review_valid",
+   "fieldtype": "Int",
+   "label": "Gems Submission Review Valid",
+   "description": "Previously had no backing field at all -- shared/progress/rewards.py::gems_for_submission_review_valid() fell back to a hardcoded 1 via getattr(settings, 'gems_submission_review_valid', None). Adding this field makes the gem reward for a valid submission review actually configurable from this settings doctype, matching every other reward amount here."
+  },
+  {
+   "fieldname": "tapapp_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "2",
+   "fieldname": "max_submission_attempts",
+   "fieldtype": "Int",
+   "label": "Max Submission Attempts"
+  },
+  {
+   "default": "10",
+   "fieldname": "max_video_points",
+   "fieldtype": "Int",
+   "label": "Max Video Points"
+  },
+  {
+   "default": "10",
+   "fieldname": "max_quiz_points",
+   "fieldtype": "Int",
+   "label": "Max Quiz Points"
+  },
+  {
+   "default": "25",
+   "fieldname": "max_submission_points",
+   "fieldtype": "Int",
+   "label": "Max Submission Points"
+  },
+  {
+   "fieldname": "storage_section",
+   "fieldtype": "Section Break",
+   "label": "Storage (GCS / R2)"
+  },
+  {
+   "fieldname": "gcs_bucket",
+   "fieldtype": "Data",
+   "label": "GCS Bucket"
+  },
+  {
+   "fieldname": "gcs_project_id",
+   "fieldtype": "Data",
+   "label": "GCS Project ID"
+  },
+  {
+   "fieldname": "gcs_service_account_json",
+   "fieldtype": "Password",
+   "label": "GCS Service Account JSON"
+  },
+  {
+   "fieldname": "storage_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "r2_account_id",
+   "fieldtype": "Data",
+   "label": "R2 Account ID"
+  },
+  {
+   "fieldname": "r2_access_key_id",
+   "fieldtype": "Data",
+   "label": "R2 Access Key ID"
+  },
+  {
+   "fieldname": "r2_secret_access_key",
+   "fieldtype": "Password",
+   "label": "R2 Secret Access Key"
+  },
+  {
+   "fieldname": "r2_bucket",
+   "fieldtype": "Data",
+   "label": "R2 Bucket"
+  },
+  {
+   "fieldname": "worker_internal_api_url",
+   "fieldtype": "Data",
+   "label": "Worker Internal API URL"
+  },
+  {
+   "fieldname": "worker_internal_api_secret",
+   "fieldtype": "Password",
+   "label": "Worker Internal API Secret"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-11-12 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Tap Lms",
+ "name": "Shared Settings",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

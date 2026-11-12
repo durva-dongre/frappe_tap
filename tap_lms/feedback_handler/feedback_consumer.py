@@ -15,7 +15,6 @@ GLIFIC_FEEDBACK_FLOW_ID = "34108"
 DEMO_GLIFIC_COMMENT_SOURCE = "demo_submission"
 DEMO_GLIFIC_COMMENT_TYPE = "feedback_glific_contact"
 TAPAPP_SOURCE = "tapapp"
-TAPAPP_FEEDBACK_QUEUE = "dev_feedback_q"
 
 
 class FeedbackConsumer:
@@ -190,23 +189,14 @@ class FeedbackConsumer:
             except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
                 payload = None
 
-            if isinstance(payload, dict) and payload.get("source") == TAPAPP_SOURCE:
-                ch.queue_declare(queue=TAPAPP_FEEDBACK_QUEUE, durable=True)
-                ch.basic_publish(
-                    exchange="",
-                    routing_key=TAPAPP_FEEDBACK_QUEUE,
-                    body=body,
-                    properties=pika.BasicProperties(
-                        delivery_mode=2,
-                        content_type="application/json",
-                    ),
-                )
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                frappe.logger().info(
-                    f"Forwarded {TAPAPP_SOURCE} feedback payload to "
-                    f"{TAPAPP_FEEDBACK_QUEUE} and acknowledged the original message"
-                )
-                return
+            is_tapapp = isinstance(payload, dict) and payload.get("source") == TAPAPP_SOURCE
+
+            # NOTE: tapapp messages are NO LONGER forwarded to dev_feedback_q.
+            # They now go through the exact same parse/update pipeline as every
+            # other source below, so that update_submission actually runs and
+            # handle_review_result (points/gems/PE last_activity_at/gallery
+            # promotion) fires for tapapp submissions too. Everything else in
+            # this method is unchanged from before.
 
             # Start new database transaction
             frappe.db.begin()
@@ -219,7 +209,6 @@ class FeedbackConsumer:
                 frappe.db.rollback()
                 ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
                 return
-            
 
             print(f"Received feedback for submission: {submission_id}")
             frappe.logger().info(f"Processing feedback for submission: {submission_id}")
@@ -257,6 +246,39 @@ class FeedbackConsumer:
             # previous committed Submission.status (usually "Processing").
             self.processor.update_submission(message_data)
             frappe.db.commit()
+
+            if is_tapapp:
+                # TapApp path: no SP hook, no Glific flow. Instead, run the
+                # reward/gallery/PE-sync path so a successful ("Success -
+                # Original") result awards points/gems, bumps the owning
+                # ProgramEnrollment's last_activity_at (so /progress/sync
+                # picks up the change), and promotes to the gallery when
+                # eligible. handle_review_result's own feedback_ready_processed_at
+                # guard makes this call safe even if something else also
+                # reaches it for this submission.
+                try:
+                    from tap_lms.shared.submission.review_result import handle_review_result
+
+                    sub_doc = frappe.get_doc("Submission", submission_id)
+                    handle_review_result(sub_doc)
+                    frappe.db.commit()
+                    frappe.logger().info(
+                        f"TapApp review result handled: submission_id={submission_id}"
+                    )
+                except Exception:
+                    frappe.db.rollback()
+                    frappe.logger().error(
+                        f"TapApp handle_review_result failed for submission "
+                        f"{submission_id}: {frappe.get_traceback()}"
+                    )
+                    raise
+
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                frappe.logger().info(
+                    f"Successfully processed tapapp feedback for submission: {submission_id}"
+                )
+                print(f"Successfully processed tapapp feedback for submission: {submission_id}")
+                return
 
             if not self._is_feedback_requested(submission_id):
                 time.sleep(5)
@@ -365,7 +387,7 @@ class FeedbackConsumer:
                     f"Submission {submission_id} failed {MAX_ATTEMPTS} times, rejecting message"
                 )
                 try:
-                    if submission_id and message_data.get("eval_type") == "rubric":
+                    if submission_id and isinstance(message_data, dict) and message_data.get("eval_type") == "rubric":
                         mark_rubric_eval_failed(submission_id)
                     elif submission_id:
                         self.processor.mark_submission_failed(submission_id, error_msg)
@@ -553,48 +575,6 @@ class FeedbackConsumer:
         except Exception as glific_error:
             frappe.logger().warning(f"Glific notification failed for {submission_id}: {str(glific_error)}")
             # Continue processing - notification failure shouldn't fail the entire message
-
-    # def _update_sp_state(self, submission_id, message_data):
-    #     """
-    #     Summer Program hook: advance PE state from submitted_awaiting_feedback
-    #     to feedback_ready (T12) after AI feedback is processed.
-
-    #     This is non-critical — if it fails, pe_dispatcher's handle_feedback_timeout
-    #     will catch it within 1-4 hours as a safety net.
-
-    #     The Glific notification is sent after this hook commits, so callbacks
-    #     from the feedback flow can read the updated ProgramEnrollment state.
-    #     """
-    #     try:
-    #         from tap_lms.summer_program.feedback_consumer_hook import on_feedback_ready
-
-    #         student_id = message_data.get("student_id")
-    #         result = on_feedback_ready(submission_id, student_id)
-
-    #         if result.get("status") == "transitioned":
-    #             frappe.logger().info(
-    #                 f"[SP] feedback_ready transition done for PE {result.get('pe')}"
-    #             )
-    #         elif result.get("status") == "error":
-    #             frappe.logger().warning(
-    #                 f"[SP] Hook returned error for {submission_id}: {result.get('message')}"
-    #             )
-    #         return result
-    #     except ImportError as e:
-    #         # CR-026: an ImportError here is almost never "SP module not
-    #         # installed" (it is) — it is a STALE module cache in this
-    #         # long-running consumer. Surface it instead of skipping silently so
-    #         # it is not mistaken for a benign no-op. Re-raise so process_message
-    #         # logs it durably and the message is NACKed (not silently acked).
-    #         frappe.logger().error(
-    #             f"[SP] ImportError resolving on_feedback_ready for {submission_id}: "
-    #             f"{str(e)} — consumer likely needs a restart (stale module cache)."
-    #         )
-    #         raise
-    #     except Exception as e:
-    #         frappe.logger().warning(f"[SP] State update failed for {submission_id}: {str(e)}")
-    #         # Re-raise so process_message logs it but continues
-    #         raise
 
     def send_glific_notification(self, message_data: Dict):
         """Send feedback notification via Glific with proper error handling.
