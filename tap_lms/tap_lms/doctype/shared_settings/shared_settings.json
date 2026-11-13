@@ -18,14 +18,24 @@
   "max_submission_points",
   "magic_link_section",
   "magic_link_base_url",
+  "magic_link_shared_secret",
   "magic_link_ttl_home",
   "magic_link_ttl_feedback",
   "magic_link_ttl_gallery",
   "magic_link_column_break",
   "magic_link_ttl_submit",
   "magic_link_ttl_later",
+  "jwt_section",
+  "jwt_secret",
+  "jwt_algorithm",
+  "jwt_column_break",
+  "phone_token_ttl_seconds",
+  "upload_section",
+  "upload_put_url_ttl_seconds",
   "system_section",
   "config_cache_ttl_seconds",
+  "db_retry_attempts",
+  "db_retry_backoff_ms",
   "storage_section",
   "gcs_bucket",
   "gcs_project_id",
@@ -36,7 +46,8 @@
   "r2_secret_access_key",
   "r2_bucket",
   "worker_internal_api_url",
-  "worker_internal_api_secret"
+  "worker_internal_api_secret",
+  "worker_internal_api_timeout_seconds"
  ],
  "fields": [
   {
@@ -106,7 +117,7 @@
   {
    "fieldname": "magic_link_section",
    "fieldtype": "Section Break",
-   "label": "Magic Link TTLs"
+   "label": "Magic Link"
   },
   {
    "fieldname": "magic_link_base_url",
@@ -114,6 +125,13 @@
    "label": "Magic Link Base URL",
    "reqd": 1,
    "description": "The base URL mint_magic_link (tap_app/api/auth.py) prepends to a minted token to build the full, shareable magic_link_url -- e.g. the app's deep-link domain or a web redirect endpoint that itself hands the token to the TapApp Worker's /auth/redeem. Stored here, not hardcoded, because this value differs by environment (staging vs. production) and can change independently of a Frappe deploy. The token is appended as-is, with no added query parameters or path segments, so this value should already end in whatever separator the receiving endpoint expects (a trailing '/', or a '?token=' style prefix, depending on how that endpoint is built)."
+  },
+  {
+   "fieldname": "magic_link_shared_secret",
+   "fieldtype": "Password",
+   "label": "Magic Link Shared Secret",
+   "reqd": 1,
+   "description": "HMAC secret used to mint (and, on the Worker side, verify) V2 magic links. Must be byte-identical to the Worker's own MAGIC_LINK_SECRET (set via `wrangler secret put`) -- nothing in this codebase keeps the two independently-configured secrets in sync automatically; rotating one without the other makes every link minted here fail verification on the Worker side with UNAUTHORIZED. Configured here, as a Shared Settings Password field, instead of in site_config.json, so it can be rotated from the Shared Settings doctype UI with no deploy and no bench console access, consistently with every other TapApp secret (R2, GCS, Worker Internal API, JWT) on this doctype."
   },
   {
    "default": "7776000",
@@ -160,6 +178,51 @@
    "description": "Default 1209600 seconds = 14 days."
   },
   {
+   "fieldname": "jwt_section",
+   "fieldtype": "Section Break",
+   "label": "Phone JWT"
+  },
+  {
+   "fieldname": "jwt_secret",
+   "fieldtype": "Password",
+   "label": "JWT Secret",
+   "reqd": 1,
+   "description": "Signing secret for the phone-scoped JWT issued by shared/auth/jwt_tokens.py::issue_phone_token and verified by verify_phone_token. This is a separate secret from Magic Link Shared Secret above -- the magic link and the phone token are two different credential types with two different lifetimes and two different verifiers (the Worker verifies the magic link; this JWT is verified by whichever service calls verify_phone_token), so they must never share a secret. Rotating this value invalidates every phone token already issued -- every logged-in session on this credential type will need to re-redeem a fresh magic link."
+  },
+  {
+   "default": "HS256",
+   "fieldname": "jwt_algorithm",
+   "fieldtype": "Data",
+   "label": "JWT Algorithm",
+   "reqd": 1,
+   "description": "Algorithm passed to jwt.encode/jwt.decode in shared/auth/jwt_tokens.py. Must be a PyJWT-supported HMAC or asymmetric algorithm name (e.g. HS256, HS384, HS512). Changing this on a live site invalidates every previously-issued phone token signed under the old algorithm, since verify_phone_token only accepts the currently configured algorithm."
+  },
+  {
+   "fieldname": "jwt_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "7776000",
+   "fieldname": "phone_token_ttl_seconds",
+   "fieldtype": "Int",
+   "label": "Phone Token TTL (seconds)",
+   "reqd": 1,
+   "description": "How long a phone-scoped JWT (shared/auth/jwt_tokens.py::issue_phone_token) stays valid after issuance. Default 7776000 seconds = 90 days. There is no session/refresh layer behind this token -- re-logging in via a fresh magic link is the only way to get a new one -- so this value is intentionally long. Set to 0 to mint a token with no expiry claim at all (issue_phone_token only adds an `exp` claim when this is greater than 0); this is a real, supported configuration, not a misconfiguration, but means a token can never be invalidated by waiting it out -- only by rotating JWT Secret above."
+  },
+  {
+   "fieldname": "upload_section",
+   "fieldtype": "Section Break",
+   "label": "Upload Tickets"
+  },
+  {
+   "default": "600",
+   "fieldname": "upload_put_url_ttl_seconds",
+   "fieldtype": "Int",
+   "label": "Upload PUT URL TTL (seconds)",
+   "reqd": 1,
+   "description": "How long an upload ticket created by shared/submission/tickets.py::create_ticket stays valid in the Frappe cache before expiring. This is the window the client has, after calling request_upload, to actually PUT its file to the signed URL and call confirm_upload/submit_artwork before the ticket is discarded and the whole upload must be restarted. Default 600 seconds = 10 minutes."
+  },
+  {
    "fieldname": "system_section",
    "fieldtype": "Section Break",
    "label": "System"
@@ -171,6 +234,22 @@
    "label": "Config Cache TTL (seconds)",
    "reqd": 1,
    "description": "How long shared/config/settings_cache.py holds this document in memory before re-reading it from the database. Read fresh off the document on every cache load, so a change here takes effect the next time the current cache slot expires -- at most one stale read at the previous TTL, never permanently stuck."
+  },
+  {
+   "default": "3",
+   "fieldname": "db_retry_attempts",
+   "fieldtype": "Int",
+   "label": "DB Retry Attempts",
+   "reqd": 1,
+   "description": "How many total attempts shared/db_retry.py::with_retry makes for a raw-SQL call that keeps hitting a retryable Postgres error (deadlock_detected / serialization_failure), before giving up and re-raising. Must be at least 1 (1 means no retrying at all -- the call is tried once and any error, retryable or not, is raised immediately)."
+  },
+  {
+   "default": "50",
+   "fieldname": "db_retry_backoff_ms",
+   "fieldtype": "Int",
+   "label": "DB Retry Backoff (ms)",
+   "reqd": 1,
+   "description": "Fixed delay, in milliseconds, shared/db_retry.py::with_retry sleeps between retry attempts after a retryable Postgres error. Applied the same way between every pair of attempts (no exponential backoff) -- this is deliberately simple since TapApp's retryable errors (deadlock/serialization failure under row-level locking) are expected to be rare and short-lived, not a sign of sustained contention that would call for backoff growth."
   },
   {
    "fieldname": "storage_section",
@@ -225,6 +304,14 @@
    "fieldname": "worker_internal_api_secret",
    "fieldtype": "Password",
    "label": "Worker Internal API Secret"
+  },
+  {
+   "default": "15",
+   "fieldname": "worker_internal_api_timeout_seconds",
+   "fieldtype": "Int",
+   "label": "Worker Internal API Timeout (seconds)",
+   "reqd": 1,
+   "description": "HTTP request timeout used by shared/storage/gallery_promotion.py when calling the Worker's internal API (/internal/gallery/index, /internal/gallery/visibility). Applies to both the connect and read phase of each request (passed straight through to requests.post(..., timeout=...)). A value too low for the Worker's own response time will raise a requests.Timeout that gallery_promotion.py's callers must already tolerate (see shared/submission/review_result.py's own try/except around its gallery-notify call)."
   }
  ],
  "index_web_pages_for_search": 1,

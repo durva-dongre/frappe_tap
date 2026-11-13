@@ -9,6 +9,7 @@ from shared.progress.unit_progress import (
 from shared.enrollment.unit_rotation import next_unit_for
 from shared.progress.rewards import points_for_submission_review_valid, gems_for_submission_review_valid
 from shared.submission.status import is_reward_eligible
+from shared.profile.student import get_profile_fields
 
 
 def _mark_feedback_viewed_if_pending(pe_doc) -> None:
@@ -66,12 +67,15 @@ def _grading_award_for_submission(sub: dict) -> tuple[int, int]:
     Returns (0, 0) for a submission that is not reward-eligible, or is
     reward-eligible but not yet actually rewarded.
 
-    Read ONLY by get_sync_payload / get_last_submission_payload below --
-    both of which are gated by an updated_at/last_updated epoch comparison,
-    so a given award is only ever surfaced to the app once. submission.list
-    / submission.get do NOT call this -- see tap_app/api/submission.py's
-    module docstring for why a one-time award field has no place on an
-    ungated historical read.
+    Read ONLY by get_sync_payload / get_last_submission_payload /
+    get_profile_select_payload below -- all of which are gated (sync/
+    last_submission by an updated_at/last_updated epoch comparison;
+    get_profile_select_payload by being a one-shot call on login, not a
+    repeatable historical read) -- so a given award is only ever surfaced
+    to the app a bounded number of times, never on every page view of
+    submission history. submission.list / submission.get do NOT call this
+    -- see tap_app/api/submission.py's module docstring for why a one-time
+    award field has no place on an ungated historical read.
     """
     result_status = sub.get("result_status")
     if not is_reward_eligible(result_status):
@@ -79,6 +83,25 @@ def _grading_award_for_submission(sub: dict) -> tuple[int, int]:
     if not sub.get("feedback_ready_processed_at"):
         return 0, 0
     return points_for_submission_review_valid(), gems_for_submission_review_valid()
+
+
+def _build_submission_block(last_submission: dict) -> dict:
+    attempt_number, attempts_remaining = attempt_info_for_submission(last_submission.name)
+    points_awarded, gems_awarded = _grading_award_for_submission(last_submission)
+    return {
+        "submission_id": last_submission.name,
+        "assignment_id_link": last_submission.assignment_id_link,
+        "status": last_submission.status,
+        "result_status": last_submission.result_status,
+        "view_url": last_submission.submission_url,
+        "points": last_submission.grade,
+        "overall_feedback_translated": last_submission.overall_feedback_translated,
+        "overall_feedback_audio_url": last_submission.audio_feedback_url,
+        "attempt_number": attempt_number,
+        "attempts_remaining": attempts_remaining,
+        "points_awarded": points_awarded,
+        "gems_awarded": gems_awarded,
+    }
 
 
 def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
@@ -103,8 +126,7 @@ def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
         # name, with no dependency on "active enrollment" being the right
         # scope -- required here because last_submission may belong to an
         # enrollment other than the student's current active one.
-        attempt_number, attempts_remaining = attempt_info_for_submission(last_submission.name)
-        points_awarded, gems_awarded = _grading_award_for_submission(last_submission)
+        #
         # Frappe forwards the submission's own stored URLs (submission_url,
         # audio_feedback_url) directly, under "view_url" and
         # "overall_feedback_audio_url" -- the Worker is responsible for
@@ -126,23 +148,12 @@ def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
         # reported, matching how the rest of this API already talks about
         # points (points_total, points_awarded, points_tier).
         payload["last_submission"] = {
-            "submission_id": last_submission.name,
-            "assignment_id_link": last_submission.assignment_id_link,
-            "status": last_submission.status,
-            "result_status": last_submission.result_status,
-            "view_url": last_submission.submission_url,
-            "points": last_submission.grade,
-            "overall_feedback_translated": last_submission.overall_feedback_translated,
-            "overall_feedback_audio_url": last_submission.audio_feedback_url,
-            "attempt_number": attempt_number,
-            "attempts_remaining": attempts_remaining,
+            **_build_submission_block(last_submission),
             # Derived, not stored -- see _grading_award_for_submission.
             # 0/0 unless this submission's grading just landed a
             # "Success - Original" result and the one-time award has
             # actually been granted. This whole payload is only sent when
             # current_epoch > last_updated_epoch (the gate above).
-            "points_awarded": points_awarded,
-            "gems_awarded": gems_awarded,
             "updated_at": current_epoch,
         }
         _mark_feedback_viewed_if_pending(pe)
@@ -163,25 +174,48 @@ def get_last_submission_payload(student_id: str, last_updated_epoch: int) -> dic
     if sub_epoch <= (last_updated_epoch or 0):
         return {"has_update": False, **base}
 
-    attempt_number, attempts_remaining = attempt_info_for_submission(last_submission.name)
-    points_awarded, gems_awarded = _grading_award_for_submission(last_submission)
     _mark_feedback_viewed_if_pending(pe)
     return {
         "has_update": True,
         **base,
         "last_submission": {
-            "submission_id": last_submission.name,
-            "assignment_id_link": last_submission.assignment_id_link,
-            "status": last_submission.status,
-            "result_status": last_submission.result_status,
-            "view_url": last_submission.submission_url,
-            "points": last_submission.grade,
-            "overall_feedback_translated": last_submission.overall_feedback_translated,
-            "overall_feedback_audio_url": last_submission.audio_feedback_url,
-            "attempt_number": attempt_number,
-            "attempts_remaining": attempts_remaining,
-            "points_awarded": points_awarded,
-            "gems_awarded": gems_awarded,
+            **_build_submission_block(last_submission),
             "updated_at": sub_epoch,
         },
+    }
+
+
+def get_profile_select_payload(student_id: str) -> dict:
+    """Built for shared.auth.login.select_profile -- the one ownership-
+    checked follow-up call after redeem_magic_link, per that module's
+    docstring. Reuses the exact same resume-payload shape
+    tap_app/api/auth.py::_build_resume_payload already returns from
+    /auth/redeem and /auth/select_profile, so a client sees an identical
+    shape regardless of which login entrypoint it came through. Kept here,
+    in shared/, rather than duplicated in tap_app/api/auth.py, so there is
+    exactly one implementation of "what a freshly-selected profile's
+    payload looks like" -- tap_app/api/auth.py's own
+    _build_resume_payload is free to call this directly instead of
+    re-assembling the same fields, if/when that file is next touched."""
+    pe = get_active_program_enrollment(student_id)
+    profile = get_profile_fields(student_id)
+    current_unit = resolve_current_unit_for_track(pe, "program", fallback_resolver=next_unit_for)
+    last_activity = resolve_last_activity_type_for_track(pe, "program")
+    return {
+        "student_id": student_id,
+        "name": profile["name1"],
+        "grade": profile["grade"],
+        "points": pe.points or 0,
+        "gems": pe.gems or 0,
+        "current_learning_unit": current_unit,
+        "last_activity_type": last_activity,
+        "state_id": profile["state_id"],
+        "district_id": profile["district_id"],
+        "school_id": profile["school_id"],
+        "state_name": profile["state_name"],
+        "district_name": profile["district_name"],
+        "school_name": profile["school_name"],
+        "course_id": pe.course_level,
+        "language": profile["language_code"],
+        "updated_at": int(pe.last_activity_at.timestamp()) if pe.last_activity_at else 0,
     }

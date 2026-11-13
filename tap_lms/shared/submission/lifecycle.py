@@ -17,14 +17,9 @@ Glific flow delivery). imgana's function takes a plain, already-public
 submission URL and handles its own media detection; this module is
 responsible for everything imgana's function doesn't do: attempt-cap
 enforcement, the video prerequisite gate, the Unit Progress row write
-(submission link, attempt count, unit_status recompute), and the
-first-attempt points award.
-
-imgana.submit_artwork is called as a plain Python function call (not over
-HTTP), so this module's own tap_app_method-enforced auth is what gates the
-Worker-facing surface -- imgana.submit_artwork's own allow_guest=True is
-irrelevant here since it is never reached directly by an unauthenticated
-caller through this path.
+(submission link, attempt count, unit_status recompute), the first-attempt
+points award, AND -- critically -- making the canonical submission_id
+actually line up between the Worker's object key and the Frappe row.
 
 Worker route wiring: tap_app/api/submission.py::submit_artwork is the only
 whitelisted entrypoint the Worker calls for this. Do not point the Worker
@@ -33,16 +28,33 @@ or Unit Progress awareness of its own, so calling it directly would skip the
 cap check and leave Unit Progress (and therefore unit_status/points/resume
 state) never updated.
 
-submit_artwork returns only `submission_id` as the identifier -- never a
-bare `name` field alongside it. Every other submission-shaped response in
-this API (tap_app/api/submission.py's list/get, shared/profile/sync.py's
-sync/last_submission) emits only submission_id for the same reason:
-submission_id alone carries the exact same value Frappe's own document
-name holds for this source, so producing `name` as a second key would only
-give a caller two ways to read one value, which is exactly the kind of
-ambiguity the contract's single-identifier rule exists to avoid. Fixing
-this at the source, here, means no caller downstream -- Worker or
-otherwise -- has to remember to strip the field itself.
+v-fix (this revision) -- canonical submission_id, end to end:
+
+imgana.submit_artwork creates the Submission row under its OWN Frappe
+autoname (e.g. "SUB-0503"), not the Worker-minted id embedded in object_key
+(tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}).
+Previously nothing ever read that id back out of object_key, so the
+"submission_id" the client got back from submit_artwork/sync/list/get
+(Frappe's own `name`) never matched the id embedded in the GCS key the file
+was actually uploaded to -- and shared/storage/gallery_promotion.py's
+fallback to submission_doc.name always failed its own
+^[a-z2-7]{6,16}$ regex (a Frappe autoname doesn't match that shape), so
+notify_worker_gallery_index skipped every submission, forever.
+
+Fixed here: immediately after imgana.submit_artwork creates the row, this
+module parses the Worker-minted id back out of the SAME object_key it just
+handed to imgana (via shared.submission.object_naming.parse_object_key,
+the single source of truth for this key shape, matching the Worker's own
+storage/keys.ts byte-for-byte), sets it on the created Submission doc as
+`worker_submission_id`, and returns THAT value as `submission_id` in this
+function's own response -- never `sub_name` (the Frappe autoname). Every
+other submission-shaped read in this codebase (shared/profile/sync.py,
+tap_app/api/submission.py's list/get) already prefers
+`worker_submission_id` when present (falling back to `name` only for
+legacy/non-TapApp submissions that have no object_key to parse one from),
+so fixing the value at the point of creation, here, is what makes every
+downstream read -- and shared/storage/gallery_promotion.py's gallery-index
+notify -- agree on one consistent id for a TapApp-sourced submission.
 
 resolve_learning_unit_for_assignment's primary lookup queries
 tabUnitContentItem.content_type / tabUnitContentItem.content -- the actual
@@ -69,6 +81,7 @@ from shared.enrollment.active_batch import get_active_program_enrollment_name
 from shared.progress.unit_progress import get_or_create_unit_progress_row, recompute_unit_status
 from shared.progress.rewards import award_points, points_for_submission_first_attempt, max_submission_attempts
 from shared.submission.locks import lock_program_enrollment_row
+from shared.submission.object_naming import parse_object_key
 
 
 def resolve_learning_unit_for_assignment(assignment_id: str, context: str, student_id: str) -> str:
@@ -149,7 +162,22 @@ def _require_video_done(unit_progress_row) -> None:
 def check_attempt_cap(student_id: str, assignment_id: str, context: str = "program") -> dict:
     """Reports the student's current attempt number and how many attempts
     remain for this assignment, without creating anything. Also enforces
-    the video prerequisite and the cap itself."""
+    the video prerequisite and the cap itself.
+
+    v-fix: attempts_remaining is now computed against the UPCOMING attempt
+    number (row.submission_attempts + 1) -- matching submit_artwork's own
+    post-increment computation for the same (student, assignment, context)
+    pair -- instead of against the pre-increment count still sitting in
+    row.submission_attempts. Previously, for the Reference §4.1 example
+    (cap = 2, attempt_number returned = 2), this function returned
+    attempts_remaining = max(2 - 1, 0) = 1, while submit_artwork -- called
+    moments later for that same attempt -- returns max(2 - 2, 0) = 0. That
+    mismatch meant request_upload's attempts_remaining was always exactly
+    one higher than submit_artwork's for the identical attempt, a
+    client-visible inconsistency. Both functions now agree because both
+    compute attempts_remaining from the SAME attempt_number (the one about
+    to be/just made), not from two different counters.
+    """
     pe_name = get_active_program_enrollment_name(student_id)
     pe = frappe.get_doc("ProgramEnrollment", pe_name)
     unit = resolve_learning_unit_for_assignment(assignment_id, context, student_id)
@@ -165,14 +193,24 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
         if sub_status not in ("Completed", "Failed"):
             raise CapReached("previous submission still being reviewed")
 
+    # The attempt this call to request_upload is about to issue a key for.
+    # submit_artwork will, moments later, increment row.submission_attempts
+    # to this exact same number -- see submit_artwork below, where
+    # attempts_remaining is derived from the POST-increment
+    # row.submission_attempts, i.e. this same attempt_number. Computing
+    # attempts_remaining here off of attempt_number (not the still-
+    # pre-increment row.submission_attempts) is what keeps the two
+    # functions' attempts_remaining in agreement for the same attempt.
     attempt_number = row.submission_attempts + 1
+    attempts_remaining = max(cap - attempt_number, 0)
+
     pe.save(ignore_permissions=True)
 
-    attempts_remaining = max(cap - row.submission_attempts, 0)
     return {"attempt_number": attempt_number, "attempts_remaining": attempts_remaining}
 
 
-def submit_artwork(student_id: str, assignment_id: str, submission_url: str, context: str = "program") -> dict:
+def submit_artwork(student_id: str, assignment_id: str, submission_url: str, object_key: str | None = None,
+                    context: str = "program") -> dict:
     """Re-checks the attempt cap and video prerequisite under a row lock,
     then hands off the actual Submission creation to imgana's
     submit_artwork pipeline. submission_url is a plain, already-public URL
@@ -184,11 +222,27 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, con
     see that file's docstring for why the object_key -> URL conversion
     lives there and not in this module.
 
-    Returns the created submission's id as `submission_id` -- the only
-    identifier key in this response. Frappe's own document name is the
-    same value under the hood, but is never returned as a separate `name`
-    field (see module docstring); client code, Worker-side and anywhere
-    else, should read submission_id exclusively.
+    object_key is the SAME Worker-issued key submission_url was built from
+    (tap_app/api/submission.py passes both through unchanged). It is used
+    here, after imgana creates the row, purely to recover the Worker-minted
+    submission_id and persist it onto the new Submission doc as
+    `worker_submission_id` -- see module docstring ("v-fix") for the full
+    rationale. object_key is optional only so this function's signature
+    stays backward compatible with any caller that has no key to pass (none
+    exist in this codebase today; the TapApp wrapper always passes one) --
+    submission_id then falls back to the Frappe autoname (`sub_name`) in
+    that case, exactly as before this fix, and the row is simply not
+    gallery-eligible under its own Worker-shaped id (gallery_promotion.py
+    already treats "no worker_submission_id, and name doesn't match the
+    Worker's shape" as "skip gallery indexing for this one").
+
+    Returns the created submission's id as `submission_id` -- the Worker-
+    minted id recovered from object_key when available, else the Frappe
+    autoname. This is the ONLY identifier key in this response; `name` is
+    deliberately never returned as a second key alongside it (see module
+    docstring and tap_app/api/submission.py's own docstring for why one
+    canonical identifier field removes a class of client-side bugs where
+    the wrong field gets read for the same underlying value).
     """
     if not submission_url or not isinstance(submission_url, str):
         raise InvalidInput("submission_url missing")
@@ -241,6 +295,65 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, con
 
     sub_name = imgana_result["submission_id"]
 
+    # ------------------------------------------------------------------
+    # v-fix: recover the Worker-minted submission_id from object_key (the
+    # exact same key the Worker's request_upload issued and submit_artwork
+    # confirmed on GCS before ever calling here) and persist it onto the
+    # just-created Submission doc as `worker_submission_id`. This is the
+    # ONE place that field is ever set for a TapApp-sourced submission --
+    # shared/storage/gallery_promotion.py reads it back on the gallery-
+    # index path, and every other submission-shaped read in this codebase
+    # (shared/profile/sync.py, tap_app/api/submission.py) already prefers
+    # it over `name` when present. Doing this immediately after imgana
+    # creates the row, in the same request/transaction, means there is no
+    # window where the row exists without its worker_submission_id set.
+    #
+    # object_key's shape is validated via parse_object_key (shared/
+    # submission/object_naming.py), the single source of truth for this
+    # key's byte-for-byte shape (matches the Worker's own storage/keys.ts).
+    # A malformed/missing object_key is a plain, locally-detected bug in
+    # the caller (the Worker always sends one from its own request_upload
+    # issuance, confirmed on GCS) -- it does NOT roll back or fail the
+    # whole submit_artwork call, since the Submission row itself was
+    # already successfully created and must not be lost over a secondary,
+    # recoverable bookkeeping field. It is logged loudly instead, and
+    # submission_id for THIS response falls back to the Frappe autoname.
+    # ------------------------------------------------------------------
+    worker_submission_id: str | None = None
+    if object_key:
+        try:
+            parsed = parse_object_key(object_key)
+            worker_submission_id = parsed["submission_id"]
+            frappe.db.set_value(
+                "Submission",
+                sub_name,
+                "worker_submission_id",
+                worker_submission_id,
+                update_modified=False,
+            )
+        except InvalidInput:
+            frappe.logger().error(
+                f"submit_artwork: object_key={object_key!r} for newly created "
+                f"Submission {sub_name} does not match the expected "
+                f"tapapp/{{assignment_id}}/{{student_id}}/{{submission_id}}-"
+                f"{{attempt}}.{{ext}} shape -- worker_submission_id will NOT be "
+                f"set for this submission, so it will not be gallery-eligible "
+                f"under a Worker-shaped id until backfilled. The Submission "
+                f"row itself was created successfully and is not affected."
+            )
+    else:
+        frappe.logger().warning(
+            f"submit_artwork: no object_key supplied for newly created "
+            f"Submission {sub_name} -- worker_submission_id will NOT be set. "
+            f"The TapApp Worker path always supplies one; this indicates a "
+            f"caller other than the documented Worker route."
+        )
+
+    # The canonical identifier returned to every caller (Worker included)
+    # is the Worker-minted id when we were able to recover one, else the
+    # Frappe autoname -- never both, and never a separate `name` key.
+    canonical_submission_id = worker_submission_id or sub_name
+
     row.submission = sub_name
     row.submission_attempts += 1
     recompute_unit_status(row)
@@ -257,7 +370,7 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, con
     sub_created_at = frappe.db.get_value("Submission", sub_name, "created_at")
 
     return {
-        "submission_id": sub_name,
+        "submission_id": canonical_submission_id,
         "status": sub_status,
         "created_at": (sub_created_at or frappe.utils.now_datetime()).isoformat(),
         "assignment_id_link": assignment_id,

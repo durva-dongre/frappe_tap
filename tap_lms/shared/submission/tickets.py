@@ -4,7 +4,7 @@ import uuid
 
 import frappe
 
-from shared.config.settings_cache import get_int
+from shared.config.secrets_cache import get_upload_put_url_ttl_seconds
 from shared.errors import NotFound
 
 TICKET_KEY_PREFIX = "tap_upload_ticket:"
@@ -13,6 +13,12 @@ TICKET_KEY_PREFIX = "tap_upload_ticket:"
 # request_upload to confirm_upload to finalize_submission. event_id is
 # validated transiently in lifecycle.py before a ticket is ever created
 # (see _validate_context) and is never part of what gets persisted here.
+#
+# TTL: get_upload_put_url_ttl_seconds() reads Shared Settings.
+# upload_put_url_ttl_seconds (Int, default 600 = 10 minutes), the same
+# "configurable field with a safe, schema-matching default" pattern used
+# throughout shared/config/secrets_cache.py -- an operator can lengthen
+# or shorten the client's upload window without a deploy.
 
 
 def create_ticket(student_id: str, enrollment_name: str, assignment_id_link: str, submission_context: str,
@@ -26,7 +32,7 @@ def create_ticket(student_id: str, enrollment_name: str, assignment_id_link: str
         "content_type": content_type, "attempt_number": attempt_number,
         "submission_name": submission_name, "source": source,
     }
-    ttl = get_int("upload_put_url_ttl_seconds", 600)
+    ttl = get_upload_put_url_ttl_seconds()
     frappe.cache().set_value(f"{TICKET_KEY_PREFIX}{ticket_id}", payload, expires_in_sec=ttl)
     return ticket_id, payload
 

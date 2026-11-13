@@ -66,8 +66,33 @@ class PermissionError_(SharedError):
     http_status = 403
     code = "forbidden"
 
-    def __init__(self, message: str = "Forbidden"):
-        super().__init__(message)
+    def __init__(self, message: str = "Forbidden", error_code: str | None = None):
+        super().__init__(message, error_code)
+
+
+# Alias kept for call sites that read more naturally as "Forbidden" (e.g.
+# shared/auth/login.py's ownership check) -- same contract (403,
+# "forbidden") as PermissionError_, just a friendlier name at the call
+# site. Not a distinct error class: isinstance checks against either name
+# behave identically.
+Forbidden = PermissionError_
+
+
+class Unauthorized(SharedError):
+    """401 -- used exclusively by shared/auth/jwt_tokens.py's
+    verify_phone_token for a token that is missing, malformed, signed
+    under the wrong secret/algorithm, or expired. Distinct from
+    PermissionError_/Forbidden (403): Unauthorized means "we don't know
+    who you are" (bad/absent/expired credential), Forbidden means "we know
+    who you are and you're not allowed to do this" (e.g. a phone token
+    valid for a different phone's students). error_code is always supplied
+    by the caller (e.g. "token_expired", "token_invalid") so API layers
+    can distinguish the two expiry/invalidity cases on the wire."""
+    http_status = 401
+    code = "unauthorized"
+
+    def __init__(self, message: str = "Unauthorized", error_code: str | None = None):
+        super().__init__(message, error_code)
 
 
 class ValidationFailed(InvalidInput):

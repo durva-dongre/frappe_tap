@@ -4,16 +4,6 @@ from shared.auth import magic_link, jwt_tokens, roster
 from shared.errors import Forbidden, NotFound
 from shared.profile import sync
 
-# DEPENDENCY NOTE: Forbidden is not currently in shared/errors.py (which
-# defines SharedError, NotFound, InvalidInput, StudentNotFound,
-# ConflictError, PermissionError_), and sync.get_profile_select_payload is
-# not currently exported by shared/profile/sync.py (which exports
-# get_sync_payload and get_last_submission_payload). This module depends
-# on auth primitives (magic_link.py, jwt_tokens.py) that carry their own
-# dependency notes; resolving those additions is outside this module's
-# scope, and callers should confirm the symbols exist in their target
-# shared/ package before relying on this file.
-
 
 def redeem_magic_link(token: str) -> dict:
     """

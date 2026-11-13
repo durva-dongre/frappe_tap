@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import frappe
-
 from tap_lms.tap_app.api import tap_app_method
 from shared.auth.roster import get_students_for_phone, student_belongs_to_phone
 from shared.auth.magic_link import create_magic_link_v2
@@ -107,15 +105,22 @@ def mint_magic_link(phone: str, dest_type: str = "home", dest_id: str | None = N
        surface) is a deployment/operational decision, not something this
        function enforces on its own.
 
-    2. Secret agreement: the secret read here (get_magic_link_shared_secret(),
-       from site_config.json's tapapp_magic_link_secret) must be
-       byte-identical to the Worker's own MAGIC_LINK_SECRET (set via
-       `wrangler secret put`). Nothing in this codebase keeps the two
-       independently-configured secrets in sync automatically; rotating one
-       without the other makes every link minted here fail verification on
-       the Worker side with UNAUTHORIZED, with nothing in Frappe's own logs
-       to explain why. This coupling is an operational/runbook concern for
-       secret rotation, external to this file.
+    2. Secret agreement: the secret read here
+       (get_magic_link_shared_secret(), from Shared Settings.
+       magic_link_shared_secret -- a Password field, configurable from the
+       Shared Settings doctype UI, alongside every other TapApp secret
+       such as the GCS/R2 credentials and the Worker Internal API secret)
+       must be byte-identical to the Worker's own MAGIC_LINK_SECRET (set
+       via `wrangler secret put`). Nothing in this codebase keeps the two
+       independently-configured secrets in sync automatically; rotating
+       one without the other makes every link minted here fail
+       verification on the Worker side with UNAUTHORIZED, with nothing in
+       Frappe's own logs to explain why. This coupling is an
+       operational/runbook concern for secret rotation, external to this
+       file. get_magic_link_shared_secret itself raises InvalidInput
+       (mapped to a 400 by tap_app_method) if the field has never been
+       configured, so an unset secret fails loudly and immediately rather
+       than minting a token that can never verify.
 
     Per-dest_type default TTLs are Shared Settings fields
     (magic_link_ttl_home/feedback/gallery/submit/later), read via
@@ -131,9 +136,12 @@ def mint_magic_link(phone: str, dest_type: str = "home", dest_id: str | None = N
         raise InvalidInput(f"dest_id is required for dest_type={dest_type}")
 
     ttl = ttl_seconds or get_magic_link_ttl(dest_type)
+
+    # get_magic_link_shared_secret raises InvalidInput itself (mapped to a
+    # clean 400 by tap_app_method) if Shared Settings.magic_link_shared_secret
+    # has never been configured -- no separate frappe.throw guard is needed
+    # here, unlike the old site_config.json-backed accessor this replaces.
     secret = get_magic_link_shared_secret()
-    if not secret:
-        frappe.throw("tapapp_magic_link_secret is not configured in site_config.json")
 
     link = create_magic_link_v2(secret, phone, dest_type, dest_id, ttl)
     base_url = get_magic_link_base_url()

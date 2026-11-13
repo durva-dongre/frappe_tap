@@ -6,7 +6,11 @@ import time
 import frappe
 import requests
 
-from shared.config.secrets_cache import get_worker_internal_api_url, get_worker_internal_secret
+from shared.config.secrets_cache import (
+    get_worker_internal_api_url,
+    get_worker_internal_secret,
+    get_worker_internal_api_timeout_seconds,
+)
 
 # Must match the Worker's FIELD_PATTERNS.submission_id exactly
 # (worker/src/storage/keys.ts): /^[a-z2-7]{6,16}$/ -- lowercase base32, the
@@ -41,6 +45,12 @@ def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
     INVALID_INPUT regardless, so validating here first fails fast, locally,
     with a log line that names the real problem, instead of round-tripping
     to the Worker to discover the same thing.
+
+    HTTP timeout: both calls in this module use
+    get_worker_internal_api_timeout_seconds() (Shared Settings.
+    worker_internal_api_timeout_seconds, Int, default 15 seconds) rather
+    than a hardcoded value, so an operator can tune it without a deploy if
+    the Worker's own response-time characteristics change.
     """
     url = get_worker_internal_api_url()
     secret = get_worker_internal_secret()
@@ -117,7 +127,7 @@ def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
         f"{url.rstrip('/')}/internal/gallery/index",
         json=payload,
         headers={"X-Internal-Secret": secret},
-        timeout=15,
+        timeout=get_worker_internal_api_timeout_seconds(),
     )
     resp.raise_for_status()
 
@@ -132,6 +142,6 @@ def notify_worker_gallery_visibility(submission_id: str, visible: bool) -> None:
         f"{url.rstrip('/')}/internal/gallery/visibility",
         json={"submission_id": submission_id, "visible": visible},
         headers={"X-Internal-Secret": secret},
-        timeout=15,
+        timeout=get_worker_internal_api_timeout_seconds(),
     )
     resp.raise_for_status()
