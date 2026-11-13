@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 
 import frappe
@@ -7,21 +8,39 @@ import requests
 
 from shared.config.secrets_cache import get_worker_internal_api_url, get_worker_internal_secret
 
+# Must match the Worker's FIELD_PATTERNS.submission_id exactly
+# (worker/src/storage/keys.ts): /^[a-z2-7]{6,16}$/ -- lowercase base32, the
+# alphabet mintSubmissionId actually generates. Frappe's own document names
+# (e.g. "SUB-0503", or an autoname hash) do NOT match this shape.
+_WORKER_SUBMISSION_ID_PATTERN = re.compile(r"^[a-z2-7]{6,16}$")
+
 
 def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
                                  r2_object_key: str, media_type: str) -> None:
     """Tells the Worker to write a gallery_items row in D1. r2_object_key is
-    the key just written into the R2 bucket by
-    shared.storage.gallery_r2_promotion.promote_submission_media_to_r2 --
-    this is now a REQUIRED argument (not optional) because the Worker's
-    gallery read path signs object_key against R2 (r2SignGetDirect), not
-    GCS, so a GCS key here would silently produce an unusable signed URL
-    for every gallery viewer. media_type likewise comes from the R2
-    promotion step (derived from the real copied file's extension), not
-    from submission_doc.submission_type, since the Submission doctype's
-    submission_type can be "text"/"emoji"/"audio" for non-media submissions
-    that never reach this function anyway, and "image"/"video" is all the
-    gallery's media_type column accepts.
+    a required argument, not optional, because the Worker's gallery read
+    path signs object_key against R2 (r2SignGetDirect), not GCS -- a GCS key
+    here would silently produce an unusable signed URL for every gallery
+    viewer, so the caller must always pass the key just written into the R2
+    bucket by shared.storage.gallery_r2_promotion.promote_submission_media_to_r2.
+    media_type likewise must come from that same R2 promotion step (derived
+    from the real copied file's extension), not from
+    submission_doc.submission_type, since Submission.submission_type can be
+    "text"/"emoji"/"audio" for non-media submissions that never reach this
+    function anyway, and "image"/"video" is all the gallery's media_type
+    column accepts.
+
+    submission_id is validated against the exact shape the Worker's
+    internalHandlers.ts::validateRow requires (FIELD_PATTERNS.submission_id)
+    before the request is sent, because a submission with no
+    worker_submission_id set (any legacy/imgana-pipeline submission, since
+    only the TapApp path sets that field) would otherwise fall back to
+    submission_doc.name, which is typically Frappe's own doc-name format
+    (e.g. "SUB-0503") and does not match the Worker's required
+    ^[a-z2-7]{6,16}$ shape -- the Worker would reject the whole batch with
+    INVALID_INPUT regardless, so validating here first fails fast, locally,
+    with a log line that names the real problem, instead of round-tripping
+    to the Worker to discover the same thing.
     """
     url = get_worker_internal_api_url()
     secret = get_worker_internal_secret()
@@ -29,6 +48,30 @@ def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
         frappe.logger().warning(
             f"notify_worker_gallery_index: worker internal API not configured, "
             f"skipping for {submission_doc.name}"
+        )
+        return
+
+    # submission_id sent to the gallery index is the Worker-minted id when one
+    # exists (worker_submission_id, persisted by shared.submission.lifecycle's
+    # TapApp path), falling back to Frappe's own autoname hash for legacy/
+    # imgana-pipeline submissions (which is exactly what the R2 object key's
+    # own {submission_id} segment was built from in
+    # gallery_r2_promotion.promote_submission_media_to_r2 -- the two must
+    # always agree, since the Worker parses the id back out of the object_key
+    # on the read side).
+    submission_id = getattr(submission_doc, "worker_submission_id", None) or submission_doc.name
+
+    if not _WORKER_SUBMISSION_ID_PATTERN.match(submission_id or ""):
+        frappe.logger().error(
+            f"notify_worker_gallery_index: submission_id={submission_id!r} for "
+            f"Submission {submission_doc.name} does not match the Worker's "
+            f"required shape (^[a-z2-7]{{6,16}}$). This submission has no "
+            f"worker_submission_id set and its Frappe doc name is not "
+            f"Worker-compatible -- refusing to send a payload the Worker's "
+            f"internalHandlers.ts::validateRow will reject anyway. Skipping "
+            f"gallery index for this submission; it will not appear in the "
+            f"gallery until worker_submission_id is backfilled or this "
+            f"source starts setting it."
         )
         return
 
@@ -42,16 +85,6 @@ def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
     state_name = frappe.db.get_value("State", student.get("state_id"), "state_name") if student.get("state_id") else None
     district_name = frappe.db.get_value("District", student.get("district_id"), "district_name") if student.get("district_id") else None
     school_name = frappe.db.get_value("School", student.get("school_id"), "name1") if student.get("school_id") else None
-
-    # submission_id sent to the gallery index is the Worker-minted id when one
-    # exists (worker_submission_id, persisted by shared.submission.lifecycle's
-    # TapApp path), falling back to Frappe's own autoname hash for legacy/
-    # imgana-pipeline submissions (which is exactly what the R2 object key's
-    # own {submission_id} segment was built from in
-    # gallery_r2_promotion.promote_submission_media_to_r2 -- the two must
-    # always agree, since the Worker parses the id back out of the object_key
-    # on the read side).
-    submission_id = getattr(submission_doc, "worker_submission_id", None) or submission_doc.name
 
     payload = {
         "rows": [{

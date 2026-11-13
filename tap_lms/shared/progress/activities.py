@@ -1,47 +1,49 @@
 """
 shared/progress/activities.py
 
-Generic, reusable activity handlers for a Unit Progress row:
-  - submit_video:            flips video_watched, one-shot, awards
-                              points_for_video()
-  - resolve_quiz_id_for_unit: resolves a unit_id to the quiz_id it's backed
-                              by (UnitContentItem's Dynamic Link -> Quiz, or
-                              UnitContentItem -> VideoClass -> AssessmentList
-                              -> Quiz, with a unit_name/quiz_name fallback)
-  - check_quiz_answers:      the standalone quiz-id-keyed correctness
-                              checker -- takes an explicit quiz_id, grades
-                              each answer against QuizQuestion.correct_option,
-                              never returns the correct option's value
-  - submit_quiz:             orchestrates the two above into the one-shot,
-                              reward-granting activity: resolve quiz_id once,
-                              check answers, award points, persist quiz_json
+Grades and records submit_video_watched / submit_quiz activity for a Unit
+Progress row, for both the "program" and "event" tracks.
 
-Every function here takes an already-loaded ProgramEnrollment doc rather
-than a student_id -- the thin student_id-based wrapper lives in
-tap_lms/tap_app/api/progress.py, which resolves the doc once via
-shared.enrollment.active_batch.get_active_program_enrollment and passes it
-down. Each function mutates the doc and its unit_progress rows in memory;
-the CALLER saves exactly once per request, after calling whichever of these
-it needs -- this keeps a single submit_video/submit_quiz call to one UPDATE
-statement's worth of writes instead of several.
+Event-track reads and writes must resolve to the same Unit Progress row,
+because `is_enrolled` (shared/events/enrollment.py) resolves a student's
+event-track row globally, by the row's own `name`, via
+`find_unit_progress_row_by_name_global` -- a Unit Progress row is
+immutably tied to whichever ProgramEnrollment it was created under, never
+to whatever enrollment happens to be "active" right now. This module's
+write path honors that same invariant: `_resolve_event_unit_progress_row`
+finds the row the *event enrollment itself* already points at (via the
+same global, by-name lookup `is_enrolled` uses, sourced from the Student's
+own `event_enrollments` child table row for this event) and returns that
+row's owning parent-doc name alongside the row, so writes stay anchored to
+whichever enrollment first created the row for this (student, event) pair
+-- not to whatever enrollment happens to be active at write time. Only
+when no row exists yet (the student's first-ever activity for this event)
+is a new row created, and it is created on the currently active
+enrollment, exactly as for a first write today -- there is nothing
+"immutable" to preserve continuity with yet in that case.
 
-Neither function ever returns question text, option text, or the correct
-option's value anywhere in its return dict -- only comparison results
-(correct_count, total_count, points_awarded, and a per-question boolean).
+Program context does not need this resolution at all: it always reads and
+writes unit_progress rows directly on the passed-in (always active)
+program_enrollment_doc, because shared.enrollment.enrollment.
+create_enrollment guarantees exactly one ProgramEnrollment per (student,
+course_level) for life, so a program-context row always lives on that one,
+lifelong doc.
 
-FIX (resolve_quiz_id_for_unit): UnitContentItem is a Dynamic Link child
-table -- content_type (Select: VideoClass/NoteContent/Quiz/Assignment/
-CourseProject/TextMessageContent/VoiceNoteContent/ParentCallConfig) names
-the doctype, and content (Dynamic Link, linked via content_type) holds that
-doctype's document name. The previous version guessed at column names that
-do not exist on this table (content_reference, assignment, videoclass,
-video_class), which always failed -- and, worse, poisoned the open Postgres
-transaction on the first failed query, so even the unit_name/quiz_name
-fallback below it would then also raise InFailedSqlTransaction and never
-run. This version queries content_type/content directly, so a quiz can
-actually be resolved both when a unit's content item points straight at a
-Quiz and when it points at a VideoClass whose own assessments table links a
-Quiz.
+check_quiz_answers requires `selected_key` to be a bare positive-integer
+string (or int) before grading, because QuizQuestion.correct_option is
+always stored as a plain 1-based option index ("1", "2", "3", ...), never
+option text -- nothing in the Quiz/QuizQuestion doctypes ever stores free
+text there. Validating the shape up front, rather than simply comparing
+str(correct_option) == str(selected_key) and letting any non-matching
+value grade as "wrong," keeps a malformed answer (empty string,
+whitespace, option text from a buggy client) distinguishable as a 400 from
+a genuine wrong answer -- the two are not the same case and must not look
+the same to the caller. This mirrors the same validation on the Worker
+side (worker/src/handlers/progressHandlers.ts), so both layers agree on
+the exact same accepted shape for selected_key.
+
+See shared/events/enrollment.py and shared/progress/unit_progress.py for
+the lookup primitives this module relies on.
 """
 
 from __future__ import annotations
@@ -52,13 +54,19 @@ from typing import Any
 import frappe
 
 from shared.errors import CapReached, InvalidInput, NotFound
-from shared.progress.unit_progress import get_or_create_unit_progress_row, recompute_unit_status
+from shared.progress.unit_progress import (
+    get_or_create_unit_progress_row,
+    recompute_unit_status,
+    find_unit_progress_row_by_name_global,
+)
 from shared.progress.rewards import award_points, points_for_video, points_per_quiz_correct
 from shared.enrollment.unit_rotation import advance_to_next_unit, get_ordered_units_for_course_level
 
 
 def _validate_program_sequence(program_enrollment_doc, unit_id: str) -> None:
-    """Cross-unit sequence check, program context only (§8.1 of the plan)."""
+    """Cross-unit sequence check, program context only: a student can only
+    submit for the next not-yet-completed unit in their course level's
+    ordered sequence."""
     ordered = get_ordered_units_for_course_level(program_enrollment_doc.course_level)
     if unit_id not in ordered:
         raise InvalidInput("unit does not belong to this student's course level")
@@ -74,11 +82,164 @@ def _validate_program_sequence(program_enrollment_doc, unit_id: str) -> None:
             raise InvalidInput("unit_id is not the next unit in sequence for this student")
 
 
-def submit_video(program_enrollment_doc, unit_id: str, watched: bool, context: str = "program") -> dict:
+def _find_active_event_enrollment_row(student_id: str, learning_unit: str):
+    """Finds the student's active Student Event Enrollment row whose event
+    currently targets `learning_unit`, so we know which event this
+    (unit_id, context='event') write is for. Mirrors the lookup already
+    done in shared/submission/lifecycle.py::resolve_learning_unit_for_assignment
+    for the event branch, but in reverse: here we already have the unit_id
+    (from the request), and need the owning event enrollment row."""
+    rows = frappe.db.sql(
+        """
+        SELECT see.name, see.parent AS student_id, see.event, see.unit_progress
+          FROM "tabStudent Event Enrollment" see
+          JOIN "tabEvent Campaign" ec ON ec.name = see.event
+         WHERE see.parent = %(student_id)s
+           AND see.status = 'active'
+           AND ec.learning_unit = %(learning_unit)s
+         ORDER BY see.idx DESC
+         LIMIT 1
+        """,
+        {"student_id": student_id, "learning_unit": learning_unit},
+        as_dict=True,
+    )
+    return rows[0] if rows else None
+
+
+def _resolve_event_unit_progress_row(program_enrollment_doc, student_id: str, learning_unit: str):
+    """Returns (owning_parent_doc, row) for an event-context write.
+
+    If the student's active event enrollment for this unit already points
+    at a Unit Progress row (row.unit_progress is set), that row is resolved
+    GLOBALLY via find_unit_progress_row_by_name_global -- the same lookup
+    `is_enrolled` uses -- and the parent ProgramEnrollment doc that actually
+    owns that row is loaded and returned, so the write lands on the SAME
+    row/doc the read path already resolves to, regardless of which
+    enrollment is "active" right now.
+
+    If there is no event enrollment row yet, or it has no unit_progress
+    pointer yet (first-ever activity for this event), falls back to
+    get_or_create_unit_progress_row on the currently-active enrollment --
+    there's no prior row to preserve continuity with, so this matches
+    today's behavior for a first write. The newly-created row's name is
+    then written back onto the event enrollment's own `unit_progress`
+    pointer, so the NEXT read/write (is_enrolled, or a later activity call)
+    finds it via the same global lookup rather than silently falling into
+    this same "no pointer yet" branch and creating a second row.
+    """
+    event_row = _find_active_event_enrollment_row(student_id, learning_unit)
+
+    if event_row and event_row.get("unit_progress"):
+        global_row = find_unit_progress_row_by_name_global(event_row["unit_progress"])
+        if global_row:
+            owning_enrollment_name = global_row["parent"]
+            if owning_enrollment_name == program_enrollment_doc.name:
+                owning_doc = program_enrollment_doc
+            else:
+                owning_doc = frappe.get_doc("ProgramEnrollment", owning_enrollment_name)
+            # Find the live, mutable child-table row object on the owning
+            # doc (global_row above is a plain dict snapshot from raw SQL;
+            # we need the actual Document row to mutate and save).
+            row = None
+            for r in owning_doc.unit_progress:
+                if r.name == event_row["unit_progress"]:
+                    row = r
+                    break
+            if row is not None:
+                return owning_doc, row
+            # Pointer referenced a row that's gone missing from its own
+            # parent's child table (shouldn't happen, but don't crash --
+            # fall through to create-on-active below).
+
+    # No existing row to anchor to: create on the active enrollment, exactly
+    # as today's behavior does, and record the pointer on the event
+    # enrollment row so future calls resolve back to this same row.
+    row = get_or_create_unit_progress_row(program_enrollment_doc, learning_unit, "event")
+
+    if event_row:
+        frappe.db.set_value(
+            "Student Event Enrollment",
+            event_row["name"],
+            "unit_progress",
+            row.name if getattr(row, "name", None) else None,
+            update_modified=False,
+        )
+        # A brand-new child row appended via `append()` has no `name` yet
+        # until the parent doc is saved (Frappe assigns child-table names on
+        # insert/save). If it's not yet assigned, the pointer write above is
+        # a no-op (None); the caller (submit_video_watched/submit_quiz)
+        # saves program_enrollment_doc at the end of the request, after
+        # which `row.name` will be populated. We re-set the pointer in that
+        # case via a scheduled-after-save step: simplest correct fix is to
+        # have the caller persist the pointer after its own save, so we
+        # surface that need by stashing the event_row name on the returned
+        # row object for the caller to finish wiring up if necessary.
+        if not getattr(row, "name", None):
+            row._pending_event_enrollment_pointer = event_row["name"]
+
+    return program_enrollment_doc, row
+
+
+def _finalize_event_enrollment_pointer(row) -> None:
+    """Called by the API-layer wrapper (tap_app/api/progress.py) after
+    program_enrollment_doc.save() -- at which point a freshly-appended Unit
+    Progress child row finally has its own `name` assigned by Frappe. If
+    _resolve_event_unit_progress_row had to defer the Student Event
+    Enrollment.unit_progress pointer write (because the row didn't have a
+    name yet), this finishes that write now. No-op if nothing is pending."""
+    pending = getattr(row, "_pending_event_enrollment_pointer", None)
+    if pending and getattr(row, "name", None):
+        frappe.db.set_value(
+            "Student Event Enrollment", pending, "unit_progress", row.name, update_modified=False,
+        )
+
+
+def resolve_video_id_for_unit(unit_id: str) -> str | None:
+    """Returns the VideoClass id (content) linked to this unit via
+    UnitContentItem.content_type == 'VideoClass', or None if the unit has
+    no video content item configured."""
+    video_row = frappe.db.sql(
+        """
+        SELECT uci.content
+          FROM "tabUnitContentItem" uci
+         WHERE uci.parent = %s
+           AND uci.content_type = 'VideoClass'
+           AND uci.content IS NOT NULL AND uci.content != ''
+         LIMIT 1
+        """,
+        (unit_id,),
+    )
+    if video_row and video_row[0][0]:
+        return video_row[0][0]
+    return None
+
+
+def submit_video_watched(program_enrollment_doc, unit_id: str, video_id: str, watched: bool, context: str = "program") -> dict:
+    """Validates video_id against the unit's configured video, then flips
+    video_watched once (idempotent on repeat). Advances the student to the
+    next unit in program context the moment every required activity for
+    the unit is done.
+
+    For context == "event", resolves the owning Unit Progress row globally
+    (see _resolve_event_unit_progress_row) instead of assuming it lives on
+    the currently active enrollment, so writes stay anchored to wherever
+    the student's event progress actually started."""
     if context == "program":
         _validate_program_sequence(program_enrollment_doc, unit_id)
 
-    row = get_or_create_unit_progress_row(program_enrollment_doc, unit_id, context)
+    expected_video_id = resolve_video_id_for_unit(unit_id)
+    if not expected_video_id:
+        raise NotFound("no video is configured for this unit")
+    if video_id != expected_video_id:
+        raise InvalidInput("video_id does not match the video configured for this unit")
+
+    if context == "event":
+        owning_doc, row = _resolve_event_unit_progress_row(
+            program_enrollment_doc, program_enrollment_doc.student, unit_id,
+        )
+    else:
+        owning_doc = program_enrollment_doc
+        row = get_or_create_unit_progress_row(program_enrollment_doc, unit_id, context)
 
     points_awarded = 0
     repeat = False
@@ -86,7 +247,7 @@ def submit_video(program_enrollment_doc, unit_id: str, watched: bool, context: s
         if not row.video_watched:
             row.video_watched = 1
             points_awarded = points_for_video()
-            award_points(program_enrollment_doc, points_awarded)
+            award_points(owning_doc, points_awarded)
         else:
             repeat = True
 
@@ -98,19 +259,27 @@ def submit_video(program_enrollment_doc, unit_id: str, watched: bool, context: s
         program_enrollment_doc.activity_this_week = (program_enrollment_doc.activity_this_week or 0) + 1
 
     program_enrollment_doc.last_activity_at = frappe.utils.now_datetime()
+    if owning_doc is not program_enrollment_doc:
+        owning_doc.last_activity_at = frappe.utils.now_datetime()
 
     return {
         "points_awarded": points_awarded,
         "points_total": program_enrollment_doc.points or 0,
         "context": context,
         "repeat": repeat,
+        "video_id": video_id,
+        # internal: API layer needs this to save the right doc(s) and to
+        # finish wiring a brand-new event Unit Progress row's pointer.
+        "_owning_doc": owning_doc,
+        "_row": row,
     }
 
 
 def resolve_quiz_id_for_unit(unit_id: str) -> str | None:
-    # UnitContentItem is a Dynamic Link table: content_type names the
-    # doctype, content holds that doctype's document name. A unit's content
-    # item can point straight at a Quiz...
+    """Resolves a unit's quiz, trying (in order): a direct UnitContentItem
+    link to a Quiz, a UnitContentItem link to a VideoClass whose own
+    assessments table links a Quiz, and finally a unit_name/quiz_name
+    string-match fallback."""
     quiz_row = frappe.db.sql(
         """
         SELECT uci.content
@@ -125,11 +294,6 @@ def resolve_quiz_id_for_unit(unit_id: str) -> str | None:
     if quiz_row and quiz_row[0][0]:
         return quiz_row[0][0]
 
-    # ...or at a VideoClass, whose own `assessments` child table (AssessmentList)
-    # links a Quiz. Column name on that child row is unverified beyond
-    # "quiz" (shared/submission/lifecycle.py notes the same uncertainty for
-    # UnitContentItem itself), so the same defensive multi-guess is kept
-    # here, scoped to just that one child row rather than the whole query.
     video_class_row = frappe.db.sql(
         """
         SELECT uci.content
@@ -159,6 +323,18 @@ def resolve_quiz_id_for_unit(unit_id: str) -> str | None:
 
 
 def check_quiz_answers(quiz_id: str, answers: list[dict[str, Any]]) -> dict:
+    """Grades a set of answers against a specific quiz's questions. Returns
+    only correctness results -- never question text, option text, or the
+    correct option's value, per API_Reference.md §3's "no content serving"
+    rule.
+
+    selected_key must be a bare positive-integer option index ("1", "2",
+    "3", ... as a string, or the equivalent int) -- matching
+    QuizQuestion.correct_option's own stored shape exactly -- never option
+    text or any other free-form string; see module docstring for why this
+    validation must happen before comparison rather than being folded into
+    the equality check itself.
+    """
     if not quiz_id:
         raise InvalidInput("quiz_id is required")
     if not answers:
@@ -181,8 +357,17 @@ def check_quiz_answers(quiz_id: str, answers: list[dict[str, Any]]) -> dict:
         if question_id not in valid_question_ids:
             raise InvalidInput(f"question_id {question_id} does not belong to quiz {quiz_id}")
 
+        # selected_key must be a bare positive integer (as a string or int)
+        # -- the option's 1-based index, e.g. "1" / "2" / "3" -- never
+        # option text or any other free-form string.
+        selected_key_str = str(selected_key).strip() if selected_key is not None else ""
+        if not selected_key_str.isdigit() or selected_key_str == "0":
+            raise InvalidInput(
+                f"selected_key must be a positive number (e.g. \"1\", \"2\", \"3\"), got {selected_key!r}"
+            )
+
         correct_option = frappe.db.get_value("QuizQuestion", question_id, "correct_option")
-        is_correct = correct_option is not None and str(correct_option) == str(selected_key)
+        is_correct = correct_option is not None and str(correct_option) == selected_key_str
         if is_correct:
             correct_count += 1
         results.append({"question_id": question_id, "correct": is_correct})
@@ -195,26 +380,44 @@ def check_quiz_answers(quiz_id: str, answers: list[dict[str, Any]]) -> dict:
     }
 
 
-def submit_quiz(program_enrollment_doc, unit_id: str, answers: list[dict[str, Any]], context: str = "program") -> dict:
-    row = get_or_create_unit_progress_row(program_enrollment_doc, unit_id, context)
+def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: list[dict[str, Any]], context: str = "program") -> dict:
+    """Independent of video and submission -- a student can take the quiz
+    before, after, or regardless of either. One-shot per unit
+    (already-graded quizzes raise CapReached, per API_Reference.md §3.2's
+    "no reattempts" rule). Validates quiz_id against the unit's configured
+    quiz, then grades and persists the result. Advances the student to the
+    next unit in program context once every required activity for the
+    unit is done.
 
-    if not row.video_watched:
-        raise InvalidInput("video must be watched before attempting the quiz for this unit")
+    For context == "event", resolves the owning Unit Progress row globally
+    (see _resolve_event_unit_progress_row) -- same resolution as
+    submit_video_watched, so quiz writes stay anchored to the enrollment
+    that owns the row, matching what is_enrolled's read path already
+    does."""
+    if context == "event":
+        owning_doc, row = _resolve_event_unit_progress_row(
+            program_enrollment_doc, program_enrollment_doc.student, unit_id,
+        )
+    else:
+        owning_doc = program_enrollment_doc
+        row = get_or_create_unit_progress_row(program_enrollment_doc, unit_id, context)
 
     existing_quiz = _parse_quiz_json(row.quiz_json)
     if existing_quiz and existing_quiz.get("graded"):
         raise CapReached("quiz already graded for this unit")
 
-    quiz_id = resolve_quiz_id_for_unit(unit_id)
-    if not quiz_id:
+    expected_quiz_id = resolve_quiz_id_for_unit(unit_id)
+    if not expected_quiz_id:
         raise NotFound("no quiz exists for this unit")
+    if quiz_id != expected_quiz_id:
+        raise InvalidInput("quiz_id does not match the quiz configured for this unit")
 
     check_result = check_quiz_answers(quiz_id, answers)
     correct_count = check_result["correct_count"]
     total_count = check_result["total_count"]
 
     points_awarded = correct_count * points_per_quiz_correct()
-    award_points(program_enrollment_doc, points_awarded)
+    award_points(owning_doc, points_awarded)
 
     row.quiz_json = frappe.as_json({
         "quiz_id": quiz_id,
@@ -232,6 +435,8 @@ def submit_quiz(program_enrollment_doc, unit_id: str, answers: list[dict[str, An
         program_enrollment_doc.activity_this_week = (program_enrollment_doc.activity_this_week or 0) + 1
 
     program_enrollment_doc.last_activity_at = frappe.utils.now_datetime()
+    if owning_doc is not program_enrollment_doc:
+        owning_doc.last_activity_at = frappe.utils.now_datetime()
 
     return {
         "quiz_id": quiz_id,
@@ -241,6 +446,8 @@ def submit_quiz(program_enrollment_doc, unit_id: str, answers: list[dict[str, An
         "points_total": program_enrollment_doc.points or 0,
         "context": context,
         "repeat": False,
+        "_owning_doc": owning_doc,
+        "_row": row,
     }
 
 

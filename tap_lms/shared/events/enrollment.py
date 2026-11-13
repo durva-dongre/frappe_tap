@@ -69,18 +69,23 @@ def enroll_student_in_event(student_id: str, event_id: str) -> dict:
 
 
 def is_enrolled(student_id: str, event_id: str) -> dict:
-    """The sole source of event-track status and resume state (API_Reference
-    §8.2). FIX: previously resolved the student's event-track Unit Progress
-    row by first loading get_active_program_enrollment(student_id) and
-    searching THAT doc's unit_progress table -- but a Unit Progress row is
-    immutably tied to whichever ProgramEnrollment it was created under, not
-    to whatever enrollment happens to be "active" right now. If the student's
-    active enrollment changed since they made progress on this event (e.g.
-    they started a new course-level enrollment), the old lookup would fail
-    to find the row and silently report the event's *default* starting unit
-    instead of the student's real progress. find_unit_progress_row_by_name_global
-    resolves the row directly by its own name, independent of which
-    enrollment currently owns it."""
+    """The sole source of event-track status and resume state
+    (API_Reference.md §8.2). A student's event-track Unit Progress row is
+    resolved globally, by the row's own name
+    (find_unit_progress_row_by_name_global), rather than by first loading
+    get_active_program_enrollment(student_id) and searching that doc's
+    unit_progress table -- because a Unit Progress row is immutably tied
+    to whichever ProgramEnrollment it was created under, not to whatever
+    enrollment happens to be "active" right now. If the student's active
+    enrollment has since changed (e.g. they started a new course-level
+    enrollment after making progress on this event), a lookup scoped to
+    "the active enrollment" would fail to find the row and would report
+    the event's default starting unit instead of the student's real
+    progress. shared/progress/activities.py's write path
+    (_resolve_event_unit_progress_row) anchors event-context writes to
+    this same global resolution, so the two stay in agreement: whatever
+    row this function finds for a read is the same row a write for that
+    event will update."""
     student = _get_student_doc(student_id)
     rows = [r for r in (student.event_enrollments or []) if r.event == event_id]
     if not rows:

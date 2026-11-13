@@ -19,6 +19,8 @@ def enroll_event(student_id: str, event_id: str):
 def is_enrolled(student_id: str, event_id: str):
     """Worker route: POST /events/is_enrolled -> FRAPPE_METHODS.isEnrolled
     ("tap_lms.tap_app.api.events.is_enrolled"). This is the sole source of
-    event-track resume state in the whole API (API_Reference §8.2) -- no
-    resume payload ever carries current_event_learning_unit."""
+    event-track resume state in the whole API (API_Reference.md §8.2) -- no
+    resume payload from /auth/redeem or /auth/select_profile ever carries
+    current_event_learning_unit; that field is scoped exclusively to this
+    endpoint, per event_id."""
     return _is_enrolled(student_id, event_id)

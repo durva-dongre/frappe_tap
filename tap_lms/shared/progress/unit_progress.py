@@ -12,23 +12,30 @@ Every mutating path across every app goes through
 get_or_create_unit_progress_row so "exactly one row per (learning_unit,
 unit_type)" is enforced in exactly one place.
 
-FIX: a Unit Progress row is immutably tied to whichever ProgramEnrollment it
-was created under -- it is NOT guaranteed to live under whatever enrollment
-is currently "active" for a student (an enrollment can be renewed/replaced
+A Unit Progress row is immutably tied to whichever ProgramEnrollment it was
+created under -- it is NOT guaranteed to live under whatever enrollment is
+currently "active" for a student (an enrollment can be renewed/replaced
 while an old submission's or old event's progress row still points at the
-previous one). Several call sites across the codebase used to resolve a row
-by first loading get_active_program_enrollment(student_id) and then
-searching that one doc's child table -- which silently misses any row that
-belongs to a *different* (older) enrollment, producing wrong attempt counts
-or wrongly "reset" event progress. find_unit_progress_row_for_submission and
-the new find_unit_progress_row_by_name_global below are the two sanctioned
-ways to look up a Unit Progress row without depending on "the active
-enrollment" being the right scope -- they query the child table directly, by
-submission or by the row's own global `name`, exactly the way
-shared/jobs/event_maintenance.py already (correctly) does it. New code
-should prefer these two over "load active enrollment, then search its
-rows" whenever the row being searched for might not belong to the student's
-*current* active enrollment.
+previous one). find_unit_progress_row_for_submission and
+find_unit_progress_row_by_name_global below are the two sanctioned ways to
+look up a Unit Progress row without depending on "the active enrollment"
+being the right scope -- they query the child table directly, by submission
+or by the row's own global `name`, the same way
+shared/jobs/event_maintenance.py does it. New code should prefer these two
+over "load active enrollment, then search its rows" whenever the row being
+searched for might not belong to the student's *current* active enrollment.
+
+resolve_last_activity_type is the single entrypoint for "what did this
+student last do" across both tracks. Program context is safe to read
+straight off the active ProgramEnrollment's own unit_progress table because
+shared.enrollment.enrollment.create_enrollment guarantees exactly one
+ProgramEnrollment per (student, course_level) for life -- see that module's
+docstring. Event context is NOT safe to read that way, for the same reason
+find_unit_progress_row_by_name_global exists: an event's Unit Progress row
+can live on a ProgramEnrollment that is no longer the student's active one.
+resolve_last_activity_type's event branch mirrors exactly what
+shared.events.enrollment.is_enrolled already does to resolve that row
+correctly, so both reads agree.
 """
 
 from __future__ import annotations
@@ -122,14 +129,14 @@ def find_unit_progress_row_for_submission(submission_name: str) -> Optional[dict
 
 
 def attempt_info_for_submission(submission_name: str) -> tuple[int, int]:
-    """The ONE correct implementation of "how many attempts has this
-    submission used, and how many remain." Resolves the owning Unit Progress
-    row directly (via find_unit_progress_row_for_submission), so it works
+    """The one implementation of "how many attempts has this submission
+    used, and how many remain." Resolves the owning Unit Progress row
+    directly (via find_unit_progress_row_for_submission), so it works
     correctly even when the submission belongs to a past/inactive
-    enrollment -- unlike the three previous duplicated copies of this logic
-    that only searched the student's *currently active* enrollment's
-    unit_progress table and silently fell back to a wrong (1, cap) for any
-    submission outside that scope.
+    enrollment -- never search the student's currently active enrollment's
+    unit_progress table for this, since a submission outside that scope
+    would silently resolve to a wrong (1, cap) instead of its real attempt
+    count.
 
     Callers: tap_app/api/submission.py (list_submissions, get_submission) and
     shared/profile/sync.py (get_sync_payload, get_last_submission_payload)
@@ -258,8 +265,75 @@ def resolve_current_unit_for_track(parent_doc, unit_type: str, table_fieldname: 
 
 
 def resolve_last_activity_type_for_track(parent_doc, unit_type: str, table_fieldname: str = "unit_progress") -> Optional[str]:
+    """Reads last_activity_type straight off parent_doc's own child table.
+    SAFE for unit_type == "program": now that
+    shared.enrollment.enrollment.create_enrollment guarantees exactly one
+    ProgramEnrollment per (student, course_level) for life, a program-context
+    row always lives on that one, lifelong doc, which is exactly what
+    get_active_program_enrollment loads.
+
+    NOT safe for unit_type == "event" in general -- an event's Unit Progress
+    row is not guaranteed to live on the currently-active enrollment. Use
+    resolve_last_activity_type(..., unit_type="event", event_id=...) for
+    that case instead; it resolves the row the same way
+    shared.events.enrollment.is_enrolled does.
+    """
     rows = [r for r in getattr(parent_doc, table_fieldname) if r.unit_type == unit_type]
     if not rows:
         return None
     rows.sort(key=lambda r: r.idx, reverse=True)
     return infer_last_activity_type(rows[0])
+
+
+def resolve_last_activity_type(student_id: str, program_enrollment_doc, unit_type: str,
+                                event_id: str | None = None, table_fieldname: str = "unit_progress") -> Optional[str]:
+    """
+    The one correct entrypoint for "what did this student last do",
+    covering BOTH tracks:
+
+    - unit_type == "program": delegates to resolve_last_activity_type_for_track
+      on program_enrollment_doc's own unit_progress table. Safe because a
+      program-context row always lives on the student's one, lifelong
+      ProgramEnrollment (see that function's docstring).
+
+    - unit_type == "event": program_enrollment_doc.unit_progress is NOT a
+      safe source -- an event's Unit Progress row can live on a
+      ProgramEnrollment that is no longer the student's active one (see
+      shared/progress/activities.py's _resolve_event_unit_progress_row
+      docstring for the full reasoning). This branch instead resolves
+      the row exactly the way shared.events.enrollment.is_enrolled does:
+      find the student's Student Event Enrollment row for event_id, take
+      its stored unit_progress pointer, and resolve that globally via
+      find_unit_progress_row_by_name_global. event_id is required here.
+
+    Returns None if there is no row yet for that track (student hasn't
+    started), not an error -- "no activity yet" is a valid, common state.
+    """
+    if unit_type not in VALID_UNIT_TYPES:
+        raise InvalidInput(f"unit_type must be one of {VALID_UNIT_TYPES}")
+
+    if unit_type == "program":
+        return resolve_last_activity_type_for_track(program_enrollment_doc, "program", table_fieldname)
+
+    if not event_id:
+        raise InvalidInput("event_id is required to resolve last_activity_type for unit_type='event'")
+
+    event_row = frappe.db.sql(
+        """
+        SELECT unit_progress
+          FROM "tabStudent Event Enrollment"
+         WHERE parent = %(student_id)s AND event = %(event_id)s
+         ORDER BY idx DESC
+         LIMIT 1
+        """,
+        {"student_id": student_id, "event_id": event_id},
+        as_dict=True,
+    )
+    if not event_row or not event_row[0].get("unit_progress"):
+        return None
+
+    up_row = find_unit_progress_row_by_name_global(event_row[0]["unit_progress"])
+    if not up_row:
+        return None
+
+    return infer_last_activity_type(up_row)

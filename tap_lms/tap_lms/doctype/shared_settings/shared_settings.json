@@ -16,6 +16,16 @@
   "max_video_points",
   "max_quiz_points",
   "max_submission_points",
+  "magic_link_section",
+  "magic_link_base_url",
+  "magic_link_ttl_home",
+  "magic_link_ttl_feedback",
+  "magic_link_ttl_gallery",
+  "magic_link_column_break",
+  "magic_link_ttl_submit",
+  "magic_link_ttl_later",
+  "system_section",
+  "config_cache_ttl_seconds",
   "storage_section",
   "gcs_bucket",
   "gcs_project_id",
@@ -63,7 +73,7 @@
    "fieldname": "gems_submission_review_valid",
    "fieldtype": "Int",
    "label": "Gems Submission Review Valid",
-   "description": "Previously had no backing field at all -- shared/progress/rewards.py::gems_for_submission_review_valid() fell back to a hardcoded 1 via getattr(settings, 'gems_submission_review_valid', None). Adding this field makes the gem reward for a valid submission review actually configurable from this settings doctype, matching every other reward amount here."
+   "description": "The gem reward granted once a submission's review comes back as a valid ('Success - Original') result. shared/progress/rewards.py::gems_for_submission_review_valid() reads this field directly and falls back to a hardcoded default of 1 only if this Singleton has never been saved since this field was added to the schema -- see that function's own docstring for why that fallback exists and why it is not a substitute for saving Shared Settings once post-deploy."
   },
   {
    "fieldname": "tapapp_column_break",
@@ -92,6 +102,75 @@
    "fieldname": "max_submission_points",
    "fieldtype": "Int",
    "label": "Max Submission Points"
+  },
+  {
+   "fieldname": "magic_link_section",
+   "fieldtype": "Section Break",
+   "label": "Magic Link TTLs"
+  },
+  {
+   "fieldname": "magic_link_base_url",
+   "fieldtype": "Data",
+   "label": "Magic Link Base URL",
+   "reqd": 1,
+   "description": "The base URL mint_magic_link (tap_app/api/auth.py) prepends to a minted token to build the full, shareable magic_link_url -- e.g. the app's deep-link domain or a web redirect endpoint that itself hands the token to the TapApp Worker's /auth/redeem. Stored here, not hardcoded, because this value differs by environment (staging vs. production) and can change independently of a Frappe deploy. The token is appended as-is, with no added query parameters or path segments, so this value should already end in whatever separator the receiving endpoint expects (a trailing '/', or a '?token=' style prefix, depending on how that endpoint is built)."
+  },
+  {
+   "default": "7776000",
+   "fieldname": "magic_link_ttl_home",
+   "fieldtype": "Int",
+   "label": "Magic Link TTL - Home (seconds)",
+   "reqd": 1,
+   "description": "Default 7776000 seconds = 90 days."
+  },
+  {
+   "default": "2592000",
+   "fieldname": "magic_link_ttl_feedback",
+   "fieldtype": "Int",
+   "label": "Magic Link TTL - Feedback (seconds)",
+   "reqd": 1,
+   "description": "Default 2592000 seconds = 30 days."
+  },
+  {
+   "default": "2592000",
+   "fieldname": "magic_link_ttl_gallery",
+   "fieldtype": "Int",
+   "label": "Magic Link TTL - Gallery (seconds)",
+   "reqd": 1,
+   "description": "Default 2592000 seconds = 30 days."
+  },
+  {
+   "fieldname": "magic_link_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1209600",
+   "fieldname": "magic_link_ttl_submit",
+   "fieldtype": "Int",
+   "label": "Magic Link TTL - Submit (seconds)",
+   "reqd": 1,
+   "description": "Default 1209600 seconds = 14 days."
+  },
+  {
+   "default": "1209600",
+   "fieldname": "magic_link_ttl_later",
+   "fieldtype": "Int",
+   "label": "Magic Link TTL - Later (seconds)",
+   "reqd": 1,
+   "description": "Default 1209600 seconds = 14 days."
+  },
+  {
+   "fieldname": "system_section",
+   "fieldtype": "Section Break",
+   "label": "System"
+  },
+  {
+   "default": "60",
+   "fieldname": "config_cache_ttl_seconds",
+   "fieldtype": "Int",
+   "label": "Config Cache TTL (seconds)",
+   "reqd": 1,
+   "description": "How long shared/config/settings_cache.py holds this document in memory before re-reading it from the database. Read fresh off the document on every cache load, so a change here takes effect the next time the current cache slot expires -- at most one stale read at the previous TTL, never permanently stuck."
   },
   {
    "fieldname": "storage_section",
@@ -151,12 +230,25 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-12 00:00:00.000000",
+ "modified": "2026-11-13 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Shared Settings",
  "owner": "Administrator",
- "permissions": [],
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []

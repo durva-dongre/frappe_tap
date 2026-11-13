@@ -8,7 +8,7 @@ from shared.config.secrets_cache import get_jwt_secret
 from shared.config.settings_cache import get, get_int
 from shared.errors import Unauthorized
 
-# ONE token type in the whole system: phone-scoped. No student-scoped token, no
+# One token type in this module: phone-scoped. No student-scoped token, no
 # session layer, no server-side registry -- verification is pure signature+exp
 # decode, zero Redis/Postgres involved, so it costs nothing under concurrent load
 # and is identical whether redeemed the same second it's issued or a year later.
@@ -19,10 +19,11 @@ from shared.errors import Unauthorized
 # TTL is long (phone_token_ttl_seconds, default 90 days) since there's no
 # session/refresh layer and re-logging in via the magic link should be rare.
 #
-# FLAGGED, same as auth/magic_link.py: references get_jwt_secret (not in
-# secrets_cache.py), get/get_int (not in settings_cache.py), and
-# Unauthorized (not in errors.py). Out of scope for this pass -- left exactly
-# as uploaded.
+# DEPENDENCY NOTE: this module references get_jwt_secret (not currently in
+# secrets_cache.py), get/get_int (not currently in settings_cache.py), and
+# Unauthorized (not currently in errors.py). Resolving those additions is
+# outside this module's own scope; callers relying on this file should
+# confirm those symbols exist in their target shared/ package before use.
 
 
 def issue_phone_token(phone: str) -> str:

@@ -105,7 +105,7 @@
    "fieldname": "activity_this_week",
    "fieldtype": "Int",
    "label": "Activity This Week",
-   "description": "Program-context attempts only. Shared Settings.weekly_activity_cap throttles this column. Event submission attempts never read or write this column \u2014 see Student Event Enrollment.activity_this_week and Shared Settings.event_weekly_activity_cap instead."
+   "description": "Program-context only. No event-context equivalent exists yet."
   },
   {
    "fieldname": "unit_progress_section",

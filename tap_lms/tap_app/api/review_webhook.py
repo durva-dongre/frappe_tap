@@ -9,24 +9,17 @@ from shared.submission.review_result import handle_review_result
 
 @tap_app_method
 def review_result_webhook(submission_id: str):
-    """Entrypoint for an external grading/review pipeline that updates a
-    Submission's own status/result_status fields directly (rather than
-    through the RabbitMQ feedback_consumer path) and then needs the reward
-    side-effects (points/gems/gallery notification) applied.
-
-    FIX: this file previously existed but was completely empty -- nothing
-    anywhere called shared.submission.review_result.handle_review_result,
-    so the submission-review points/gems reward path was dead code in
-    production. feedback_handler/feedback_consumer.py's RabbitMQ path is the
-    other, primary entrypoint into handle_review_result (see that module);
-    this webhook exists for any reviewer/grading system that writes directly
-    to the Submission doctype instead of going through RabbitMQ.
-
-    _already_rewarded's feedback_ready_processed_at guard inside
-    handle_review_result makes this safe to call more than once for the same
-    submission (e.g. once from this webhook and, redundantly, once from the
-    RabbitMQ consumer) -- only the first call that observes a rewardable,
-    not-yet-rewarded submission actually grants points/gems.
+    """Entrypoint for an external grading/review pipeline that writes a
+    Submission's status/result_status fields directly (rather than through
+    the RabbitMQ feedback_consumer path) and then needs the reward
+    side-effects (points/gems/gallery notification) applied via
+    shared.submission.review_result.handle_review_result. See that
+    module's docstring for the full reward/gallery eligibility rules and
+    why its reward branch is safe to invoke more than once per submission
+    (handle_review_result's own feedback_ready_processed_at guard makes
+    repeat calls for the same submission a no-op on the reward side,
+    whether this webhook and the RabbitMQ consumer both fire for the same
+    grading event or this endpoint is retried).
     """
     try:
         sub = frappe.get_doc("Submission", submission_id)
