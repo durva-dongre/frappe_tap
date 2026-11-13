@@ -6,14 +6,12 @@
  "engine": "InnoDB",
  "field_order": [
   "source",
+  "force_create",
   "unit_filters",
-  "unit_match_mode",
   "status",
   "section_narrow",
   "target_vertical",
   "column_break_narrow_1",
-  "target_course",
-  "column_break_narrow_2",
   "target_level",
   "section_result",
   "created_count",
@@ -36,22 +34,21 @@
    "reqd": 1
   },
   {
+   "columns": 1,
+   "default": "0",
+   "description": "Create new downstream assets and relink the existing Learning Unit to them",
+   "fieldname": "force_create",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Force Create"
+  },
+  {
    "columns": 4,
-   "description": "Python list of (unit activity, week no), e.g. [(\"Baseline\", 0), (\"Unit 1 Activity CA1\", 3)]. Leave empty to import every activity row as week 0.",
+   "description": "Comma-separated values in import order. A value without * matches exactly; a trailing * enables prefix matching. Weeks start after the Course Level's current maximum. Leave empty to import all activities in sheet order.",
    "fieldname": "unit_filters",
    "fieldtype": "Small Text",
    "in_list_view": 1,
    "label": "Unit Filters"
-  },
-  {
-   "columns": 1,
-   "fetch_from": "source.unit_match_mode",
-   "fetch_if_empty": 1,
-   "fieldname": "unit_match_mode",
-   "fieldtype": "Select",
-   "in_list_view": 1,
-   "label": "Unit Match Mode",
-   "options": "Exact\nPrefix"
   },
   {
    "columns": 2,
@@ -65,7 +62,7 @@
    "read_only": 1
   },
   {
-   "description": "Optional. Only import sheets whose vertical / course / level match these values",
+   "description": "Optional. Only import sheets whose vertical / level match these values",
    "fieldname": "section_narrow",
    "fieldtype": "Section Break",
    "label": "Narrow Sheets"
@@ -78,15 +75,6 @@
   },
   {
    "fieldname": "column_break_narrow_1",
-   "fieldtype": "Column Break"
-  },
-  {
-   "fieldname": "target_course",
-   "fieldtype": "Data",
-   "label": "Course"
-  },
-  {
-   "fieldname": "column_break_narrow_2",
    "fieldtype": "Column Break"
   },
   {

@@ -7,7 +7,6 @@ scripts now come from ImportConfig, built from a Learning Unit Import Run record
 
 from __future__ import annotations
 
-import ast
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
@@ -32,9 +31,6 @@ from tap_lms.learning_unit_import.sheets import (
 
 SOURCE_TYPE_MASTER_INDEX = "Master Index"
 SOURCE_TYPE_SOURCE_TABS = "Source Tabs"
-MATCH_EXACT = "Exact"
-MATCH_PREFIX = "Prefix"
-
 DEFAULT_QUIZ_PASSING_SCORE = 60
 DEFAULT_VIDEO_COMPLETION_THRESHOLD = 70
 DEFAULT_QUIZ_POINTS = 1
@@ -124,13 +120,11 @@ class ImportConfig:
     source_vertical: str = ""
     source_tabs: list[SourceTab] = field(default_factory=list)
     target_vertical: str = ""
-    target_course: str = ""
     target_level: str = ""
-    # Each entry maps an activity name in column A to the week number used in
-    # Course Level.learning_units. Empty list imports all matched rows as default_week_no.
-    unit_filters: list[tuple[str, int]] = field(default_factory=list)
-    unit_match_mode: str = MATCH_EXACT
-    default_week_no: int = 0
+    # Activity codes from column A, in import order. Course Level week numbers
+    # are allocated automatically from the existing maximum.
+    unit_filters: list[str] = field(default_factory=list)
+    force_create: bool = False
     assignment_flow_spreadsheet_url: str = ""
     assignment_flow_sheet_name: str = ""
     dry_run: bool = True
@@ -169,6 +163,7 @@ class ActivityRow:
     row: list[Cell]
     week_no: int
     skip_reason: str = ""
+    filter_order: int = 0
 
     @property
     def unit_activity(self) -> str:
@@ -210,13 +205,26 @@ class Writer(Protocol):
         payload: dict[str, Any],
         label: str,
         log_result: bool = True,
+        force_create: bool = False,
+        update_existing: bool | None = None,
     ) -> tuple[str, str]: ...
 
     def update_doc(self, doctype: str, name: str, values: dict[str, Any]) -> None: ...
 
+    def get_learning_unit_bundle(
+        self,
+        course_level_name: str,
+        course_level_filters: list[list[Any]],
+        learning_unit_filters: list[list[Any]],
+    ) -> dict[str, Any]: ...
+
     def link_learning_unit_to_course_level(
-        self, course_level_name: str, learning_unit_name: str, week_no: int, idx: int
-    ) -> str: ...
+        self, course_level_name: str, learning_unit_name: str, idx: int
+    ) -> tuple[str, int]: ...
+
+    def get_next_course_level_week(
+        self, course_level_name: str, course_level_filters: list[list[Any]]
+    ) -> int: ...
 
     def rollback(self) -> None: ...
 
@@ -261,13 +269,12 @@ def run_import(
         for entry in entries
         if entry.vertical in COURSE_VERTICAL_NAME_MAP
         and matches_target_filter(entry.vertical, config.target_vertical)
-        and matches_target_filter(entry.course, config.target_course)
         and matches_target_filter(entry.level, config.target_level)
     ]
     if not target_entries:
         raise RuntimeError(
             f"No source entries match vertical={config.target_vertical!r}, "
-            f"course={config.target_course!r}, level={config.target_level!r}"
+            f"level={config.target_level!r}"
         )
     ctx.log(f"Matched {len(target_entries)} course/level sheets")
 
@@ -550,7 +557,7 @@ def read_activity_rows(ctx: ImportContext, entry: MasterEntry) -> list[ActivityR
         activity_name = clean(row[col_to_index(COL_ACTIVITY_NAME)].text)
         if not unit_activity or not activity_name:
             continue
-        matched, week_no = match_unit_filter(ctx.config, unit_activity)
+        matched, filter_order = match_unit_filter(ctx.config, unit_activity)
         if not matched:
             continue
         submission_guidelines = clean(row[col_to_index(COL_ASSIGNMENT_SUBMISSION_GUIDELINES)].text)
@@ -560,8 +567,9 @@ def read_activity_rows(ctx: ImportContext, entry: MasterEntry) -> list[ActivityR
             sheet_name,
             row_index,
             row,
-            week_no,
+            0,
             HK_EMPTY_SKIP_OUTPUT if is_blankish(submission_guidelines) else "",
+            filter_order,
         )
 
         if not ctx.config.is_source_tabs:
@@ -590,6 +598,8 @@ def read_activity_rows(ctx: ImportContext, entry: MasterEntry) -> list[ActivityR
     if ctx.config.is_source_tabs:
         activities = list(activities_by_unit.values())
 
+    activities.sort(key=lambda activity: (activity.filter_order, activity.row_number))
+
     ctx.log(f"Matched {len(activities)} activity rows for {entry.vertical} | {entry.course} | {entry.level}")
     return activities
 
@@ -614,20 +624,49 @@ def import_activity_bundle(
         )
 
     course_level_name = ""
+    course_filters = course_level_filters(ctx.config.course_level_program, activity, course_vertical)
     if config.link_learning_units_to_course_level:
         course_level_name, status = create_course_level(ctx, activity, course_vertical)
         counts[status] += 1
+        activity.week_no = ctx.writer.get_next_course_level_week(
+            course_level_name,
+            course_filters,
+        )
 
-    assignment_name, status = create_assignment(ctx, activity, course_vertical)
+    bundle = ctx.writer.get_learning_unit_bundle(
+        course_level_name,
+        course_filters,
+        learning_unit_filters(activity, config.difficulty_tier),
+    )
+
+    assignment_name, status = create_assignment(
+        ctx,
+        activity,
+        course_vertical,
+        bundle.get("assignment") or "",
+    )
     counts[status] += 1
 
-    video_name, status = create_video_class(ctx, activity, course_vertical, assignment_name)
+    video_name, status = create_video_class(
+        ctx,
+        activity,
+        course_vertical,
+        assignment_name,
+        bundle.get("video_class") or "",
+        bool(bundle.get("video_class") and not bundle.get("assignment")),
+    )
     counts[status] += 1
 
-    quiz_name = ""
+    quiz_name = bundle.get("quiz") or ""
     quiz_questions = parse_activity_quiz(ctx, activity)
     if quiz_questions:
-        quiz_name, quiz_counts = create_quiz(ctx, activity, quiz_questions)
+        quiz_name, quiz_counts = create_quiz(
+            ctx,
+            activity,
+            quiz_questions,
+            quiz_name,
+            bundle.get("quiz_questions") or {},
+        )
         for key, value in quiz_counts.items():
             counts[key] = counts.get(key, 0) + value
     else:
@@ -640,6 +679,14 @@ def import_activity_bundle(
         course_level_name,
         video_name,
         quiz_name,
+        bundle.get("learning_unit") or "",
+        bool(
+            bundle.get("learning_unit")
+            and (
+                video_name != (bundle.get("video_class") or "")
+                or quiz_name != (bundle.get("quiz") or "")
+            )
+        ),
     )
     counts[status] += 1
 
@@ -648,12 +695,12 @@ def import_activity_bundle(
             ctx.log(f"DRY RUN link Course Level.learning_units: {course_level_name} -> {learning_unit_name}")
             status = "skipped"
         else:
-            status = ctx.writer.link_learning_unit_to_course_level(
+            status, assigned_week_no = ctx.writer.link_learning_unit_to_course_level(
                 course_level_name,
                 learning_unit_name,
-                activity.week_no,
                 activity.row_number,
             )
+            activity.week_no = assigned_week_no
             ctx.log(f"{status.upper()} Course Level.learning_units: {course_level_name} -> {learning_unit_name}")
         counts[status] += 1
 
@@ -688,20 +735,30 @@ def create_course_level(
         "vertical": course_vertical,
         "level": activity.master.level,
     }
-    filters = [
+    filters = course_level_filters(program, activity, course_vertical)
+    label = f"{course_name} {activity.master.level}"
+    return ctx.writer.upsert_by_filters("Course Level", filters, payload, label)
+
+
+def course_level_filters(
+    program: str,
+    activity: ActivityRow,
+    course_vertical: str,
+) -> list[list[str]]:
+    course_name = course_level_course_name(program, activity.master.course)
+    return [
         ["name1", "=", course_name],
         ["program", "=", program],
         ["vertical", "=", course_vertical],
         ["level", "=", activity.master.level],
     ]
-    label = f"{course_name} {activity.master.level}"
-    return ctx.writer.upsert_by_filters("Course Level", filters, payload, label)
 
 
 def create_assignment(
     ctx: ImportContext,
     activity: ActivityRow,
     course_vertical: str,
+    existing_name: str,
 ) -> tuple[str, str]:
     row = activity.row
     difficulty_tier = ctx.config.difficulty_tier
@@ -713,17 +770,24 @@ def create_assignment(
         "assignment_name": assignment_name,
         "description": clean(row[col_to_index(COL_DESCRIPTION)].text),
         "vertical": course_vertical,
+        "level": activity.master.level,
+        "program": ctx.config.course_level_program,
         "submission_guidelines": clean(row[col_to_index(COL_ASSIGNMENT_SUBMISSION_GUIDELINES)].text),
         "difficulty_tier": difficulty_tier,
         "assignment_type": map_assignment_activity_type(activity_type),
         "assignment_translations": build_assignment_translations(row, assignment_name),
         "submission_media_links": build_submission_media_links(row),
     }
-    filters = [
-        ["assignment_name", "=", assignment_name],
-        ["difficulty_tier", "=", difficulty_tier],
-    ]
-    return ctx.writer.upsert_by_filters("Assignment", filters, payload, assignment_name)
+    if ctx.config.force_create:
+        payload.pop("name")
+    filters = [["name", "=", existing_name]] if existing_name else []
+    return ctx.writer.upsert_by_filters(
+        "Assignment",
+        filters,
+        payload,
+        assignment_name,
+        force_create=ctx.config.force_create or not existing_name,
+    )
 
 
 def create_video_class(
@@ -731,6 +795,8 @@ def create_video_class(
     activity: ActivityRow,
     course_vertical: str,
     assignment_name: str,
+    existing_name: str,
+    update_existing: bool,
 ) -> tuple[str, str]:
     row = activity.row
     difficulty_tier = ctx.config.difficulty_tier
@@ -755,30 +821,42 @@ def create_video_class(
             }
         ],
     }
-    filters = [
-        ["video_name", "=", video_name],
-        ["difficulty_tier", "=", difficulty_tier],
-    ]
-    return ctx.writer.upsert_by_filters("VideoClass", filters, payload, video_name)
+    if ctx.config.force_create:
+        payload.pop("name")
+    filters = [["name", "=", existing_name]] if existing_name else []
+    return ctx.writer.upsert_by_filters(
+        "VideoClass",
+        filters,
+        payload,
+        video_name,
+        force_create=ctx.config.force_create or not existing_name,
+        update_existing=True if update_existing else None,
+    )
 
 
 def create_quiz(
     ctx: ImportContext,
     activity: ActivityRow,
     questions: list[QuizQuestionData],
+    existing_name: str,
+    existing_questions: dict[int, str],
 ) -> tuple[str, dict[str, int]]:
     row = activity.row
     difficulty_tier = ctx.config.difficulty_tier
     quiz_name = f"{activity.activity_name} Quiz"
     counts = {"created": 0, "updated": 0, "skipped": 0}
+    update_existing = False
 
     question_links = []
     for question in questions:
+        existing_question = existing_questions.get(question.question_number) or ""
         question_name, status = create_quiz_question(
             ctx,
             question,
             make_question_key(activity.unit_activity, activity.activity_name, question.question_number),
+            existing_question,
         )
+        update_existing = update_existing or not existing_question
         counts[status] += 1
         question_links.append(
             {
@@ -799,11 +877,17 @@ def create_quiz(
         "status": ctx.config.default_status,
         "difficulty_tier": difficulty_tier,
     }
-    filters = [
-        ["quiz_name", "=", quiz_name],
-        ["difficulty_tier", "=", difficulty_tier],
-    ]
-    created_quiz_name, status = ctx.writer.upsert_by_filters("Quiz", filters, payload, quiz_name)
+    if ctx.config.force_create:
+        payload.pop("name")
+    filters = [["name", "=", existing_name]] if existing_name else []
+    created_quiz_name, status = ctx.writer.upsert_by_filters(
+        "Quiz",
+        filters,
+        payload,
+        quiz_name,
+        force_create=ctx.config.force_create or not existing_name,
+        update_existing=True if update_existing else None,
+    )
     counts[status] += 1
     return created_quiz_name, counts
 
@@ -812,6 +896,7 @@ def create_quiz_question(
     ctx: ImportContext,
     question: QuizQuestionData,
     question_key: str,
+    existing_name: str,
 ) -> tuple[str, str]:
     question_payload = {
         "name": make_doc_name("QQ", question_key),
@@ -831,13 +916,16 @@ def create_quiz_question(
             if translated_question
         ],
     }
-    question_filters = [["question_name", "=", question_key]]
+    if ctx.config.force_create:
+        question_payload.pop("name")
+    question_filters = [["name", "=", existing_name]] if existing_name else []
     question_doc_name, status = ctx.writer.upsert_by_filters(
         "QuizQuestion",
         question_filters,
         question_payload,
         question_key,
         log_result=False,
+        force_create=ctx.config.force_create or not existing_name,
     )
 
     if ctx.config.dry_run:
@@ -911,6 +999,8 @@ def create_learning_unit(
     course_level_name: str,
     video_name: str,
     quiz_name: str,
+    existing_name: str,
+    update_existing: bool,
 ) -> tuple[str, str]:
     row = activity.row
     difficulty_tier = ctx.config.difficulty_tier
@@ -953,12 +1043,23 @@ def create_learning_unit(
         "course_level": course_level_for_name,
         "week_no": activity.week_no,
     }
-    filters = [
-        ["unit_name", "=", activity_name],
+    filters = [["name", "=", existing_name]] if existing_name else []
+    return ctx.writer.upsert_by_filters(
+        "LearningUnit",
+        filters,
+        payload,
+        unit_activity,
+        force_create=not existing_name,
+        update_existing=True if update_existing else None,
+    )
+
+
+def learning_unit_filters(activity: ActivityRow, difficulty_tier: str) -> list[list[Any]]:
+    return [
+        ["unit_name", "=", activity.activity_name],
         ["difficulty_tier", "=", difficulty_tier],
         ["order", "=", activity.row_number],
     ]
-    return ctx.writer.upsert_by_filters("LearningUnit", filters, payload, unit_activity)
 
 
 def parse_activity_quiz(ctx: ImportContext, activity: ActivityRow) -> list[QuizQuestionData]:
@@ -1260,51 +1361,43 @@ def course_level_course_name(program: str, course: str) -> str:
     return f"{program} - {course_name}"
 
 
-def parse_unit_filters(text: str) -> list[tuple[str, int]]:
-    """Parse unit filters written like the scripts' UNIT_FILTERS: [("Baseline", 0), ("Unit 1", 3)].
-
-    A single ("Baseline", 0) pair is accepted too. Blank text or [] means no filters.
-    """
+def parse_unit_filters(text: str) -> list[str]:
+    """Parse comma-separated activity codes in their requested import order."""
     if not clean(text):
         return []
 
-    try:
-        value = ast.literal_eval(text.strip())
-    except (ValueError, SyntaxError) as exc:
-        raise ValueError(f'Unit Filters must look like [("Baseline", 0), ("Unit 1 Activity CA1", 3)]: {exc}') from exc
-
-    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str):
-        value = [value]
-    if not isinstance(value, (list, tuple)):
-        raise ValueError('Unit Filters must be a list, e.g. [("Baseline", 0)]')
-
-    filters = []
-    for item in value:
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise ValueError(f"Each unit filter must be (unit activity, week no), got {item!r}")
-        unit_activity, week_no = item
-        if not isinstance(unit_activity, str) or not clean(unit_activity):
-            raise ValueError(f"Unit activity must be non-empty text, got {unit_activity!r}")
-        if isinstance(week_no, bool) or not isinstance(week_no, int) or week_no < 0:
-            raise ValueError(f"Week no must be a whole number of 0 or more, got {week_no!r} for {unit_activity!r}")
-        filters.append((clean(unit_activity), week_no))
+    filters = [clean(value) for value in text.split(",") if clean(value)]
+    if not filters:
+        raise ValueError("Unit Filters must contain comma-separated values")
+    seen = set()
+    for unit_filter in filters:
+        normalized_filter = normalize(unit_filter)
+        if normalized_filter in seen:
+            raise ValueError(f"Duplicate value in Unit Filters: {unit_filter}")
+        seen.add(normalized_filter)
     return filters
 
 
 def match_unit_filter(config: ImportConfig, unit_activity: str) -> tuple[bool, int]:
     if not config.unit_filters:
-        return True, config.default_week_no
+        return True, 0
 
     normalized_unit = normalize(unit_activity)
-    for unit_filter, week_no in config.unit_filters:
+    for filter_order, unit_filter in enumerate(config.unit_filters):
         normalized_filter = normalize(unit_filter)
-        if config.unit_match_mode == MATCH_PREFIX:
-            matched = normalized_unit.startswith(normalized_filter)
+        if normalized_filter.endswith("*"):
+            filter_prefix = re.escape(normalized_filter[:-1])
+            matched = bool(re.search(rf"(?<![a-z0-9]){filter_prefix}", normalized_unit))
         else:
-            matched = normalized_unit == normalized_filter
+            matched = bool(
+                re.search(
+                    rf"(?<![a-z0-9]){re.escape(normalized_filter)}(?![a-z0-9])",
+                    normalized_unit,
+                )
+            )
         if matched:
-            return True, week_no
-    return False, config.default_week_no
+            return True, filter_order
+    return False, 0
 
 
 def matches_target_filter(value: str, target: str) -> bool:
@@ -1325,7 +1418,16 @@ def map_learning_unit_activity_type(activity_type: str) -> str:
 
 
 def map_assignment_activity_type(activity_type: str) -> str:
-    return "Challenge" if "challenge" in normalize(activity_type) else "Regular"
+    value = normalize(activity_type)
+    for keyword, assignment_type in (
+        ("baseline", "Baseline"),
+        ("challenge", "Challenge"),
+        ("engagement", "Engagement"),
+        ("event", "Event"),
+    ):
+        if keyword in value:
+            return assignment_type
+    return "Regular"
 
 
 def fill_merged_header_sections(header: list[Cell]) -> list[str]:
