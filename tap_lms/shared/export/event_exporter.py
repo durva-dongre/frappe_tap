@@ -2,14 +2,14 @@
 shared/export/event_exporter.py
 
 Per-event JSON export to R2 + the aggregate events.json index. Scoped
-narrowly -- this gives the two entry points hooks.py needs (so the
-Event Campaign doc_event hook has somewhere to point) with a real, minimal
+narrowly -- this gives the two entry points hooks.py needs (so the Event
+Campaign doc_event hook has somewhere to point) with a real, minimal
 implementation rather than a stub, since event publish/unpublish needs
 *something* to run without erroring.
 
 Note: the general content-export pipeline (shared/export/content_exporter.py)
-is being written separately; this file is the event-specific slice only and
-is deliberately kept independent of it.
+is a separate concern and is deliberately kept independent of this file --
+this one is the event-specific slice only.
 """
 
 from __future__ import annotations
@@ -23,10 +23,11 @@ def export_event_to_r2(event_campaign_name: str) -> None:
     """
     Builds a small JSON blob for one event (name, unit, pop-up text,
     translations) and PUTs it to R2 at events/{name}.json. Uses the same
-    r2 credentials as submission promotion (Shared Settings.r2_*).
+    R2 credentials as submission promotion (Shared Settings.r2_*).
     Left as a narrow, working implementation; the full fallback-cascade /
     cache-tuning behavior described for gallery does NOT apply here, since
-    events.json is a flat, infrequently-changing index, not a scoped query.
+    events.json is a flat, infrequently-changing index, not a scoped
+    query.
     """
     event = frappe.get_doc("Event Campaign", event_campaign_name)
     blob = {

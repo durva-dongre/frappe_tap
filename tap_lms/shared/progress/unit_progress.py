@@ -2,62 +2,56 @@
 shared/progress/unit_progress.py
 
 Generic helpers around a "Unit Progress" child table living on some parent
-enrollment-shaped document (ProgramEnrollment.unit_progress). Any app with a
-similar (student, unit, track) -> {video, quiz, submission} progress shape
-can reuse this unchanged, as long as its child table has the same field
-names (learning_unit, unit_type, video_watched, submission,
+enrollment-shaped document (ProgramEnrollment.unit_progress). Any app with
+a similar (student, unit, track) -> {video, quiz, submission} progress
+shape can reuse this unchanged, as long as its child table has the same
+field names (learning_unit, unit_type, video_watched, submission,
 submission_attempts, quiz_json, unit_status, completed_at).
 
 Every mutating path across every app goes through
 get_or_create_unit_progress_row so "exactly one row per (learning_unit,
 unit_type)" is enforced in exactly one place.
 
-A Unit Progress row is immutably tied to whichever ProgramEnrollment it was
-created under -- it is NOT guaranteed to live under whatever enrollment is
-currently "active" for a student (an enrollment can be renewed/replaced while
-an old submission's or old event's progress row still points at the
-previous one). find_unit_progress_row_for_submission and
-find_unit_progress_row_by_name_global below are the two sanctioned ways to
-look up a Unit Progress row without depending on "the active enrollment"
-being the right scope -- they query the child table directly, by submission
-or by the row's own global `name`, the same way
-shared/jobs/event_maintenance.py does it. New code should prefer these two
-over "load active enrollment, then search its rows" whenever the row being
-searched for might not belong to the student's *current* active enrollment.
+A Unit Progress row is immutably tied to whichever ProgramEnrollment it
+was created under -- it is NOT guaranteed to live under whatever
+enrollment is currently "active" for a student (an enrollment can be
+renewed/replaced while an old submission's or old event's progress row
+still points at the previous one). find_unit_progress_row_for_submission
+and find_unit_progress_row_by_name_global below are the two sanctioned
+ways to look up a Unit Progress row without depending on "the active
+enrollment" being the right scope -- they query the child table directly,
+by submission or by the row's own global `name`, the same way
+shared/jobs/event_maintenance.py does it. New code should prefer these
+two over "load active enrollment, then search its rows" whenever the row
+being searched for might not belong to the student's *current* active
+enrollment.
 
 resolve_last_activity_type is the single entrypoint for "what did this
 student last do" across both tracks. Program context is safe to read
-straight off the active ProgramEnrollment's own unit_progress table because
-shared.enrollment.enrollment.create_enrollment guarantees exactly one
-ProgramEnrollment per (student, course_level) for life -- see that module's
-docstring. Event context is NOT safe to read that way, for the same reason
-find_unit_progress_row_by_name_global exists: an event's Unit Progress row
-can live on a ProgramEnrollment that is no longer the student's active one.
-resolve_last_activity_type's event branch mirrors exactly what
-shared.events.enrollment.is_enrolled already does to resolve that row
-correctly, so both reads agree.
+straight off the active ProgramEnrollment's own unit_progress table
+because shared.enrollment.enrollment.create_enrollment guarantees exactly
+one ProgramEnrollment per (student, course_level) for life -- see that
+module's docstring. Event context is NOT safe to read that way, for the
+same reason find_unit_progress_row_by_name_global exists: an event's Unit
+Progress row can live on a ProgramEnrollment that is no longer the
+student's active one. resolve_last_activity_type's event branch mirrors
+exactly what shared.events.enrollment.is_enrolled already does to resolve
+that row correctly, so both reads agree.
 
-COMPLETION SIGNAL (2026-11-14) -- recompute_unit_status /
-recompute_unit_status_by_name now return a dict, not a bare string:
---------------------------------------------------------------------
-Both functions used to return the resulting unit_status string directly.
-They now return {"status": <that same string>, "just_completed": <bool>},
-where just_completed is True iff THIS call is what flipped the row from
-some other status to "Completed" (i.e. the row's status was NOT already
+COMPLETION SIGNAL
+------------------
+recompute_unit_status / recompute_unit_status_by_name return a dict, not
+a bare string: {"status": <string>, "just_completed": <bool>}, where
+just_completed is True iff THIS call is what flipped the row from some
+other status to "Completed" (i.e. the row's status was NOT already
 "Completed" before this call, and IS "Completed" after it).
 
-This is additive in spirit (the original "resulting status string" is
-still available, under the "status" key) but is a breaking change to the
-call signature -- every existing caller that treated the return value as
-a bare string must be updated to read result["status"] instead. There are
-exactly two such callers in this codebase:
+Every existing caller that treats the return value reads result["status"].
+There are exactly two such callers in this codebase:
   - shared/progress/activities.py (submit_video_watched, submit_quiz) --
     calls the doc-based recompute_unit_status(row).
   - shared/submission/review_result.py (handle_review_result) -- calls
     the by-name recompute_unit_status_by_name(name).
-Both are updated alongside this file in this same change (see their own
-docstrings/comments for how they now use just_completed to drive course-
-completion reporting).
 
 just_completed is the one signal shared/enrollment/unit_rotation.py's
 is_course_complete, and shared/enrollment/enrollment.py's
@@ -66,6 +60,44 @@ is_course_complete/calling mark_course_completed when just_completed is
 True for this call -- there is no point re-checking course completion on
 every single activity call when this particular call didn't even
 complete its own unit.
+
+CONCURRENCY
+------------
+recompute_unit_status_by_name performs its read, decide, and write all
+under a `SELECT ... FOR UPDATE` row lock taken at the top of the
+function, releasing it only when the function returns (the lock is held
+for the remainder of the current transaction, same as every other locked
+read-modify-write in this codebase, e.g. shared/submission/locks.py).
+This is what makes just_completed's "exactly one caller sees True for a
+given completion" guarantee actually hold under concurrency: two
+concurrent callers touching the same Unit Progress row at nearly the same
+time (e.g. a video-watch call and the async review_result.py grading
+callback landing moments apart) cannot both observe "not yet Completed"
+and both independently trigger mark_course_completed / reward logic for
+what should be a single, one-time completion event.
+
+recompute_unit_status (the doc-based, in-memory variant used by
+activities.py, which is always called from inside a request that is
+already about to save the owning ProgramEnrollment document) does not
+take its own explicit row lock, because activities.py's call sites
+already run under `with_serialization_retry` one level up (via
+award_points's callers) for the *document* save, and -- more
+importantly -- a brand-new/not-yet-persisted child row mutated purely in
+memory has no DB row to lock yet in the general case. Call sites that
+need the same just_completed exactly-once guarantee across genuinely
+concurrent writers for the *doc-based* path should serialize at the
+ProgramEnrollment row level (see shared/submission/locks.py), which
+lifecycle.py's submit_artwork already does.
+
+completed_at is cleared back to NULL whenever a row's status moves away
+from "Completed" to something else. There is currently no code path that
+deliberately regresses a unit out of Completed, but recompute always
+re-derives status from the row's three component signals, so if a
+submission is ever invalidated/replaced after completion, the row could
+in principle fall back to "In Progress" -- clearing completed_at in that
+case keeps the timestamp from going stale, matching the "recompute fully
+from source signals on every call" philosophy already used for
+unit_status itself.
 """
 
 from __future__ import annotations
@@ -114,11 +146,11 @@ def get_or_create_unit_progress_row(parent_doc, learning_unit: str, unit_type: s
 
 def find_unit_progress_row_by_name(parent_doc, row_name: str, table_fieldname: str = "unit_progress"):
     """Looks only inside parent_doc's own child table. Use this ONLY when
-    parent_doc is known to be the doc that actually owns the row (e.g. right
-    after get_or_create_unit_progress_row returned it on the same request).
-    For a row that might belong to a different/older enrollment than the
-    student's current active one, use find_unit_progress_row_by_name_global
-    instead."""
+    parent_doc is known to be the doc that actually owns the row (e.g.
+    right after get_or_create_unit_progress_row returned it on the same
+    request). For a row that might belong to a different/older enrollment
+    than the student's current active one, use
+    find_unit_progress_row_by_name_global instead."""
     for row in getattr(parent_doc, table_fieldname):
         if row.name == row_name:
             return row
@@ -126,12 +158,12 @@ def find_unit_progress_row_by_name(parent_doc, row_name: str, table_fieldname: s
 
 
 def find_unit_progress_row_by_name_global(row_name: str) -> Optional[dict]:
-    """Direct, global lookup of a Unit Progress child row by its own `name`,
-    independent of which parent (ProgramEnrollment) currently owns it or
-    whether that parent is the student's currently-active enrollment. A Unit
-    Progress row's `name` is unique across the whole child table, so this is
-    always safe and correct, unlike loading "the active enrollment" and
-    hoping the row is still there."""
+    """Direct, global lookup of a Unit Progress child row by its own
+    `name`, independent of which parent (ProgramEnrollment) currently owns
+    it or whether that parent is the student's currently-active
+    enrollment. A Unit Progress row's `name` is unique across the whole
+    child table, so this is always safe and correct, unlike loading "the
+    active enrollment" and hoping the row is still there."""
     if not row_name:
         return None
     rows = frappe.db.sql(
@@ -173,8 +205,8 @@ def attempt_info_for_submission(submission_name: str) -> tuple[int, int]:
     would silently resolve to a wrong (1, cap) instead of its real attempt
     count.
 
-    Callers: tap_app/api/submission.py (list_submissions, get_submission) and
-    shared/profile/sync.py (get_sync_payload, get_last_submission_payload)
+    Callers: tap_app/api/submission.py (list_submissions, get_submission)
+    and shared/profile/sync.py (get_sync_payload, get_last_submission_payload)
     should all call this instead of maintaining their own copy.
     """
     from shared.progress.rewards import max_submission_attempts
@@ -200,8 +232,9 @@ def is_quiz_graded(row) -> bool:
 def is_submission_valid(row) -> bool:
     """True iff this row's linked Submission counts toward unit completion.
     Delegates the actual result_status classification to
-    shared.submission.status.is_submission_complete -- the single place that
-    set of values is defined -- instead of re-inlining the tuple here."""
+    shared.submission.status.is_submission_complete -- the single place
+    that set of values is defined -- instead of re-inlining the tuple
+    here."""
     submission = row.submission if hasattr(row, "submission") else row.get("submission")
     if not submission:
         return False
@@ -216,15 +249,20 @@ def recompute_unit_status_by_name(unit_progress_row_name: str) -> UnitStatusResu
     <bool>} -- just_completed is True iff THIS call is what flipped the
     row from a non-"Completed" status to "Completed" (see module
     docstring). The resulting status string is preserved under the
-    "status" key exactly as it was returned bare before this change;
-    callers that only need the string read result["status"] instead of
-    using the return value directly."""
+    "status" key; callers that only need the string read result["status"].
+
+    The whole read-decide-write sequence happens under a
+    `SELECT ... FOR UPDATE` row lock taken at the top of this function --
+    see module docstring's concurrency section for why this is required
+    for just_completed's exactly-once guarantee to actually hold.
+    """
     row = frappe.db.sql(
         f"""
         SELECT video_watched, quiz_json, submission, unit_status, completed_at
         FROM "{UNIT_PROGRESS_CHILD_TABLE}"
         WHERE name = %s
         LIMIT 1
+        FOR UPDATE
         """,
         (unit_progress_row_name,),
         as_dict=True,
@@ -240,6 +278,7 @@ def recompute_unit_status_by_name(unit_progress_row_name: str) -> UnitStatusResu
 
     new_status = row.unit_status
     set_completed_at = False
+    clear_completed_at = False
 
     if row.video_watched and quiz_graded and submission_valid:
         new_status = "Completed"
@@ -248,12 +287,29 @@ def recompute_unit_status_by_name(unit_progress_row_name: str) -> UnitStatusResu
     elif any_touch and row.unit_status == "Not Started":
         new_status = "In Progress"
 
-    if new_status != row.unit_status or set_completed_at:
+    # If the row had previously been marked Completed but one of its
+    # three component signals is no longer satisfied (e.g. a submission
+    # was invalidated/replaced after completion), the row regresses out
+    # of Completed -- clear the now-stale completed_at rather than
+    # leaving a timestamp that no longer reflects reality.
+    if old_status == "Completed" and new_status != "Completed" and row.completed_at:
+        clear_completed_at = True
+
+    if new_status != row.unit_status or set_completed_at or clear_completed_at:
         if set_completed_at:
             frappe.db.sql(
                 f"""
                 UPDATE "{UNIT_PROGRESS_CHILD_TABLE}"
                 SET unit_status = %s, completed_at = NOW(), modified = NOW()
+                WHERE name = %s
+                """,
+                (new_status, unit_progress_row_name),
+            )
+        elif clear_completed_at:
+            frappe.db.sql(
+                f"""
+                UPDATE "{UNIT_PROGRESS_CHILD_TABLE}"
+                SET unit_status = %s, completed_at = NULL, modified = NOW()
                 WHERE name = %s
                 """,
                 (new_status, unit_progress_row_name),
@@ -273,11 +329,18 @@ def recompute_unit_status_by_name(unit_progress_row_name: str) -> UnitStatusResu
 
 
 def recompute_unit_status(row) -> UnitStatusResult:
-    """Doc-based variant (mutates the live, in-memory child row object,
-    same as before this change -- the caller is still responsible for
-    saving the parent doc). Returns {"status": ..., "just_completed": ...}
-    -- see module docstring and recompute_unit_status_by_name's docstring
-    above for the exact meaning of just_completed."""
+    """Doc-based variant: mutates the live, in-memory child row object --
+    the caller is responsible for saving the parent doc. Returns
+    {"status": ..., "just_completed": ...} -- see module docstring and
+    recompute_unit_status_by_name's docstring above for the exact meaning
+    of just_completed.
+
+    Mirrors recompute_unit_status_by_name's completed_at-clearing
+    behavior for consistency -- a row that regresses out of Completed in
+    memory (a component signal became invalid before save) has its
+    completed_at cleared here too, rather than only in the by-name
+    variant.
+    """
     old_status = row.unit_status
     quiz_graded = is_quiz_graded(row)
     submission_valid = is_submission_valid(row)
@@ -289,6 +352,9 @@ def recompute_unit_status(row) -> UnitStatusResult:
             row.completed_at = frappe.utils.now_datetime()
     elif any_touch and row.unit_status == "Not Started":
         row.unit_status = "In Progress"
+
+    if old_status == "Completed" and row.unit_status != "Completed" and row.completed_at:
+        row.completed_at = None
 
     just_completed = (old_status != "Completed") and (row.unit_status == "Completed")
     return {"status": row.unit_status, "just_completed": just_completed}

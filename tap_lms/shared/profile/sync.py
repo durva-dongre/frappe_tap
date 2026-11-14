@@ -39,10 +39,10 @@ def _activate_if_inactive_and_persist(pe_doc) -> bool:
 
     Returns the same bool activate_if_inactive returned (True iff the
     status actually changed), so both callers can use it to decide
-    whether to add the new, documented "status" field to their response
-    -- only when this call just flipped it, never otherwise, per the
-    "absent means unchanged" convention this project uses for last_submission
-    and is now extending to this status-change notification."""
+    whether to add the "status" field to their response -- only when this
+    call just flipped it, never otherwise, per the "absent means
+    unchanged" convention this project uses for last_submission and
+    extends to this status-change notification."""
     changed = activate_if_inactive(pe_doc)
     if changed:
         frappe.db.set_value(
@@ -53,38 +53,37 @@ def _activate_if_inactive_and_persist(pe_doc) -> bool:
 
 def _find_last_submission_row(student_id: str, program_enrollment_name: str, last_updated_epoch: int) -> dict | None:
     """Returns the student's most recently UPDATED submission that (a)
-    belongs to the CURRENTLY ACTIVE ProgramEnrollment, and (b) has actually
-    changed since last_updated_epoch -- not just the newest-modified
-    Submission row for this student_id across all history.
+    belongs to the CURRENTLY ACTIVE ProgramEnrollment, and (b) has
+    actually changed since last_updated_epoch -- not just the
+    newest-modified Submission row for this student_id across all
+    history.
 
     Both conditions are required:
 
     - Scoping to program_enrollment_name excludes submissions left over
-      from a prior/inactive enrollment (a dropped-and-reenrolled student, a
-      course-level change, stale/test rows, etc.). Without this, a
+      from a prior/inactive enrollment (a dropped-and-reenrolled student,
+      a course-level change, stale/test rows, etc.). Without this, a
       long-dead submission belonging to a different enrollment could be
-      reported as "the last submission" for the student's current session,
-      which makes no sense to a client resuming the student's CURRENT
-      enrollment.
+      reported as "the last submission" for the student's current
+      session, which makes no sense to a client resuming the student's
+      CURRENT enrollment.
 
-    - Filtering `modified > last_updated_epoch` directly in SQL means this
-      function only ever returns a row that is genuinely newer than what
-      the caller already has. Previously this filtering did not happen
-      here at all -- the caller (get_sync_payload) learned a submission had
-      "changed" purely by comparing the enrollment's own last_activity_at
-      against last_updated_epoch, which can advance for reasons that have
-      nothing to do with a submission (e.g. a video-watch or quiz call).
-      That let an old, previously-seen submission be reported as new over
-      and over, each time re-stamped with the enrollment's current epoch
+    - Filtering `modified > last_updated_epoch` directly in SQL means
+      this function only ever returns a row that is genuinely newer than
+      what the caller already has. The enrollment's own last_activity_at
+      is NOT used for this comparison, since that field can advance for
+      reasons that have nothing to do with a submission (e.g. a
+      video-watch or quiz call) -- comparing against it instead would let
+      an old, previously-seen submission be reported as new over and
+      over, each time re-stamped with the enrollment's current epoch
       instead of its own. Gating directly on the submission's own
-      `modified` here removes that possibility: a row is only ever
-      returned once, the first time its own modified timestamp crosses
-      last_updated_epoch.
+      `modified` here means a row is only ever returned once, the first
+      time its own modified timestamp crosses last_updated_epoch.
 
     `modified` is Frappe's own standard last-write timestamp, bumped on
     every `doc.save()` -- including every grading-pipeline update
-    (feedback_processor.py, review_result.py's status/reward writes) -- so
-    ordering by `modified desc` within the filtered set still reliably
+    (feedback_processor.py, review_result.py's status/reward writes) --
+    so ordering by `modified desc` within the filtered set still reliably
     surfaces whichever submission's state most recently changed.
     created_at is kept as a tiebreaker for the rare case of two rows with
     an identical modified timestamp.
@@ -109,23 +108,25 @@ def _find_last_submission_row(student_id: str, program_enrollment_name: str, las
 
 
 def _grading_award_for_submission(sub: dict) -> tuple[int, int]:
-    """Derives (points_awarded, gems_awarded) for THIS submission's grading
-    bonus. There is no dedicated storage column for this on Submission, by
-    design (no doctype change needed) -- the amount is recovered from what
-    already exists:
+    """Derives (points_awarded, gems_awarded) for THIS submission's
+    grading bonus. There is no dedicated storage column for this on
+    Submission, by design (no doctype change needed) -- the amount is
+    recovered from what already exists:
 
-      - shared.submission.status.is_reward_eligible(sub.result_status) tells
-        us whether this particular submission's result ever qualifies for
-        the grading-time bonus at all ("Success - Original" only -- a
-        "Success - Flagged" result is complete but never earns this, per
-        shared/submission/status.py's own completion-vs-reward distinction);
+      - shared.submission.status.is_reward_eligible(sub.result_status)
+        tells us whether this particular submission's result ever
+        qualifies for the grading-time bonus at all ("Success - Original"
+        only -- a "Success - Flagged" result is complete but never earns
+        this, per shared/submission/status.py's own completion-vs-reward
+        distinction);
       - sub.feedback_ready_processed_at being set tells us the one-time
-        award for this submission has actually been granted -- this is the
-        exact same guard shared.submission.review_result.handle_review_result
-        uses itself, via _already_rewarded, to avoid a double award;
-      - the amount itself is always the CURRENT Shared Settings configured
-        value (points_submission_review_valid / gems_submission_review_valid
-        -- 10 points / 1 gem as configured today).
+        award for this submission has actually been granted -- this is
+        the exact same guard shared.submission.review_result.
+        handle_review_result uses itself, via _already_rewarded, to avoid
+        a double award;
+      - the amount itself is always the CURRENT Shared Settings
+        configured value (points_submission_review_valid /
+        gems_submission_review_valid).
 
     Returns (0, 0) for a submission that is not reward-eligible, or is
     reward-eligible but not yet actually rewarded.
@@ -136,9 +137,9 @@ def _grading_award_for_submission(sub: dict) -> tuple[int, int]:
     get_profile_select_payload by being a one-shot call on login, not a
     repeatable historical read) -- so a given award is only ever surfaced
     to the app a bounded number of times, never on every page view of
-    submission history. submission.list / submission.get do NOT call this
-    -- see tap_app/api/submission.py's module docstring for why a one-time
-    award field has no place on an ungated historical read.
+    submission history. submission.list / submission.get do NOT call
+    this -- see tap_app/api/submission.py's module docstring for why a
+    one-time award field has no place on an ungated historical read.
     """
     result_status = sub.get("result_status")
     if not is_reward_eligible(result_status):
@@ -185,8 +186,7 @@ def _completion_fields_for_submission(last_submission: dict, pe) -> dict:
     fields = {"unit_completed": True}
     if is_course_complete(pe):
         fields["course_completed"] = True
-        # Decision B: no next_learning_unit_id key at all when the course
-        # is complete.
+        # No next_learning_unit_id key at all when the course is complete.
     else:
         fields["course_completed"] = False
         fields["next_learning_unit_id"] = next_unit_for(pe)
@@ -194,21 +194,21 @@ def _completion_fields_for_submission(last_submission: dict, pe) -> dict:
 
 
 def _build_submission_block(last_submission: dict, pe) -> dict:
-    """Builds the last_submission wire shape. submission_id is recovered via
-    shared.submission.object_naming.resolve_wire_submission_id -- NOT
+    """Builds the last_submission wire shape. submission_id is recovered
+    via shared.submission.object_naming.resolve_wire_submission_id -- NOT
     last_submission.name directly -- so the client sees the Worker-shaped
-    id (e.g. "k3f9a2b7x1") once imgana's async upload job has populated this
-    row's submission_url, falling back to the Frappe autoname only for a
-    row whose submission_url hasn't been populated yet or never matches the
-    expected tapapp shape. No schema change, no write -- pure computation
-    over an already-persisted field. See that module's docstring for the
-    full reasoning.
+    id (e.g. "k3f9a2b7x1") once imgana's async upload job has populated
+    this row's submission_url, falling back to the Frappe autoname only
+    for a row whose submission_url hasn't been populated yet or never
+    matches the expected tapapp shape. No schema change, no write -- pure
+    computation over an already-persisted field. See that module's
+    docstring for the full reasoning.
 
     Also threads in unit_completed/course_completed/[next_learning_unit_id]
-    via _completion_fields_for_submission (new) -- same "compute live on
-    read" style as points_awarded/gems_awarded just below it. `pe` (the
-    owning ProgramEnrollment doc) is required here, not just a name,
-    because is_course_complete needs the live doc's course_level and
+    via _completion_fields_for_submission -- same "compute live on read"
+    style as points_awarded/gems_awarded just below it. `pe` (the owning
+    ProgramEnrollment doc) is required here, not just a name, because
+    is_course_complete needs the live doc's course_level and
     unit_progress table.
     """
     attempt_number, attempts_remaining = attempt_info_for_submission(last_submission.name)
@@ -233,9 +233,9 @@ def _build_submission_block(last_submission: dict, pe) -> dict:
 
 def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
     """
-    STATUS AUTO-ACTIVATION (new, 2026-11-14): every call to this function
-    -- i.e. every /progress/sync call -- checks whether pe.status is
-    currently "default" or "no_activity" and, if so, flips it to "active"
+    Status auto-activation: every call to this function (i.e. every
+    /progress/sync call) checks whether pe.status is currently "default"
+    or "no_activity" and, if so, flips it to "active"
     (shared.enrollment.enrollment.activate_if_inactive, persisted via
     _activate_if_inactive_and_persist). This happens BEFORE the
     changed/unchanged short-circuit below, so a sync call that would
@@ -245,13 +245,12 @@ def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
     independent of whether there happens to be new submission/points
     state to report in the same call.
 
-    The new "status" field is added to the returned payload ONLY when
-    this call's activation check just flipped the status (never
-    otherwise) -- the "absent means unchanged" convention this file
-    already uses for last_submission is extended to this field. A sync
-    call that finds the enrollment already active/paused/manual/completed/
-    dropped reports no "status" key at all, exactly as it did before this
-    change.
+    The "status" field is added to the returned payload ONLY when this
+    call's activation check just flipped the status (never otherwise) --
+    the "absent means unchanged" convention this file already uses for
+    last_submission is extended to this field. A sync call that finds the
+    enrollment already active/paused/manual/completed/dropped reports no
+    "status" key at all.
     """
     pe = get_active_program_enrollment(student_id)
 
@@ -344,20 +343,20 @@ def get_last_submission_payload(student_id: str, last_updated_epoch: int) -> dic
 
 
 def get_profile_select_payload(student_id: str) -> dict:
-    """Built for shared.auth.login.select_profile -- the one ownership-
-    checked follow-up call after redeem_magic_link, per that module's
-    docstring. Reuses the exact same resume-payload shape
+    """Built for shared.auth.login.select_profile -- the one
+    ownership-checked follow-up call after redeem_magic_link, per that
+    module's docstring. Reuses the exact same resume-payload shape
     tap_app/api/auth.py::_build_resume_payload already returns from
     /auth/redeem and /auth/select_profile, so a client sees an identical
     shape regardless of which login entrypoint it came through.
 
-    STATUS AUTO-ACTIVATION (new, 2026-11-14): same activation check as
-    get_sync_payload above -- every call here (i.e. every /auth/redeem and
+    Status auto-activation: same activation check as get_sync_payload
+    above -- every call here (i.e. every /auth/redeem and
     /auth/select_profile resume-payload build, since tap_app/api/auth.py's
-    _build_resume_payload now calls this function directly, see that
-    module) flips pe.status from "default"/"no_activity" to "active" if
-    applicable, persists it, and adds a "status" key to the returned
-    payload ONLY when this call just flipped it.
+    _build_resume_payload calls this function directly) flips pe.status
+    from "default"/"no_activity" to "active" if applicable, persists it,
+    and adds a "status" key to the returned payload ONLY when this call
+    just flipped it.
     """
     pe = get_active_program_enrollment(student_id)
 

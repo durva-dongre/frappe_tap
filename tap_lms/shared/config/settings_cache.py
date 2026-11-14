@@ -1,28 +1,28 @@
 """
 shared/config/settings_cache.py
 
-Short-TTL cache in front of a single Frappe Singleton ("Single") doctype that
-holds shared, cross-app configuration (reward amounts, caps, storage
+Short-TTL cache in front of a single Frappe Singleton ("Single") doctype
+that holds shared, cross-app configuration (reward amounts, caps, storage
 credentials, internal-API secrets, TapApp magic-link TTLs, JWT config,
 upload-ticket TTL, worker HTTP timeout, DB retry tuning). Not hardcoded to
 one doctype name, so a second app sharing this package can point it at its
 own settings singleton.
 
-`Shared Settings`'s own `on_update` hook calls `invalidate_config_cache()` so
-an edit takes effect within the TTL without a process restart -- that hook
-already imports this exact function name/signature; keep it stable.
+`Shared Settings`'s own `on_update` hook calls `invalidate_config_cache()`
+so an edit takes effect within the TTL without a process restart -- that
+hook already imports this exact function name/signature; keep it stable.
 
 The cache's own TTL is itself a Shared Settings field
 (config_cache_ttl_seconds) rather than a hardcoded Python constant, so an
 operator can tune it from the doctype UI with no deploy. It is read off the
 doc that was just loaded into the cache slot on every load, not from a
-separate always-fresh query -- so a change to config_cache_ttl_seconds takes
-effect the next time the current slot expires and reloads (bounded by the
-OLD ttl, at most one stale read), not instantly and not stuck forever. A
-first-ever load (empty cache) has no prior TTL to go by, so it uses
-_FALLBACK_TTL_SECONDS purely to size that first load -- it never silently
-overrides whatever config_cache_ttl_seconds says once a doc has actually
-been read.
+separate always-fresh query -- so a change to config_cache_ttl_seconds
+takes effect the next time the current slot expires and reloads (bounded
+by the old ttl, at most one stale read), not instantly and not stuck
+forever. A first-ever load (empty cache) has no prior TTL to go by, so it
+uses _FALLBACK_TTL_SECONDS purely to size that first load -- it never
+silently overrides whatever config_cache_ttl_seconds says once a doc has
+actually been read.
 
 GENERIC ACCESSORS (get / get_int)
 ----------------------------------
@@ -41,11 +41,11 @@ Singleton row that predates the field being added to the schema, so
 doctype JSON declares a default. `get`/`get_int` treat a stored value of
 None as "use the caller's supplied default" rather than as an error or as
 a literal None -- this is what keeps shared/auth/jwt_tokens.py and
-shared/submission/tickets.py (both of which call these functions directly)
-working correctly on a site that has never re-saved Shared Settings since
-jwt_algorithm/phone_token_ttl_seconds/upload_put_url_ttl_seconds were added
-to the schema, exactly as get_magic_link_ttl already does for the
-magic-link TTL fields.
+shared/submission/tickets.py (both of which call these functions
+directly) working correctly on a site that has never re-saved Shared
+Settings since jwt_algorithm/phone_token_ttl_seconds/
+upload_put_url_ttl_seconds were added to the schema, exactly as
+get_magic_link_ttl already does for the magic-link TTL fields.
 
 `get_int` additionally coerces whatever comes back (Frappe Int fields
 normally come back as a real Python int already, but a raw/legacy value

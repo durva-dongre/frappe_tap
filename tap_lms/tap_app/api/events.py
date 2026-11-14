@@ -11,7 +11,8 @@ def enroll_event(student_id: str, event_id: str):
     in its own idempotency cache (withIdempotency), so no idempotency_key
     needs to reach Frappe at all -- enroll_student_in_event is itself
     naturally idempotent for a repeat call against an already-active
-    enrollment (it does not double-increment Event Campaign.enrolled_count)."""
+    enrollment (it does not double-increment Event Campaign.enrolled_count).
+    """
     return enroll_student_in_event(student_id, event_id)
 
 
@@ -22,5 +23,6 @@ def is_enrolled(student_id: str, event_id: str):
     event-track resume state in the whole API (API_Reference.md §8.2) -- no
     resume payload from /auth/redeem or /auth/select_profile ever carries
     current_event_learning_unit; that field is scoped exclusively to this
-    endpoint, per event_id."""
+    endpoint, per event_id.
+    """
     return _is_enrolled(student_id, event_id)

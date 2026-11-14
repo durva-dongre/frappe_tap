@@ -11,21 +11,18 @@ _VALID_DEST_TYPES = ("home", "feedback", "submit", "later", "gallery")
 
 
 def _build_resume_payload(student_id: str) -> dict:
-    """Delegates to shared.profile.sync.get_profile_select_payload --
-    the exact same resume-payload shape /auth/redeem, /auth/select_profile,
-    and shared.auth.login.select_profile all now share, with exactly one
-    implementation. Previously this function duplicated get_profile_select_payload's
-    logic inline; it is now a thin pass-through so this file, sync.py, and
-    shared/auth/login.py all stay in agreement by construction rather than
-    by three independently-maintained copies.
+    """Delegates to shared.profile.sync.get_profile_select_payload -- the
+    single shared implementation of the resume-payload shape used by
+    /auth/redeem, /auth/select_profile, and shared.auth.login.select_profile.
+    Keeping one implementation (rather than duplicating this logic inline)
+    is what keeps this file, sync.py, and shared/auth/login.py in agreement
+    by construction instead of by three independently maintained copies.
 
-    STATUS AUTO-ACTIVATION (new, 2026-11-14): because this now calls
-    get_profile_select_payload directly, every /auth/redeem and
-    /auth/select_profile response gets the same status auto-activation
-    (default/no_activity -> active) and conditional "status" field
-    get_sync_payload already carries -- this is the "notify this status
-    and status change to frontend login or sync" requirement's auth-side
-    half. See shared/profile/sync.py::get_profile_select_payload and
+    Because this calls get_profile_select_payload directly, every
+    /auth/redeem and /auth/select_profile response also gets that
+    function's status auto-activation behavior (default/no_activity ->
+    active, with a conditional "status" field on change). See
+    shared/profile/sync.py::get_profile_select_payload and
     shared.enrollment.enrollment.activate_if_inactive for the full
     behavior and persistence details.
     """
@@ -35,24 +32,24 @@ def _build_resume_payload(student_id: str) -> dict:
 @tap_app_method
 def redeem_magic_link(phone: str):
     """Builds and returns the full resume-payload roster for a phone
-    (API_Reference.md §1.1 / Contract §4.2). get_students_for_phone returns
-    every Student row for this phone regardless of enrollment status, so
-    each sibling's resume payload is built independently here: a sibling
-    with no active enrollment (StudentNotFound from
-    _build_resume_payload -> get_active_program_enrollment) is simply left
-    out of the roster, rather than that one sibling's failure aborting the
-    whole phone's login. This is the invariant this function relies on
-    going forward -- one sibling's enrollment state must never gate
-    whether any other sibling on the same phone can log in. Only when
-    EVERY sibling lacks an active enrollment does this raise
-    StudentNotFound, which matches the documented "no student with an
-    active-batch enrollment" error case exactly.
+    (API_Reference.md §1.1 / Contract §4.2).
+
+    get_students_for_phone returns every Student row for this phone
+    regardless of enrollment status, so each sibling's resume payload is
+    built independently here: a sibling with no active enrollment
+    (StudentNotFound from _build_resume_payload ->
+    get_active_program_enrollment) is simply left out of the roster, rather
+    than that one sibling's failure aborting the whole phone's login. One
+    sibling's enrollment state must never gate whether any other sibling on
+    the same phone can log in. Only when every sibling lacks an active
+    enrollment does this raise StudentNotFound, matching the documented "no
+    student with an active-batch enrollment" error case exactly.
 
     Each sibling's own payload may or may not carry a "status" key,
     independently -- whichever siblings' enrollments happened to be
-    "default" or "no_activity" at the moment of this call get activated
-    and get the key; siblings already active/paused/manual/completed/
-    dropped do not. This is a per-student signal, not a per-phone one.
+    "default" or "no_activity" at the moment of this call get activated and
+    get the key; siblings already active/paused/manual/completed/dropped
+    do not. This is a per-student signal, not a per-phone one.
     """
     students = get_students_for_phone(phone)
     payloads = []
@@ -78,19 +75,21 @@ def mint_magic_link(phone: str, dest_type: str = "home", dest_id: str | None = N
                      ttl_seconds: int | None = None):
     """Mints a V2 magic link (shared.auth.magic_link.create_magic_link_v2)
     for a given phone and dest_type, and returns it both as the bare token
-    (`magic_link`, unchanged, for any existing caller that only needs the
-    token itself) and as a full, shareable URL (`magic_link_url`), built by
-    appending the token directly to Shared Settings.magic_link_base_url
-    (shared.config.secrets_cache.get_magic_link_base_url). The base URL is
-    configuration, not a constant here, because it differs by environment
-    (staging vs. production) and can change independently of a Frappe
-    deploy -- see that function's own docstring for why it has no silent
-    default the way the TTL accessors do, and why an unconfigured base URL
-    must fail loudly at mint time rather than produce a link missing its
-    host. The token is appended as-is, with no separator inserted on this
-    side, so the configured base URL itself must already end in whatever
-    the receiving endpoint expects (a trailing '/', or a '?token=' style
-    prefix) -- this function does no URL-joining logic of its own.
+    (`magic_link`, for any caller that only needs the token itself) and as
+    a full, shareable URL (`magic_link_url`), built by appending the token
+    directly to Shared Settings.magic_link_base_url
+    (shared.config.secrets_cache.get_magic_link_base_url).
+
+    The base URL is configuration, not a constant here, because it differs
+    by environment (staging vs. production) and can change independently of
+    a Frappe deploy -- see that function's own docstring for why it has no
+    silent default the way the TTL accessors do, and why an unconfigured
+    base URL must fail loudly at mint time rather than produce a link
+    missing its host. The token is appended as-is, with no separator
+    inserted on this side, so the configured base URL itself must already
+    end in whatever the receiving endpoint expects (a trailing '/', or a
+    '?token=' style prefix) -- this function does no URL-joining logic of
+    its own.
 
     This is an internal/operational surface (e.g. a WhatsApp-reminder job),
     not a route the TapApp Worker itself calls on a student's behalf, so it
@@ -101,24 +100,21 @@ def mint_magic_link(phone: str, dest_type: str = "home", dest_id: str | None = N
        key holder on this surface can mint a login link for any phone
        number. Whether that is acceptable depends entirely on who is
        permitted to call this method in deployment -- if it is meant to be
-       reachable only by trusted internal automation, that restriction
-       (a role check, or moving this behind a dedicated internal-only
+       reachable only by trusted internal automation, that restriction (a
+       role check, or moving this behind a dedicated internal-only
        surface) is a deployment/operational decision, not something this
        function enforces on its own.
 
     2. Secret agreement: the secret read here
        (get_magic_link_shared_secret(), from Shared Settings.
-       magic_link_shared_secret -- a Password field, configurable from the
-       Shared Settings doctype UI, alongside every other TapApp secret
-       such as the GCS/R2 credentials and the Worker Internal API secret)
-       must be byte-identical to the Worker's own MAGIC_LINK_SECRET (set
-       via `wrangler secret put`). Nothing in this codebase keeps the two
-       independently-configured secrets in sync automatically; rotating
-       one without the other makes every link minted here fail
-       verification on the Worker side with UNAUTHORIZED, with nothing in
-       Frappe's own logs to explain why. This coupling is an
-       operational/runbook concern for secret rotation, external to this
-       file. get_magic_link_shared_secret itself raises InvalidInput
+       magic_link_shared_secret) must be byte-identical to the Worker's own
+       MAGIC_LINK_SECRET (set via `wrangler secret put`). Nothing in this
+       codebase keeps the two independently-configured secrets in sync
+       automatically; rotating one without the other makes every link
+       minted here fail verification on the Worker side with UNAUTHORIZED,
+       with nothing in Frappe's own logs to explain why. This coupling is
+       an operational/runbook concern for secret rotation, external to
+       this file. get_magic_link_shared_secret itself raises InvalidInput
        (mapped to a 400 by tap_app_method) if the field has never been
        configured, so an unset secret fails loudly and immediately rather
        than minting a token that can never verify.
@@ -141,7 +137,7 @@ def mint_magic_link(phone: str, dest_type: str = "home", dest_id: str | None = N
     # get_magic_link_shared_secret raises InvalidInput itself (mapped to a
     # clean 400 by tap_app_method) if Shared Settings.magic_link_shared_secret
     # has never been configured -- no separate frappe.throw guard is needed
-    # here, unlike the old site_config.json-backed accessor this replaces.
+    # here.
     secret = get_magic_link_shared_secret()
 
     link = create_magic_link_v2(secret, phone, dest_type, dest_id, ttl)

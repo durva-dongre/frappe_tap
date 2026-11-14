@@ -51,7 +51,7 @@ def create_magic_link_v2(
     ttl_seconds: int = 90 * 24 * 3600,
 ) -> str:
     """Mints a V2 magic link byte-for-byte compatible with the Worker's
-    auth/magicLink.ts::verifyMagicLinkV2. Minting only — Frappe never
+    auth/magicLink.ts::verifyMagicLinkV2. Minting only -- Frappe never
     verifies a magic link; that is exclusively the Worker's job."""
     if dest_type not in _VALID_DEST_TYPES:
         raise InvalidInput("dest_type must be one of: " + ", ".join(sorted(_VALID_DEST_TYPES)))

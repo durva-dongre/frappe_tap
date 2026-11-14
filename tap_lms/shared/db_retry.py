@@ -1,8 +1,9 @@
 """
 shared/db_retry.py
 
-Generic retry wrapper for transient Postgres errors (deadlock / serialization
-failure) on raw SQL, plus thin helpers used throughout shared/.
+Generic retry wrapper for transient Postgres errors (deadlock /
+serialization failure) on raw SQL, plus thin helpers used throughout
+shared/.
 
 Retry tuning (attempts, backoff_ms) is configurable via Shared Settings
 (db_retry_attempts, db_retry_backoff_ms -- see

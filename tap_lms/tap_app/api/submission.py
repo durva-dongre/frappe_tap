@@ -2,23 +2,48 @@
 tap_lms/tap_app/api/submission.py
 
 Worker-facing wrappers for the submission-read routes (submission.list,
-submission.get) and submit_artwork. Every submission-shaped response this
-file produces carries `submission_id` as the sole identifier -- never a
-bare `name` field -- matching API_Reference.md's and the Worker
-contract's documented shape for submit_artwork, submission.list, and
-submission.get alike.
+submission.get) and submit_artwork.
+
+submit_artwork identifier policy:
+submit_artwork's own response carries NO identifier for the newly created
+row -- no submission_id, no name. The Worker-minted id embedded in
+object_key could only be recovered, at submit time, by parsing the
+in-memory object_key already on hand -- imgana's own async job
+(process_submission_async), which is what actually populates the row's
+submission_url (the only place that Worker-minted id is later recoverable
+from, via shared.submission.object_naming.resolve_wire_submission_id),
+runs AFTER this call returns (enqueue_after_commit=True). Handing a client
+that id immediately means it could not reliably use it yet: get_submission
+below looks a submission up by Frappe's own document name, with no reverse
+lookup from the Worker-minted id back to that name, so a client calling
+/submission/get with an id it had just been given would 404 until the
+async job runs. Rather than build and maintain that reverse lookup, the
+contract is kept simple: submit_artwork returns no identifier at all. A
+client that needs a submission's id or graded state reads it from
+/progress/sync or /progress/last_submission instead -- both resolve the
+row themselves (never from a client-supplied id); see
+shared/profile/sync.py's _build_submission_block, which calls
+resolve_wire_submission_id on an already-resolved row, always well after
+submission_url has been populated by the time a sync call surfaces it.
+
+submission.list and submission.get are unaffected by the above -- both
+continue to carry `submission_id` on every row via
+shared.submission.object_naming.resolve_wire_submission_id. That direction
+(doc -> wire id, for a row already resolved server-side) was never the
+problem; only submit_artwork's own immediate, synchronous response --
+built before the async job has had a chance to run -- was.
 
 submission_id is recovered via
 shared.submission.object_naming.resolve_wire_submission_id -- there is no
-`worker_submission_id` column on the Submission doctype, and none will be
-added. resolve_wire_submission_id parses the Worker-minted id straight out
-of Submission.submission_url when it matches the expected tapapp
+`worker_submission_id` column on the Submission doctype, and none is
+planned. resolve_wire_submission_id parses the Worker-minted id straight
+out of Submission.submission_url when it matches the expected tapapp
 object-key shape (populated asynchronously by imgana's
 process_submission_async for a tapapp-sourced row), falling back to the
 Frappe autoname for a row still Pending/early-Processing (submission_url
 not yet populated) or any row whose submission_url never matches that
 shape. `name` (Frappe's own document name) is therefore NOT always equal
-to `submission_id` here the instant a row is created, but converges to the
+to `submission_id` the instant a row is created, but converges to the
 Worker-shaped id once the async upload job has run -- see that module's
 docstring for the full reasoning. A submission's numeric mark is returned
 as `points`, not `score` -- Submission.grade is the underlying stored
@@ -54,17 +79,16 @@ passed straight into shared.submission.lifecycle.submit_artwork, whose own
 signature (student_id, assignment_id, submission_url, context) and
 downstream call into tap_lms.imgana.submission.submit_artwork are both
 unaffected by this file. Neither imgana nor feedback_handler/
-feedback_consumer.py needs any awareness of object_key at all -- and
-neither is ever modified for any of this.
+feedback_consumer.py needs any awareness of object_key at all.
 
 GCS bucket used to build the URL: Shared Settings.gcs_bucket, via
 get_gcs_credentials()["bucket"] (shared/config/secrets_cache.py). This
 must be configured to the same bucket as the Worker's own
-GCS_AUTHENTICATED_BUCKET (`"tap-submission"` in worker/wrangler.toml) --
-if the two ever disagree, the URL built here points at a different bucket
-than the one the Worker's signed PUT actually wrote to, and the object
-will 404 on Frappe's own submission record. This is also the exact URL
-shape shared.submission.object_naming.extract_object_key_from_submission_url
+GCS_AUTHENTICATED_BUCKET -- if the two ever disagree, the URL built here
+points at a different bucket than the one the Worker's signed PUT
+actually wrote to, and the object will 404 on Frappe's own submission
+record. This is also the exact URL shape
+shared.submission.object_naming.extract_object_key_from_submission_url
 parses back apart on every later read, so this is a double-duty
 precondition: get it wrong and both the object's own existence AND every
 later submission_id recovery break together.
@@ -84,11 +108,9 @@ but not under the context filter given" case -- an unresolvable context is
 a subset of that case, not a new one the client needs to distinguish, so
 the logging is purely for operability and changes nothing on the wire.
 
-Untouched and out of scope for this file: context resolution via Unit
-Progress rows, assignment_id_link's fallback to assign_id for legacy
-WhatsApp-sourced submissions, and updated_at's derivation from
-Submission.modified -- all already correct and unrelated to the
-identifier/field-naming concerns this file is responsible for.
+Out of scope for this file: context resolution via Unit Progress rows,
+assignment_id_link's fallback to assign_id for legacy WhatsApp-sourced
+submissions, and updated_at's derivation from Submission.modified.
 """
 
 from __future__ import annotations
@@ -113,9 +135,9 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
 
 
 def _build_submission_url_from_object_key(object_key: str) -> str:
-    """The one place `object_key -> plain public GCS URL` conversion happens
-    for the submit_artwork path. Mirrors exactly what the Worker's own
-    publicHttpsUrl()/signV4Url() build the URL shape from
+    """The one place `object_key -> plain public GCS URL` conversion
+    happens for the submit_artwork path. Mirrors exactly what the Worker's
+    own publicHttpsUrl()/signV4Url() build the URL shape from
     (worker/src/storage/gcs.ts): https://storage.googleapis.com/{bucket}/{key}.
 
     This exact shape is also what
@@ -123,18 +145,18 @@ def _build_submission_url_from_object_key(object_key: str) -> str:
     parses back apart on every later read -- the two functions are
     deliberate inverses of each other, so changing this URL shape here
     without updating that one (or vice versa) breaks every later
-    submission_id recovery silently (it would just fall back to the Frappe
+    submission_id recovery silently (it would fall back to the Frappe
     autoname instead of erroring, since that function never raises -- see
     its own docstring).
 
-    Does not URL-encode path segments here the way the Worker's publicHttpsUrl
-    does (encodeURIComponent per segment) -- object_key is already validated
-    upstream by the Worker against a fixed, URL-safe character set
-    (storage/keys.ts::FIELD_PATTERNS / parseObjectKey: [A-Za-z0-9_-] plus a
-    literal "/", "-", "."), so no character in a legitimately-issued
-    object_key ever needs escaping. If object_key is missing/blank, this is
-    an INVALID_INPUT from this wrapper, not a 500 from a malformed URL
-    reaching imgana.
+    Does not URL-encode path segments here the way the Worker's
+    publicHttpsUrl does (encodeURIComponent per segment) -- object_key is
+    already validated upstream by the Worker against a fixed, URL-safe
+    character set (storage/keys.ts::FIELD_PATTERNS / parseObjectKey:
+    [A-Za-z0-9_-] plus a literal "/", "-", "."), so no character in a
+    legitimately-issued object_key ever needs escaping. If object_key is
+    missing/blank, this is an INVALID_INPUT from this wrapper, not a 500
+    from a malformed URL reaching imgana.
     """
     if not object_key or not isinstance(object_key, str):
         raise InvalidInput("object_key missing")
@@ -172,9 +194,12 @@ def submit_artwork(
     (cache/idempotency.ts::withIdempotency).
 
     This function's return value comes straight from
-    shared.submission.lifecycle.submit_artwork, whose own docstring is the
-    authority on what that return shape contains and why -- including how
-    its own `submission_id` is recovered without any schema change.
+    shared.submission.lifecycle.submit_artwork, which carries no
+    submission_id (or any other identifier) for the newly created row --
+    see that module's and this file's own module docstring. A client that
+    needs this submission's id or graded state reads it from
+    /progress/sync or /progress/last_submission instead, once it's
+    resolvable there.
     """
     submission_url = _build_submission_url_from_object_key(object_key)
 
@@ -243,7 +268,12 @@ def _submission_wire_shape(sub, attempt_number: int, attempts_remaining: int, co
 
     Identifier: `submission_id` is recovered via
     shared.submission.object_naming.resolve_wire_submission_id -- never
-    `sub.name` directly. No bare `name` key anywhere in this shape.
+    `sub.name` directly. No bare `name` key anywhere in this shape. This
+    function is used only by submission.list and submission.get, both of
+    which read an already-resolved row (long after imgana's async job has
+    had a chance to run), unlike submit_artwork's own response -- see
+    module docstring for why submit_artwork does not use this function at
+    all for its identifier (it returns none).
 
     Score/mark: returned as `points` (not `score`). See module docstring
     for why. `points` can be JSON null for an ungraded submission -- this

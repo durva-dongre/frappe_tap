@@ -1,53 +1,35 @@
 """
 shared/config/secrets_cache.py
 
-Generic accessors for secrets and TapApp configuration that live on the
-shared settings singleton (Password/Data/Int fields).
+Generic accessors for secrets and TapApp configuration. Most secrets live on
+the Shared Settings singleton (Password/Data/Int fields), rotatable from the
+doctype UI with no deploy. GCS credentials are the one exception: they live
+on the GCS Settings doctype (not Shared Settings) since GCS supports multiple
+bucket configs (Authenticated / Public) as separate rows.
 
-Every secret used anywhere in the TapApp path -- GCS, R2, the Worker
-internal API, the JWT signing secret, and the magic-link HMAC secret -- is
-configured exactly the same way: as a field on the Shared Settings
-doctype, readable/writable from the Shared Settings UI with no deploy and
-no bench console access. There is deliberately no secret anywhere in this
-module that is instead read out of Frappe's site_config.json; a single,
-consistent configuration surface (Shared Settings) means an operator never
-has to remember "which secrets live in the doctype vs. which ones live in
-site_config.json" -- they are all in the doctype.
+SINGLETON-DEFAULT GAP
+----------------------
+Shared Settings is a Frappe Singleton ("issingle": 1): a field's `"default"`
+in the doctype JSON only applies on save -- it does not retroactively
+backfill a Singleton row that predates the field being added to the
+schema. On a site where the Singleton has never been re-saved since a
+field was introduced, frappe.get_single(...).<field> reads back as None,
+not the schema default.
 
-Magic-link TTLs (get_magic_link_ttl), the magic-link base URL
-(get_magic_link_base_url), and the magic-link shared secret
-(get_magic_link_shared_secret) all live here, alongside each other, so
-every magic-link-related config accessor stays in one file. The TTLs and
-the secret are Shared Settings fields (magic_link_ttl_home/feedback/
-gallery/submit/later, magic_link_shared_secret) rather than hardcoded
-Python values or site_config.json entries, so an operator can change e.g.
-the "feedback" link's lifetime, or rotate the HMAC secret itself, from the
-Shared Settings doctype UI with no deploy; the base URL is a Shared
-Settings field for the same reason -- it differs by environment (staging
-vs. production) and can change independently of a Frappe deploy.
-
-get_magic_link_ttl treats a stored value of `None` as "the Shared Settings
-singleton has never been saved since this field was added to the schema,
-use the documented default" rather than as a configuration error, and
-reserves InvalidInput for a stored value that is explicitly non-positive
-(0 or negative) -- an operator actively setting a zero/negative TTL is a
-real misconfiguration worth failing loudly on, since minting a link with a
-dead-on-arrival TTL would otherwise succeed silently with no indication
-why the link never verifies.
-
-This distinction matters because Shared Settings is a Frappe Singleton: a
-field's doctype-JSON "default" only applies on save, and does not
-retroactively backfill a Singleton row that predates the field being added
-to the schema. On such a site, every magic_link_ttl_* field reads back as
-None, not its schema default -- so get_magic_link_ttl's None-handling is
-what keeps mint_magic_link functional across every dest_type on a site
-that has never had Shared Settings manually re-saved since these fields
-were introduced, rather than having the whole magic-link-minting path 400
-until someone opens and saves the doctype once in the UI. The permanent
-fix for that underlying gap is a migration patch that force-saves the
-Shared Settings singleton once after any doctype field addition; the
-None-handling here is defense in depth underneath that, not a replacement
-for it.
+get_magic_link_ttl treats a stored value of `None` as "use the documented
+default" rather than as a configuration error, and reserves InvalidInput
+for a stored value that is explicitly non-positive (0 or negative) -- an
+operator actively setting a zero/negative TTL is a real misconfiguration
+worth failing loudly on, since minting a link with a dead-on-arrival TTL
+would otherwise succeed silently with no indication why the link never
+verifies. This None-handling is what keeps mint_magic_link functional
+across every dest_type on a site that has never had Shared Settings
+manually re-saved since these fields were introduced, rather than having
+the whole magic-link-minting path 400 until someone opens and saves the
+doctype once in the UI. The permanent fix for the underlying gap is a
+migration patch that force-saves the Shared Settings singleton once after
+any doctype field addition; the None-handling here is defense in depth
+underneath that, not a replacement for it.
 
 get_magic_link_base_url and get_magic_link_shared_secret have no such
 None-handling: unlike a TTL, there is no safe default to fall back to for
@@ -63,10 +45,10 @@ get_jwt_secret follows the exact same "no safe fallback" reasoning as
 get_magic_link_shared_secret: a signing secret has no sane default, so an
 unconfigured Shared Settings.jwt_secret raises InvalidInput rather than
 silently signing phone tokens with an empty key. jwt_algorithm and
-phone_token_ttl_seconds, by contrast, DO have documented, schema-matching
+phone_token_ttl_seconds, by contrast, do have documented, schema-matching
 defaults (HS256 / 7776000 seconds) and go through the generic
-settings_cache.get/get_int accessors with those defaults supplied inline,
-the same "safe fallback for a non-secret, loud failure for a secret"
+settings_cache.get/get_int accessors with those defaults supplied inline
+-- the same "safe fallback for a non-secret, loud failure for a secret"
 split used throughout this file.
 
 get_worker_internal_api_timeout_seconds and get_db_retry_settings follow
@@ -75,6 +57,19 @@ Singleton must not make an HTTP call hang forever or make a transient
 Postgres error retry logic silently misbehave, so both fall back to their
 documented schema defaults (15 seconds; 3 attempts / 50ms backoff) rather
 than raising or defaulting to 0.
+
+GCS CREDENTIALS
+-----------------
+get_gcs_credentials reads from the GCS Settings doctype (not Shared
+Settings): the row where bucket_type="Authenticated" and enabled=1.
+This is a deliberate cutover -- GCS Settings supports multiple named
+bucket configs (Authenticated vs Public), which a flat set of
+Shared Settings fields (gcs_bucket / gcs_project_id /
+gcs_service_account_json) couldn't express cleanly. There is no fallback
+to the old Shared Settings fields: if no enabled Authenticated GCS
+Settings row exists, this raises InvalidInput loudly -- exactly the same
+"no safe default for a credential" policy used for every other secret
+accessor in this file.
 """
 from __future__ import annotations
 
@@ -93,7 +88,7 @@ _MAGIC_LINK_TTL_FIELD_FOR_DEST_TYPE = {
 
 # Mirrors each field's own doctype-JSON "default" exactly (shared_settings.json).
 # Used ONLY when the stored value is None (singleton never saved since the
-# field was added) -- see module docstring. A site that has saved Shared
+# field was added -- see module docstring). A site that has saved Shared
 # Settings at least once always reads its real, persisted value instead.
 _MAGIC_LINK_TTL_DEFAULT_FOR_DEST_TYPE = {
     "home": 7776000,      # 90 days
@@ -112,13 +107,20 @@ _DEFAULT_PHONE_TOKEN_TTL_SECONDS = 7776000  # 90 days
 # Mirrors worker_internal_api_timeout_seconds's own doctype-JSON "default".
 _DEFAULT_WORKER_INTERNAL_API_TIMEOUT_SECONDS = 15
 
-# Mirror db_retry_attempts / db_retry_backoff_ms's own doctype-JSON
+# Mirrors db_retry_attempts / db_retry_backoff_ms's own doctype-JSON
 # "default"s.
 _DEFAULT_DB_RETRY_ATTEMPTS = 3
 _DEFAULT_DB_RETRY_BACKOFF_MS = 50
 
 # Mirrors upload_put_url_ttl_seconds's own doctype-JSON "default".
 _DEFAULT_UPLOAD_PUT_URL_TTL_SECONDS = 600
+
+# Mirrors r2_sweep_batch_size / gallery_sweep_lookback_days /
+# gallery_index_chunk_size's own doctype-JSON "default"s.
+_DEFAULT_R2_SWEEP_BATCH_SIZE = 500
+_DEFAULT_GALLERY_SWEEP_LOOKBACK_DAYS = 14
+_DEFAULT_GALLERY_INDEX_CHUNK_SIZE = 100
+_DEFAULT_SHARED_LOGS_RETENTION_DAYS = 90
 
 
 def get_worker_internal_secret(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> str:
@@ -131,13 +133,13 @@ def get_worker_internal_api_url(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> str:
 
 def get_worker_internal_api_timeout_seconds(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> int:
     """HTTP timeout (connect + read, passed straight to requests.post(...,
-    timeout=...)) used by shared/storage/gallery_promotion.py for both of
-    its Worker-internal-API calls (/internal/gallery/index,
-    /internal/gallery/visibility). Configurable so an operator can loosen
-    or tighten it without a deploy if the Worker's own response time
-    characteristics change. Falls back to the documented default (15
-    seconds) only if the Singleton has never been saved since this field
-    was added -- see module docstring."""
+    timeout=...)) used by shared/storage/gallery_promotion.py for every
+    Worker-internal-API call (/internal/gallery/index,
+    /internal/gallery/visibility, /internal/gallery/known_ids).
+    Configurable so an operator can loosen or tighten it without a deploy
+    if the Worker's own response time characteristics change. Falls back
+    to the documented default (15 seconds) only if the Singleton has
+    never been saved since this field was added -- see module docstring."""
     return get_int("worker_internal_api_timeout_seconds", _DEFAULT_WORKER_INTERNAL_API_TIMEOUT_SECONDS, doctype)
 
 
@@ -146,13 +148,14 @@ def get_db_retry_settings(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> dict:
     shared/db_retry.py::with_retry's retryable-Postgres-error handling.
     Both fields are configurable (Shared Settings.db_retry_attempts /
     db_retry_backoff_ms) so an operator can tune retry behavior without a
-    deploy; both fall back to their documented schema defaults (3 attempts,
-    50ms fixed backoff) only if the Singleton has never been saved since
-    these fields were added -- see module docstring. attempts is clamped
-    to a minimum of 1 (the doctype's own field description already states
-    "must be at least 1"; this clamp is defense in depth against a
-    misconfigured 0 or negative value silently turning every retryable-SQL
-    call into a guaranteed hard failure with no attempt at all)."""
+    deploy; both fall back to their documented schema defaults (3
+    attempts, 50ms fixed backoff) only if the Singleton has never been
+    saved since these fields were added -- see module docstring. attempts
+    is clamped to a minimum of 1 (the doctype's own field description
+    already states "must be at least 1"; this clamp is defense in depth
+    against a misconfigured 0 or negative value silently turning every
+    retryable-SQL call into a guaranteed hard failure with no attempt at
+    all)."""
     attempts = get_int("db_retry_attempts", _DEFAULT_DB_RETRY_ATTEMPTS, doctype)
     backoff_ms = get_int("db_retry_backoff_ms", _DEFAULT_DB_RETRY_BACKOFF_MS, doctype)
     return {"attempts": max(attempts, 1), "backoff_ms": max(backoff_ms, 0)}
@@ -168,22 +171,45 @@ def get_r2_credentials(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> dict:
     }
 
 
-def get_gcs_credentials(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> dict:
-    settings = get_shared_settings(doctype)
+def get_gcs_credentials() -> dict:
+    """Reads the enabled Authenticated GCS Settings row: {"bucket":
+    bucket_name, "project_id": project_id, "service_account_json":
+    credentials_json}. Not Shared Settings-backed (see module docstring)
+    -- GCS Settings is its own doctype with one row per (bucket_type,
+    enabled) config, since GCS needs more than one named bucket config
+    (Authenticated vs Public) that a flat field set can't express.
+
+    Raises InvalidInput if no enabled "Authenticated" row exists -- same
+    "no safe default for a credential" policy as every other secret
+    accessor in this file. No fallback to any Shared Settings field."""
+    import frappe
+
+    rows = frappe.get_all(
+        "GCS Settings",
+        filters={"bucket_type": "Authenticated", "enabled": 1},
+        fields=["name", "bucket_name", "project_id"],
+        limit_page_length=1,
+    )
+    if not rows:
+        raise InvalidInput(
+            "No enabled GCS Settings row found for bucket_type=Authenticated; "
+            "configure one before using any GCS-backed feature"
+        )
+    row = rows[0]
+    doc = frappe.get_doc("GCS Settings", row["name"])
     return {
-        "bucket": settings.gcs_bucket,
-        "project_id": settings.gcs_project_id,
-        "service_account_json": settings.get_password("gcs_service_account_json"),
+        "bucket": row["bucket_name"],
+        "project_id": row["project_id"],
+        "service_account_json": doc.get_password("credentials_json"),
     }
 
 
 def get_magic_link_shared_secret(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> str:
     """HMAC secret for magic links, verified by the Worker. Configured as
     Shared Settings.magic_link_shared_secret (a Password field), not in
-    site_config.json -- this keeps every TapApp secret (GCS, R2, Worker
-    Internal API, JWT, and this one) on one consistent configuration
-    surface, rotatable from the Shared Settings doctype UI with no deploy
-    and no bench console access.
+    site_config.json -- this keeps every TapApp secret on one consistent
+    configuration surface, rotatable from the Shared Settings doctype UI
+    with no deploy and no bench console access.
 
     Raises InvalidInput if the field is unset or blank: unlike a TTL,
     there is no safe default to fall back to for a signing secret, so an
@@ -225,9 +251,9 @@ def get_magic_link_ttl(dest_type: str, doctype: str = DEFAULT_SETTINGS_DOCTYPE) 
     dest_type, read from Shared Settings. Raises InvalidInput for an
     unrecognized dest_type, or for a configured TTL that is explicitly set
     to zero or negative (a real misconfiguration). A stored value of None
-    (the Shared Settings singleton has never been saved since this field was
-    added to the schema) is treated as "use the documented default" instead
-    of an error -- see module docstring."""
+    (the Shared Settings singleton has never been saved since this field
+    was added to the schema) is treated as "use the documented default"
+    instead of an error -- see module docstring."""
     fieldname = _MAGIC_LINK_TTL_FIELD_FOR_DEST_TYPE.get(dest_type)
     if not fieldname:
         raise InvalidInput(f"no magic_link TTL is configured for dest_type={dest_type}")
@@ -250,8 +276,7 @@ def get_jwt_secret(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> str:
     shared/auth/jwt_tokens.py::issue_phone_token and verified by
     verify_phone_token. Configured as Shared Settings.jwt_secret (a
     Password field), alongside every other TapApp secret on this doctype
-    (GCS, R2, Worker Internal API, magic-link HMAC secret) -- one
-    consistent, no-deploy-required configuration surface.
+    -- one consistent, no-deploy-required configuration surface.
 
     This is a SEPARATE secret from magic_link_shared_secret: the magic
     link and the phone token are two different credential types with two
@@ -307,3 +332,88 @@ def get_upload_put_url_ttl_seconds(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> i
     to the documented default only if the Singleton has never been saved
     since this field was added -- see module docstring."""
     return get_int("upload_put_url_ttl_seconds", _DEFAULT_UPLOAD_PUT_URL_TTL_SECONDS, doctype)
+
+
+def get_r2_sweep_enabled(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> bool:
+    """Kill switch for the nightly gallery R2-promotion sweep (Shared
+    Settings.r2_sweep_enabled, Check, default 1/on). When off, the night's
+    sweep is skipped entirely -- nothing is lost, since pending submissions
+    are re-derived fresh from the D1 set-difference on the next run that
+    does execute. Falls back to enabled (True) only if the Singleton has
+    never been saved since this field was added -- see module docstring."""
+    val = get_shared_settings(doctype).r2_sweep_enabled
+    return bool(val) if val is not None else True
+
+
+def get_r2_sweep_batch_size(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> int:
+    """Max submissions pulled per night for R2 promotion (Shared
+    Settings.r2_sweep_batch_size, Int, default 500). Bounds one night's
+    sweep so a large backlog can't turn into an hours-long run; any
+    overflow is simply picked up by a later night's run."""
+    return get_int("r2_sweep_batch_size", _DEFAULT_R2_SWEEP_BATCH_SIZE, doctype)
+
+
+def get_gallery_sweep_lookback_days(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> int:
+    """Ceiling, in days, on how far back the nightly sweep ever looks for
+    eligible submissions (Shared Settings.gallery_sweep_lookback_days,
+    Int, default 14). Used as the FALLBACK window only -- on a normal
+    night the sweep anchors to its own last successful run instead (see
+    shared/jobs/gallery_promotion_sweep.py::_resolve_sweep_window); this
+    ceiling only matters on the very first run ever, or when the gap
+    since the last success exceeds it."""
+    return get_int("gallery_sweep_lookback_days", _DEFAULT_GALLERY_SWEEP_LOOKBACK_DAYS, doctype)
+
+
+def get_gallery_index_chunk_size(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> int:
+    """Rows per /internal/gallery/index call during the nightly sweep
+    (Shared Settings.gallery_index_chunk_size, Int, default 100) -- should
+    match the Worker's own INDEX_BATCH_MAX. This is the API-layer chunk
+    size; the Worker's own D1_BATCH_HARD_CAP (a Worker-code constant, not
+    configurable here) re-chunks independently on its side for D1's own
+    batch-size safety."""
+    return get_int("gallery_index_chunk_size", _DEFAULT_GALLERY_INDEX_CHUNK_SIZE, doctype)
+
+
+def get_shared_logs_retention_days(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> int:
+    """How many days of Shared Logs rows survive the nightly cleanup pass
+    (Shared Settings.shared_logs_retention_days, Int, default 90). The
+    cleanup always runs after every other job has already written its own
+    log row for tonight, so tonight's own rows are never at risk."""
+    return get_int("shared_logs_retention_days", _DEFAULT_SHARED_LOGS_RETENTION_DAYS, doctype)
+
+
+def get_analytics_apps_script_url(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> str:
+    """URL of the deployed Google Apps Script Web App that writes each
+    night's analytics row to the spreadsheet (Shared Settings.
+    analytics_apps_script_url). Raises InvalidInput if unset -- no safe
+    default for an external endpoint URL."""
+    url = get_shared_settings(doctype).analytics_apps_script_url
+    if not url:
+        raise InvalidInput(
+            "Shared Settings.analytics_apps_script_url is not configured; "
+            "set it to the deployed Apps Script Web App URL"
+        )
+    return url
+
+
+def get_analytics_apps_script_shared_secret(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> str:
+    """Shared secret sent in the body of every call to the Apps Script
+    endpoint (Shared Settings.analytics_apps_script_shared_secret) --
+    separate from worker_internal_api_secret, since the Apps Script
+    endpoint is a different external system (Google's infrastructure, not
+    the Worker); reusing the Worker's own internal secret here would mean
+    a leak of either credential compromises both systems. Raises
+    InvalidInput if unset."""
+    secret = get_shared_settings(doctype).get_password("analytics_apps_script_shared_secret")
+    if not secret:
+        raise InvalidInput(
+            "Shared Settings.analytics_apps_script_shared_secret is not configured; "
+            "set it to the shared secret the Apps Script endpoint expects"
+        )
+    return secret
+
+
+def get_analytics_sheet_tab_name(doctype: str = DEFAULT_SETTINGS_DOCTYPE) -> str:
+    """Target tab/sheet name within the analytics spreadsheet (Shared
+    Settings.analytics_sheet_tab_name, Data, default "Daily Analytics")."""
+    return get("analytics_sheet_tab_name", "Daily Analytics", doctype)

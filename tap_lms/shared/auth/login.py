@@ -8,11 +8,12 @@ from shared.profile import sync
 def redeem_magic_link(token: str) -> dict:
     """
     Single entrypoint for every tap of the magic link -- the 1st time or the
-    5000th. Always issues the same shape of token regardless of sibling count:
-    a phone token. The frontend always then calls select_profile with the
-    chosen student_id, even in the single-student case -- this keeps the
-    contract uniform (one token type, one follow-up call) instead of branching
-    the client on sibling count. 1 query total here (roster lookup).
+    5000th. Always issues the same shape of token regardless of sibling
+    count: a phone token. The frontend always then calls select_profile
+    with the chosen student_id, even in the single-student case -- this
+    keeps the contract uniform (one token type, one follow-up call)
+    instead of branching the client on sibling count. One query total here
+    (roster lookup).
     """
     phone = magic_link.verify_magic_link(token)
     students = roster.get_students_for_phone(phone)
@@ -31,14 +32,14 @@ def redeem_magic_link(token: str) -> dict:
 
 def select_profile(phone: str, student_id: str) -> dict:
     """
-    The one ownership check per session. Everything downstream (submit, enroll,
-    progress, refresh) trusts the student_id the caller supplies alongside the
-    phone token without re-querying Student -- this is intentional: re-checking
-    ownership on every hot-path call would mean a DB round trip on every single
-    request at million-request scale. The tradeoff is explicit: ownership is
-    verified once, here, and tap_app's endpoint layer is responsible for not
-    letting a request swap student_id after this point without calling this
-    again.
+    The one ownership check per session. Everything downstream (submit,
+    enroll, progress, refresh) trusts the student_id the caller supplies
+    alongside the phone token without re-querying Student -- this is
+    intentional: re-checking ownership on every hot-path call would mean a
+    DB round trip on every single request at million-request scale. The
+    tradeoff is explicit: ownership is verified once, here, and tap_app's
+    endpoint layer is responsible for not letting a request swap
+    student_id after this point without calling this again.
     """
     if not roster.student_belongs_to_phone(student_id, phone):
         raise Forbidden("student does not belong to this phone", error_code="student_ownership")

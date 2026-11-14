@@ -2,20 +2,21 @@
 tap_lms/tap_app/api/progress.py
 
 Worker-facing wrappers for the three progress-reporting activity routes
-(submit_video_watched, submit_quiz) and the two sync routes
-(progress_sync, last_submission). submit_video_watched's and submit_quiz's
-responses return `context` and `repeat` directly from
-shared.progress.activities' own result dicts, because the contract
-(API_Reference.md §3.1/§3.2) requires both fields on every call, including
-a repeat.
+(submit_video_watched, submit_quiz) and the two sync routes (progress_sync,
+last_submission).
 
-`points_tier` is intentionally never returned by this file, or by any
-other progress/auth endpoint in this codebase: the Worker computes it
-from points_total against its own threshold table (API_Reference.md
-§0.2/§3.1), keyed by POINT_TIERS_VERSION. Keeping that computation on the
-Worker side, not Frappe's, means the tier table can change without a
-Frappe deploy -- this file has nothing to do and nothing to change if
-that table is ever revised.
+submit_video_watched's and submit_quiz's responses return `context` and
+`repeat` directly from shared.progress.activities' own result dicts,
+because the contract (API_Reference.md §3.1/§3.2) requires both fields on
+every call, including a repeat.
+
+`points_tier` is intentionally never returned by this file, or by any other
+progress/auth endpoint in this codebase: the Worker computes it from
+points_total against its own threshold table (API_Reference.md §0.2/§3.1),
+keyed by POINT_TIERS_VERSION. Keeping that computation on the Worker side,
+not Frappe's, means the tier table can change without a Frappe deploy --
+this file has nothing to do and nothing to change if that table is ever
+revised.
 
 For context == "event", shared.progress.activities may resolve and mutate
 a ProgramEnrollment doc other than the caller's currently-active one (the
@@ -28,19 +29,19 @@ doc the activity function returns when it differs from `pe` (for
 points/gems and the Unit Progress row itself). It also finalizes the
 event-enrollment unit_progress pointer after save, via
 shared.progress.activities._finalize_event_enrollment_pointer, because a
-brand-new Unit Progress child row only receives its Frappe-assigned
-`name` once its parent doc is saved -- the pointer write has to happen
-after that point, not before.
+brand-new Unit Progress child row only receives its Frappe-assigned `name`
+once its parent doc is saved -- the pointer write has to happen after that
+point, not before.
 
-COMPLETION FIELDS (new, 2026-11-14): shared.progress.activities'
-submit_video_watched/submit_quiz now optionally add unit_completed /
-course_completed / next_learning_unit_id to their result dicts (see that
-module's _apply_completion_fields). _add_completion_fields_if_present
-below copies those same keys into this file's own wire response,
-unchanged, only when they are actually present on the underlying result
--- matching the "absent means nothing changed" convention used elsewhere
-(e.g. last_submission). No logic lives here: this is pure plumbing, exactly
-like every other field this file already passes through.
+Completion fields: shared.progress.activities' submit_video_watched/
+submit_quiz optionally add unit_completed / course_completed /
+next_learning_unit_id to their result dicts (see that module's
+_apply_completion_fields). _add_completion_fields_if_present below copies
+those same keys into this file's own wire response, unchanged, only when
+they are actually present on the underlying result -- matching the "absent
+means nothing changed" convention used elsewhere (e.g. last_submission).
+No logic lives here: this is pure plumbing, exactly like every other field
+this file already passes through.
 """
 
 from __future__ import annotations

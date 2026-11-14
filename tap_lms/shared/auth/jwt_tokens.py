@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 
 import jwt
 
@@ -8,24 +9,37 @@ from shared.config.secrets_cache import get_jwt_secret, get_jwt_algorithm, get_p
 from shared.errors import Unauthorized
 
 # One token type in this module: phone-scoped. No student-scoped token, no
-# session layer, no server-side registry -- verification is pure signature+exp
-# decode, zero Redis/Postgres involved, so it costs nothing under concurrent load
-# and is identical whether redeemed the same second it's issued or a year later.
+# session layer, no server-side registry -- verification is pure
+# signature+exp decode, zero Redis/Postgres involved, so it costs nothing
+# under concurrent load and is identical whether redeemed the same second
+# it's issued or a year later.
 #
 # Any sibling sharing a phone can use the same token for any of their own
-# student_ids on this phone -- per-request ownership of a specific student_id is
-# enforced separately (roster.student_belongs_to_phone), never baked into claims.
-# TTL is long (phone_token_ttl_seconds, default 90 days) since there's no
-# session/refresh layer and re-logging in via the magic link should be rare.
+# student_ids on this phone -- per-request ownership of a specific
+# student_id is enforced separately (roster.student_belongs_to_phone),
+# never baked into claims. TTL is long (phone_token_ttl_seconds, default
+# 90 days) since there's no session/refresh layer and re-logging in via the
+# magic link should be rare.
 #
-# CONFIGURATION: every value this module needs (jwt_secret, jwt_algorithm,
+# Every token's claims carry a stable "jti" (JWT ID, a random uuid4). This
+# is the minimum addition that makes revoking a single compromised/leaked
+# phone token possible in the future (e.g. a small Redis SET of revoked
+# jti values, checked in verify_phone_token with a short-TTL cache)
+# without a breaking change to the token shape -- there is still
+# deliberately no server-side registry/session store here (see above); a
+# revocation feature with no stable identifier to revoke by would
+# otherwise have to key on the whole (phone, iat) pair, which is not
+# guaranteed unique against clock skew or rapid successive re-issues for
+# the same phone.
+#
+# Configuration: every value this module needs (jwt_secret, jwt_algorithm,
 # phone_token_ttl_seconds) is a real Shared Settings field, read through
 # shared/config/secrets_cache.py's dedicated accessors:
-#   - get_jwt_secret()            -> Shared Settings.jwt_secret (Password,
-#     required -- raises InvalidInput if unconfigured; no safe default for
-#     a signing secret)
-#   - get_jwt_algorithm()         -> Shared Settings.jwt_algorithm (Data,
-#     default "HS256")
+#   - get_jwt_secret()              -> Shared Settings.jwt_secret
+#     (Password, required -- raises InvalidInput if unconfigured; no safe
+#     default for a signing secret)
+#   - get_jwt_algorithm()           -> Shared Settings.jwt_algorithm
+#     (Data, default "HS256")
 #   - get_phone_token_ttl_seconds() -> Shared Settings.phone_token_ttl_seconds
 #     (Int, default 7776000 = 90 days; 0 or negative means "no expiry
 #     claim at all" -- a real, supported configuration, not an error)
@@ -41,7 +55,7 @@ def issue_phone_token(phone: str) -> str:
     algorithm = get_jwt_algorithm()
     ttl = get_phone_token_ttl_seconds()
     now = int(time.time())
-    claims = {"typ": "phone", "phone": phone, "iat": now}
+    claims = {"typ": "phone", "phone": phone, "iat": now, "jti": uuid.uuid4().hex}
     if ttl > 0:
         claims["exp"] = now + ttl
     return jwt.encode(claims, get_jwt_secret(), algorithm=algorithm)

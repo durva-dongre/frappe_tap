@@ -12,113 +12,86 @@ both pass.
 
 submit_artwork does NOT create the Submission row itself -- it delegates
 that to tap_lms.imgana.submission.submit_artwork, the same pipeline used by
-the WhatsApp channel (RabbitMQ enqueue, Gemini/AI feedback generation,
-Glific flow delivery). imgana's function takes a plain, already-public
+the WhatsApp channel. imgana's function takes a plain, already-public
 submission URL and handles its own media detection; this module is
 responsible for everything imgana's function doesn't do: attempt-cap
-enforcement, the weekly submission-cap enforcement (new, see below), the
-video prerequisite gate, the Unit Progress row write (submission link,
-attempt count, unit_status recompute), the first-attempt points award, AND
--- critically -- making the canonical submission_id actually line up
-between the Worker's object key and what this call's own response reports.
+enforcement, the weekly submission-cap enforcement, the video prerequisite
+gate, the Unit Progress row write, the first-attempt points award.
 
 Worker route wiring: tap_app/api/submission.py::submit_artwork is the only
 whitelisted entrypoint the Worker calls for this. Do not point the Worker
 directly at tap_lms.imgana.submission.submit_artwork -- it has no
-attempt-cap or Unit Progress awareness of its own, so calling it directly
-would skip the cap check and leave Unit Progress (and therefore
-unit_status/points/resume state) never updated.
+attempt-cap or Unit Progress awareness of its own.
 
-CANONICAL submission_id -- NO SCHEMA CHANGE, NO IMGANA CHANGE:
+SUBMISSION_ID -- NOT RETURNED BY submit_artwork:
 
-There is deliberately no `worker_submission_id` column on the Submission
-doctype, and tap_lms/imgana/submission.py is never modified by this module
-or any other part of the TapApp path -- imgana creates the row under its
-OWN Frappe autoname (e.g. "SUB-0503"), exactly as it always has, and this
-module never asks it to do otherwise.
-
-Instead, the Worker-minted id embedded in object_key is recovered PURELY BY
-COMPUTATION, with no new field and no extra write:
-
-  - For THIS function's own immediate response (the one place a client sees
-    a submission_id synchronously, right at creation time), the id is
-    parsed straight out of the in-memory `object_key` this call was already
-    given -- see shared.submission.object_naming.parse_object_key. This is
-    the only correct source at this exact moment: imgana's
-    process_submission_async (which is what actually populates the row's
-    own `submission_url` field with the tapapp object's GCS URL) runs
-    AFTER this function has already returned (it's queued
-    `enqueue_after_commit=True` inside imgana.submit_artwork), so
-    submission_doc.submission_url is still None when control returns here.
-
-  - For every LATER read of this same row (sync, list, get, gallery
-    promotion), shared.submission.object_naming.resolve_wire_submission_id
-    recovers the exact same id from submission_url instead, once imgana's
-    async job has populated it -- see that module's docstring for the full
-    reasoning, including why a still-Pending row legitimately falls back to
-    the Frappe autoname there too.
-
-Neither path ever writes a new field anywhere. A malformed/missing
-object_key on THIS call is logged and this response alone falls back to the
-Frappe autoname; the Submission row itself is still created successfully
-either way.
+submit_artwork's own response does not carry a submission_id field at all.
+imgana's own async job -- which is what actually populates the row's
+submission_url, the only place the Worker-minted id is later recoverable
+from -- runs AFTER this function returns. A client that needs a
+submission's id/state reads it from /progress/sync or
+/progress/last_submission instead, both of which resolve the row
+themselves (never from a client-supplied id).
 
 resolve_learning_unit_for_assignment's primary lookup queries
-tabUnitContentItem.content_type / tabUnitContentItem.content -- the actual
-schema for that doctype, the same shape every other resolver in this
-codebase queries against (e.g. shared/progress/activities.py::
-resolve_video_id_for_unit / resolve_quiz_id_for_unit). That query is
-wrapped in a savepoint (release/rollback) as defense in depth: because
+tabUnitContentItem.content_type / tabUnitContentItem.content. That query
+is wrapped in a savepoint (release/rollback) as defense in depth: because
 Postgres (unlike MySQL) aborts the entire transaction on any SQL error
-until an explicit ROLLBACK, a savepoint here means a future schema mismatch
-on this query degrades to the documented fallback paths (and ultimately
-NOT_FOUND) instead of poisoning the whole surrounding transaction -- every
-later query in the same request, including the caller's own error-logging
-write, would otherwise fail with "current transaction is aborted" until the
-request unwound.
+until an explicit ROLLBACK, a savepoint here means a future schema
+mismatch on this query degrades to the documented fallback paths (and
+ultimately NOT_FOUND) instead of poisoning the whole surrounding
+transaction. The savepoint's except clause narrows to
+frappe.db.InternalError / frappe.db.ProgrammingError (the actual
+DB-driver exception classes for a schema mismatch) and re-raises anything
+else after still issuing the ROLLBACK TO SAVEPOINT, so the transaction is
+never left poisoned either way.
 
-WEEKLY SUBMISSION CAP (new, 2026-11-14):
+WEEKLY SUBMISSION CAP:
 
-check_attempt_cap and submit_artwork now both check
+Both check_attempt_cap and submit_artwork check
 ProgramEnrollment.submission_this_week against
 shared.progress.rewards.max_submissions_per_week() BEFORE enforcing the
 existing per-assignment attempt cap. This is a separate, weekly,
 cross-assignment cap (distinct from max_submission_attempts, which caps
 attempts on one specific assignment) -- a student who has exhausted their
 weekly submission budget is rejected with CapReached (CONFLICT) regardless
-of how many attempts they have left on this particular assignment.
+of how many attempts remain on this particular assignment. Checking this
+in check_attempt_cap too (not just submit_artwork) means a student at the
+weekly cap never gets issued a signed upload URL in the first place --
+without this check here, the Worker would sign an upload, the student
+would spend time/bandwidth uploading, and only then discover via
+submit_artwork that the attempt was rejected.
 
-submission_this_week itself is NOT incremented anywhere in this file.
-Despite being checked here (at submit/cap-check time), the counter's own
+submission_this_week itself is NOT incremented anywhere in this file. Its
 increment happens exactly once per GRADED REVIEW OUTCOME, in
 shared/submission/review_result.py::handle_review_result -- not at submit
-time. This means the cap, as checked here, reflects how many of this
-student's submissions have already been GRADED this week, not how many
-attempts they have SUBMITTED this week (a submission sitting in
-Pending/Processing does not yet count against the cap). This is a
-deliberate design point, explicitly directed: "increment submission this
-week after every type of review not just normal review" -- i.e. the gate
-and the counter are intentionally decoupled from submit-time, matching
-every other weekly/cap-style counter's semantics of "count finished work,"
-not "count attempts in flight."
+time.
 
-DECISION D (last_activity_at on every attempt, 2026-11-14): award_points
-(shared/progress/rewards.py) unconditionally bumps enrollment_doc.
-last_activity_at every time it's called, regardless of the `amount`
-passed in. Previously, award_points was only CALLED inside the
-`if is_first_attempt:` block, which meant last_activity_at (and, by
-implication, anything gated on it, such as /progress/sync's "has anything
-changed" check) never advanced on a second submission attempt. The fix is
-to call award_points on every successful attempt, passing 0 as the amount
-on a non-first attempt (which award_points already handles correctly --
-`if amount:` guards the actual points increment, but last_activity_at is
-bumped unconditionally at the top of that function, outside that guard).
-This achieves "bump last_activity_at on every attempt, award points only
-on the first attempt" without duplicating any bump logic here -- the
-existing function's own unconditional bump is reused for every attempt,
-and this file's own points-amount logic (points_for_submission_first_attempt()
-only on is_first_attempt, else 0) is unchanged apart from no longer being
-wrapped in a separate attempt-bump branch.
+check_attempt_cap has no write side effect: get_or_create_unit_progress_row
+is never called here (unlike submit_artwork), so a client polling this
+endpoint before the student has decided to submit anything can never
+materialize an empty, "Not Started" Unit Progress row for a unit the
+student hasn't actually engaged with. If no row exists yet, attempt_number
+is reported as 1 without writing anything to the database.
+
+ATTEMPT-NUMBER INTEGRITY: Unit Progress.submission_attempts is a plain Int
+column with no doctype-level enforcement of its own -- the Worker's own
+check on object_key (assertObjectKeyMatches) only confirms the key is
+internally self-consistent with itself, never that its embedded "attempt"
+segment actually matches what Frappe believes the next attempt number is.
+submit_artwork therefore re-derives the real next attempt number
+(row.submission_attempts + 1) and rejects a client-supplied object_key
+whose own attempt segment disagrees with it, BEFORE calling into imgana --
+so a mismatched key can never create a Submission row, and R2/gallery
+storage can never diverge from Frappe's own attempt count.
+
+DECISION D (last_activity_at on every attempt): award_points
+(shared/progress/rewards.py) bumps enrollment_doc.last_activity_at when
+bump_activity=True. submit_artwork calls award_points on every successful
+attempt (first or reattempt), passing 0 as the amount on a non-first
+attempt and bump_activity=True explicitly on every call -- this achieves
+"bump last_activity_at on every attempt, award points only on the first
+attempt."
 """
 
 from __future__ import annotations
@@ -137,16 +110,25 @@ from shared.progress.rewards import (
 from shared.submission.locks import lock_program_enrollment_row
 from shared.submission.object_naming import parse_object_key
 
+# Narrow, DB-driver-level exception classes that genuinely indicate "this
+# table/column doesn't exist" (a schema mismatch) -- as opposed to any other
+# exception, which should propagate rather than be silently treated the same
+# way. frappe.db exposes these as aliases of the underlying driver's
+# exception types (psycopg2.errors.UndefinedTable / UndefinedColumn surface
+# through frappe.db.ProgrammingError on Postgres).
+_SCHEMA_MISMATCH_EXCEPTIONS = (frappe.db.InternalError, frappe.db.ProgrammingError)
+
 
 def resolve_learning_unit_for_assignment(assignment_id: str, context: str, student_id: str) -> str:
     """Resolves which LearningUnit an assignment_id belongs to, for cap
     checking and Unit Progress bookkeeping. Tries a direct UnitContentItem
-    link first (content_type == 'Assignment', content == assignment_id --
-    see module docstring for the schema this relies on), then falls back
-    to event/assignment-vertical resolution. The savepoint around the
-    primary query means a schema mismatch here degrades to the fallback
-    paths below (and ultimately NOT_FOUND, a documented error) instead of
-    aborting the whole surrounding transaction.
+    link first (content_type == 'Assignment', content == assignment_id),
+    then falls back to event/assignment-vertical resolution. The savepoint
+    around the primary query means a genuine schema mismatch degrades to the
+    fallback paths below (and ultimately NOT_FOUND) instead of aborting the
+    whole surrounding transaction -- but any OTHER kind of exception (a
+    dropped connection, an unrelated serialization failure) is re-raised
+    after the ROLLBACK TO SAVEPOINT, rather than silently swallowed.
     """
     try:
         frappe.db.sql("SAVEPOINT resolve_unit_for_assignment")
@@ -159,14 +141,25 @@ def resolve_learning_unit_for_assignment(assignment_id: str, context: str, stude
             (assignment_id,),
         )
         frappe.db.sql("RELEASE SAVEPOINT resolve_unit_for_assignment")
-    except Exception:
+    except _SCHEMA_MISMATCH_EXCEPTIONS:
         frappe.db.sql("ROLLBACK TO SAVEPOINT resolve_unit_for_assignment")
         frappe.logger().warning(
             "resolve_learning_unit_for_assignment: tabUnitContentItem lookup "
-            "failed -- falling back to event/assignment resolution",
+            "failed with a schema-mismatch error -- falling back to "
+            "event/assignment resolution",
             exc_info=True,
         )
         row = None
+    except Exception:
+        frappe.db.sql("ROLLBACK TO SAVEPOINT resolve_unit_for_assignment")
+        frappe.logger().error(
+            "resolve_learning_unit_for_assignment: tabUnitContentItem lookup "
+            "failed with an unexpected (non-schema) error -- re-raising "
+            "after rolling back to savepoint so the surrounding transaction "
+            "is not left poisoned",
+            exc_info=True,
+        )
+        raise
 
     if row:
         return row[0][0]
@@ -205,28 +198,30 @@ def resolve_learning_unit_for_assignment(assignment_id: str, context: str, stude
     return unit[0][0]
 
 
-def _require_video_done(unit_progress_row) -> None:
-    """Within-unit guard: video must be watched before any submission, in
-    both program and event contexts. Quiz is independent of submission --
-    a student can submit before, after, or without ever taking the quiz."""
+def require_video_done(unit_progress_row) -> None:
+    """Within-unit guard: video must be watched before any submission OR
+    quiz, in both program and event contexts. Exported (no leading
+    underscore) because shared/progress/activities.py::submit_quiz reuses
+    this exact same guard rather than re-implementing its own copy."""
     if not unit_progress_row.video_watched:
         raise InvalidInput("video must be completed before submitting for this unit")
+
+
+# Kept as a private alias for any caller that imported the old,
+# underscore-prefixed name directly.
+_require_video_done = require_video_done
 
 
 def _require_weekly_submission_cap_not_reached(pe) -> None:
     """Program-context weekly cap: rejects with CapReached (CONFLICT) if
     pe.submission_this_week is already at or beyond
-    shared.progress.rewards.max_submissions_per_week(). See module
-    docstring for the full reasoning, including why this counter is
-    incremented elsewhere (review_result.py) and not here -- this
-    function only ever READS submission_this_week, never increments it.
+    shared.progress.rewards.max_submissions_per_week(). This function only
+    ever READS submission_this_week, never increments it -- the increment
+    happens in review_result.py, once per graded outcome.
 
-    Deliberately program-context only, matching submission_this_week's
-    own doctype-field description ("Program-context only") -- an
-    event-context submission is never subject to this cap. Callers
-    (check_attempt_cap, submit_artwork) are both already program/event-
-    aware at the call site; this helper itself does not take a context
-    parameter and must only be called from a program-context code path.
+    Deliberately program-context only, matching submission_this_week's own
+    doctype-field description -- an event-context submission is never
+    subject to this cap.
     """
     cap = max_submissions_per_week()
     current = pe.submission_this_week or 0
@@ -234,41 +229,110 @@ def _require_weekly_submission_cap_not_reached(pe) -> None:
         raise CapReached("weekly submission cap already reached")
 
 
+def _find_existing_unit_progress_row(parent_doc, learning_unit: str, unit_type: str):
+    """Read-only lookup of an existing Unit Progress row, WITHOUT creating
+    one if it's missing -- unlike get_or_create_unit_progress_row. Used by
+    check_attempt_cap, which must never have the side effect of persisting
+    a new, empty row just because a client asked "how many attempts do I
+    have left." Returns None if no such row exists yet."""
+    rows = getattr(parent_doc, "unit_progress") or []
+    matches = [r for r in rows if r.learning_unit == learning_unit and r.unit_type == unit_type]
+    if len(matches) > 1:
+        raise InvalidInput(
+            f"data integrity error: multiple Unit Progress rows for "
+            f"(learning_unit={learning_unit}, unit_type={unit_type})"
+        )
+    return matches[0] if matches else None
+
+
+def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) -> None:
+    """Cross-checks the "attempt" segment embedded in a client-supplied
+    object_key against the real next attempt number Frappe is about to
+    record (row.submission_attempts + 1). The Worker's own validation
+    (assertObjectKeyMatches) only confirms object_key is internally
+    self-consistent -- it never checks the attempt segment against Frappe's
+    own counter, since the Worker holds no server-side record of what the
+    true attempt count is. Without this check, a client could request an
+    upload URL for one attempt and submit under a hand-built object_key
+    naming a different attempt number, letting R2/gallery storage diverge
+    from Frappe's own attempt bookkeeping.
+
+    A key that fails to parse at all is left alone here -- that is a
+    different, already-handled failure mode (the Worker validates key shape
+    before ever calling this route); this check only fires for a
+    syntactically valid key whose attempt number disagrees with reality.
+    """
+    if not object_key:
+        return
+    try:
+        parsed_key = parse_object_key(object_key)
+    except InvalidInput:
+        return
+    if parsed_key["attempt"] != expected_attempt:
+        raise InvalidInput(
+            f"object_key's attempt ({parsed_key['attempt']}) does not match "
+            f"this submission's actual next attempt number ({expected_attempt})"
+        )
+
+
 def check_attempt_cap(student_id: str, assignment_id: str, context: str = "program") -> dict:
     """Reports the student's current attempt number and how many attempts
-    remain for this assignment, without creating anything. Also enforces
-    the video prerequisite, the weekly submission cap (program context
-    only, new), and the per-assignment attempt cap itself.
+    remain for this assignment. Read-only: enforces the video prerequisite,
+    the weekly submission cap (program context only), and the
+    per-assignment attempt cap as checks only -- it does not create a Unit
+    Progress row or save the ProgramEnrollment document.
+
+    If no Unit Progress row exists yet for this (student, unit, context),
+    the video-prerequisite check still applies (a brand-new unit has
+    video_watched=False by definition, so this raises InvalidInput exactly
+    as it would for an existing, not-yet-watched row) and attempt_number is
+    reported as 1 with the full attempt cap remaining.
+
+    The weekly cap is checked here as well as in submit_artwork: this is
+    the first gate the Worker's own /submission/request_upload call hits,
+    and it must agree with submit_artwork's own later check -- otherwise a
+    student at the weekly cap gets a signed upload URL issued, uploads
+    their file, and only then discovers the attempt was rejected by
+    submit_artwork. Checking it here too rejects the request before any
+    upload URL is ever signed.
 
     attempts_remaining is computed against the UPCOMING attempt number
-    (row.submission_attempts + 1) -- matching submit_artwork's own
+    (existing_attempts + 1) -- matching submit_artwork's own
     post-increment computation for the same (student, assignment, context)
-    pair -- instead of against the pre-increment count still sitting in
-    row.submission_attempts, so both functions agree on attempts_remaining
-    for the same attempt (see Reference §4.1).
+    pair -- instead of against the pre-increment count, so both functions
+    agree on attempts_remaining for the same attempt.
     """
     pe_name = get_active_program_enrollment_name(student_id)
     pe = frappe.get_doc("ProgramEnrollment", pe_name)
     unit = resolve_learning_unit_for_assignment(assignment_id, context, student_id)
-    row = get_or_create_unit_progress_row(pe, unit, context)
+    row = _find_existing_unit_progress_row(pe, unit, context)
 
-    _require_video_done(row)
+    # A never-started unit has no video_watched yet -- require_video_done
+    # needs an object with a `.video_watched` attribute, so build a minimal
+    # stand-in rather than persisting a real row just to check this.
+    if row is None:
+        class _UnwatchedStub:
+            video_watched = 0
+        require_video_done(_UnwatchedStub())
+    else:
+        require_video_done(row)
 
     if context == "program":
         _require_weekly_submission_cap_not_reached(pe)
 
     cap = max_submission_attempts()
-    if row.submission_attempts >= cap:
+    existing_attempts = row.submission_attempts if row is not None else 0
+    existing_submission = row.submission if row is not None else None
+
+    if existing_attempts >= cap:
         raise CapReached("submission attempt cap already reached")
-    if row.submission and row.submission_attempts > 0:
-        sub_status = frappe.db.get_value("Submission", row.submission, "status")
+    if existing_submission and existing_attempts > 0:
+        sub_status = frappe.db.get_value("Submission", existing_submission, "status")
         if sub_status not in ("Completed", "Failed"):
             raise CapReached("previous submission still being reviewed")
 
-    attempt_number = row.submission_attempts + 1
+    attempt_number = existing_attempts + 1
     attempts_remaining = max(cap - attempt_number, 0)
-
-    pe.save(ignore_permissions=True)
 
     return {"attempt_number": attempt_number, "attempts_remaining": attempts_remaining}
 
@@ -276,43 +340,28 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
 def submit_artwork(student_id: str, assignment_id: str, submission_url: str, object_key: str | None = None,
                     context: str = "program") -> dict:
     """Re-checks the attempt cap, weekly submission cap (program context
-    only, new), and video prerequisite under a row lock, then hands off
-    the actual Submission creation to imgana's submit_artwork pipeline
-    (unmodified). submission_url is a plain, already-public URL the
-    caller provides directly -- not signed or validated against any
-    object-key shape here; it is passed straight through to imgana, which
-    handles its own media-type detection and storage for the "tapapp"
-    source. tap_app/api/submission.py::submit_artwork is responsible for
-    building this URL from the Worker's object_key before calling here.
+    only), and video prerequisite under a row lock, cross-checks
+    object_key's own attempt number against reality, then hands off the
+    actual Submission creation to imgana's submit_artwork pipeline
+    (unmodified). submission_url is a plain, already-public URL the caller
+    provides directly -- tap_app/api/submission.py::submit_artwork is
+    responsible for building this URL from the Worker's object_key before
+    calling here.
 
-    object_key is the SAME Worker-issued key submission_url was built from
-    (tap_app/api/submission.py passes both through unchanged). It is used
-    here, after imgana creates the row, purely to compute THIS response's
-    own submission_id -- never written to the database (there is no column
-    to write it to, and none will be added). See module docstring for the
-    full reasoning, including why this in-memory recovery -- rather than
-    reading the row's own submission_url -- is the only correct source at
-    this point in the request.
+    object_key's attempt segment is validated against
+    row.submission_attempts + 1 (see _validate_object_key_attempt) BEFORE
+    imgana is ever called, so a mismatched key can never create a
+    Submission row. Beyond that cross-check, object_key is used here ONLY
+    to confirm a caller supplied one (logging a warning if not) -- it is
+    NOT used to compute an identifier for the response. submit_artwork's
+    response carries no submission_id at all; a client reads a
+    submission's id/state from /progress/sync or /progress/last_submission
+    instead.
 
-    object_key is optional only so this function's signature stays backward
-    compatible with any caller that has no key to pass (none exist in this
-    codebase today; the TapApp wrapper always passes one) -- submission_id
-    then falls back to the Frappe autoname (sub_name) in that case, exactly
-    as it would for a row whose submission_url hasn't been populated yet.
-
-    Returns the created submission's id as `submission_id` -- the Worker-
-    minted id recovered from object_key when available, else the Frappe
-    autoname. This is the ONLY identifier key in this response; `name` is
-    deliberately never returned as a second key alongside it, so there is
-    exactly one field for client code to read for "which submission is
-    this."
-
-    DECISION D: last_activity_at is now bumped via award_points(pe, ...)
-    on EVERY successful attempt (first or reattempt), not only on the
-    first attempt -- see module docstring for the full reasoning. points
-    are still only ever awarded (a nonzero amount passed to award_points)
-    on the first attempt; award_points itself still unconditionally bumps
-    last_activity_at regardless of whether the amount is 0 or positive.
+    DECISION D: last_activity_at is bumped via award_points(pe, ...,
+    bump_activity=True) on EVERY successful attempt (first or reattempt),
+    not only on the first attempt. Points themselves are only ever awarded
+    (a nonzero amount passed to award_points) on the first attempt.
     """
     if not submission_url or not isinstance(submission_url, str):
         raise InvalidInput("submission_url missing")
@@ -324,7 +373,7 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     unit = resolve_learning_unit_for_assignment(assignment_id, context, student_id)
     row = get_or_create_unit_progress_row(pe, unit, context)
 
-    _require_video_done(row)
+    require_video_done(row)
 
     if context == "program":
         _require_weekly_submission_cap_not_reached(pe)
@@ -336,6 +385,11 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
         prior_status = frappe.db.get_value("Submission", row.submission, "status")
         if prior_status not in ("Completed", "Failed"):
             raise CapReached("previous submission still being reviewed")
+
+    # Reject a client-supplied object_key whose embedded attempt number
+    # disagrees with the real next attempt, before any Submission row is
+    # created or any write happens.
+    _validate_object_key_attempt(object_key, row.submission_attempts + 1)
 
     is_first_attempt = row.submission_attempts == 0
 
@@ -368,64 +422,26 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
 
     sub_name = imgana_result["submission_id"]
 
-    # ------------------------------------------------------------------
-    # Canonical submission_id for THIS response only -- no DB write, no
-    # schema change, no imgana change. Recovered from the in-memory
-    # object_key already on hand, because imgana's async
-    # process_submission_async (which populates submission_doc.
-    # submission_url) runs only AFTER this function returns
-    # (enqueue_after_commit=True) -- submission_url is still None right now,
-    # so it is not a usable source for THIS particular response. Every later
-    # read of this same row (sync/list/get/gallery) instead recovers the id
-    # from submission_url once that async job has run -- see
-    # shared.submission.object_naming.resolve_wire_submission_id.
-    # ------------------------------------------------------------------
-    worker_submission_id: str | None = None
-    if object_key:
-        try:
-            parsed = parse_object_key(object_key)
-            worker_submission_id = parsed["submission_id"]
-        except InvalidInput:
-            frappe.logger().warning(
-                f"submit_artwork: object_key={object_key!r} for newly created "
-                f"Submission {sub_name} does not match the expected "
-                f"tapapp/{{assignment_id}}/{{student_id}}/{{submission_id}}-"
-                f"{{attempt}}.{{ext}} shape -- this response's submission_id "
-                f"will fall back to the Frappe autoname. The Submission row "
-                f"itself was created successfully and is not affected; a "
-                f"later read of this same submission (sync/list/get) will "
-                f"independently try to recover the id from submission_url "
-                f"once it is populated."
-            )
-    else:
+    if not object_key:
         frappe.logger().warning(
             f"submit_artwork: no object_key supplied for newly created "
-            f"Submission {sub_name} -- this response's submission_id will "
-            f"fall back to the Frappe autoname. The TapApp Worker path "
-            f"always supplies one; this indicates a caller other than the "
-            f"documented Worker route."
+            f"Submission {sub_name}. The TapApp Worker path always supplies "
+            f"one; this indicates a caller other than the documented Worker "
+            f"route. This has no effect on the response shape -- "
+            f"submit_artwork never returns an identifier for the new row."
         )
-
-    # The canonical identifier returned to every caller (Worker included)
-    # is the Worker-minted id when we were able to recover one from
-    # object_key, else the Frappe autoname -- never both, and never a
-    # separate `name` key.
-    canonical_submission_id = worker_submission_id or sub_name
 
     row.submission = sub_name
     row.submission_attempts += 1
     recompute_unit_status(row)
 
-    # DECISION D: award_points is now called on EVERY successful attempt,
-    # not only inside an `if is_first_attempt:` guard. Points themselves
-    # are only ever nonzero on the first attempt (points_awarded stays 0
-    # on a reattempt, exactly as before) -- but award_points's own
-    # unconditional last_activity_at bump (shared/progress/rewards.py)
-    # now fires every time, which is the whole point of this change: a
-    # second-attempt submission must still advance last_activity_at so
-    # /progress/sync's "has anything changed" check sees it.
+    # DECISION D: award_points is called on EVERY successful attempt, not
+    # only inside an `if is_first_attempt:` guard. Points themselves are
+    # only ever nonzero on the first attempt (points_awarded stays 0 on a
+    # reattempt) -- bump_activity=True is passed explicitly on every call
+    # so a second-attempt submission still advances last_activity_at.
     points_awarded = points_for_submission_first_attempt() if is_first_attempt else 0
-    award_points(pe, points_awarded)
+    award_points(pe, points_awarded, bump_activity=True)
 
     pe.save(ignore_permissions=True)
 
@@ -434,7 +450,6 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     sub_created_at = frappe.db.get_value("Submission", sub_name, "created_at")
 
     return {
-        "submission_id": canonical_submission_id,
         "status": sub_status,
         "created_at": (sub_created_at or frappe.utils.now_datetime()).isoformat(),
         "assignment_id_link": assignment_id,

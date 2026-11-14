@@ -3,9 +3,9 @@ shared/jobs/_log.py
 
 One row per scheduled-job run, written to the existing Shared Logs doctype
 (no doctype changes -- this just uses the fields that are already there:
-source, log_type, status, started_at, finished_at, rows_processed, log_date,
-details). Every job in shared/jobs/ calls this exactly once per run, success
-or failure, so job history is auditable from one list view.
+source, log_type, status, started_at, finished_at, rows_processed,
+log_date, details). Every job in shared/jobs/ calls this exactly once per
+run, success or failure, so job history is auditable from one list view.
 """
 
 from __future__ import annotations

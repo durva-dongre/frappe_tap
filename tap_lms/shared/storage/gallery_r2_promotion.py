@@ -1,9 +1,9 @@
 """
 shared/storage/gallery_r2_promotion.py
 
-The missing piece shared/submission/review_result.py's gallery branch has
-always been written to call (guarded by a try/except ImportError, since
-this file previously did not exist on disk at all):
+shared/submission/review_result.py's gallery branch calls this module as
+follows (guarded by a try/except ImportError, so a deployment without
+this module still runs, just without gallery promotion):
 
     try:
         from shared.storage.gallery_r2_promotion import promote_submission_media_to_r2
@@ -26,12 +26,13 @@ this file previously did not exist on disk at all):
             media_type=r2_result["media_type"],
         )
 
-This module's ONE job is to make that call real: copy a submission's media
-from wherever it actually lives on GCS into the R2 bucket the Worker's
-gallery read path (worker/src/db/gallery.ts, worker/src/storage/r2.ts)
-signs GET urls against, under the exact object-key shape the Worker's own
-internalHandlers.ts::OBJECT_KEY_PATTERN requires, and report back the key
-and media_type notify_worker_gallery_index needs to index it in D1.
+This module's one job is to make that call real: copy a submission's
+media from wherever it actually lives on GCS into the R2 bucket the
+Worker's gallery read path (worker/src/db/gallery.ts,
+worker/src/storage/r2.ts) signs GET urls against, under the exact
+object-key shape the Worker's own internalHandlers.ts::OBJECT_KEY_PATTERN
+requires, and report back the key and media_type
+notify_worker_gallery_index needs to index it in D1.
 
 No doctype change. No change to imgana (tap_lms/imgana/*) or to anything
 outside shared/ and tap_lms/ generally -- imgana remains the only thing

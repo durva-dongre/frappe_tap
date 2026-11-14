@@ -44,10 +44,10 @@ def get_profile_fields(student_id: str) -> dict:
 
 
 def _resolve_assignment_id_for_unit(learning_unit: str) -> str | None:
-    """Resolves a learning unit's own default assignment, for the gallery's
-    assignment-id scope level (worker/src/storage/profileScope.ts's v6
-    assignmentId field, worker/src/handlers/galleryHandlers.ts's default
-    scope). This is the exact reverse of
+    """Resolves a learning unit's own default assignment, for the
+    gallery's assignment-id scope level (worker/src/storage/
+    profileScope.ts's v6 assignmentId field, worker/src/handlers/
+    galleryHandlers.ts's default scope). This is the exact reverse of
     shared.submission.lifecycle.resolve_learning_unit_for_assignment's
     primary lookup (assignment_id -> learning_unit via UnitContentItem),
     querying the same UnitContentItem.content_type/.content shape in the
@@ -76,32 +76,33 @@ def _resolve_assignment_id_for_unit(learning_unit: str) -> str | None:
 def get_profile_scope(student_id: str) -> dict:
     """Returns the student's gallery-scoping fields, read by the Worker's
     storage/profileScope.ts (GET /gallery's scope resolution, cached and
-    minted into scope_cache_token). Besides location/grade, this now also
-    resolves and returns assignment_id: the student's current program-track
-    learning unit's own default Assignment, if that unit has one
-    configured.
+    minted into scope_cache_token). Besides location/grade, this also
+    resolves and returns assignment_id: the student's current
+    program-track learning unit's own default Assignment, if that unit
+    has one configured.
 
-    v-fix: assignment_id was previously entirely absent from this
-    function's return dict, even though profileScope.ts's own v6 docstring
-    (and galleryHandlers.ts's default-scope logic) already expected Frappe
-    to supply it -- "the student's current/default assignment, resolved
-    server-side by Frappe ... from their current learning unit." Without
-    it, the Worker's gallery cascade could never start at its narrowest,
-    most relevant level (assignment_id) for any student, and silently fell
+    The Worker's storage/profileScope.ts and galleryHandlers.ts's
+    default-scope logic already expect Frappe to supply assignment_id --
+    "the student's current/default assignment, resolved server-side by
+    Frappe ... from their current learning unit." Without it, the
+    Worker's gallery cascade could never start at its narrowest, most
+    relevant level (assignment_id) for any student, and would fall
     straight through to school/district/state scoping (or an empty page)
-    on every request, regardless of whether the student actually had a
-    current, gallery-eligible assignment. This resolves the student's
-    current unit exactly the way auth's resume payload does (via
-    get_active_program_enrollment + resolve_current_unit_for_track, using
-    next_unit_for as the fallback for a student with no in-progress unit),
-    then looks up that unit's own Assignment content item
-    (_resolve_assignment_id_for_unit, the reverse of
-    shared.submission.lifecycle.resolve_learning_unit_for_assignment's
-    forward lookup). A student with no active enrollment, no resolvable
-    current unit, or whose current unit has no Assignment content item
-    configured gets assignment_id: None here -- the gallery's own cascade
-    already treats that as "skip this level," which is the correct
-    behavior, not an error.
+    regardless of whether the student actually had a current,
+    gallery-eligible assignment.
+
+    This resolves the student's current unit exactly the way auth's
+    resume payload does (via get_active_program_enrollment +
+    resolve_current_unit_for_track, using next_unit_for as the fallback
+    for a student with no in-progress unit), then looks up that unit's
+    own Assignment content item (_resolve_assignment_id_for_unit, the
+    reverse of shared.submission.lifecycle.
+    resolve_learning_unit_for_assignment's forward lookup). A student
+    with no active enrollment, no resolvable current unit, or whose
+    current unit has no Assignment content item configured gets
+    assignment_id: None here -- the gallery's own cascade already treats
+    that as "skip this level," which is the correct behavior, not an
+    error.
     """
     student = frappe.db.get_value(
         "Student", student_id,

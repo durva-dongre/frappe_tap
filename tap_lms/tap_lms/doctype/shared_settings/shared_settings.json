@@ -5,25 +5,22 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "tapapp_section",
+  "rewards_section",
   "points_video_complete",
   "points_per_correct_answer",
   "points_submission_first_attempt",
   "points_submission_review_valid",
+  "rewards_column_break",
   "gems_submission_review_valid",
-  "tapapp_column_break",
   "max_submission_attempts",
   "max_submissions_per_week",
-  "max_video_points",
-  "max_quiz_points",
-  "max_submission_points",
   "magic_link_section",
   "magic_link_base_url",
   "magic_link_shared_secret",
+  "magic_link_column_break",
   "magic_link_ttl_home",
   "magic_link_ttl_feedback",
   "magic_link_ttl_gallery",
-  "magic_link_column_break",
   "magic_link_ttl_submit",
   "magic_link_ttl_later",
   "jwt_section",
@@ -31,96 +28,89 @@
   "jwt_algorithm",
   "jwt_column_break",
   "phone_token_ttl_seconds",
-  "upload_section",
   "upload_put_url_ttl_seconds",
   "system_section",
   "config_cache_ttl_seconds",
   "db_retry_attempts",
   "db_retry_backoff_ms",
-  "storage_section",
-  "gcs_bucket",
-  "gcs_project_id",
-  "gcs_service_account_json",
-  "storage_column_break",
+  "system_column_break",
+  "shared_logs_retention_days",
+  "r2_storage_section",
   "r2_account_id",
-  "r2_access_key_id",
-  "r2_secret_access_key",
   "r2_bucket",
+  "r2_access_key_id",
+  "r2_storage_column_break",
+  "r2_secret_access_key",
+  "worker_api_section",
   "worker_internal_api_url",
   "worker_internal_api_secret",
-  "worker_internal_api_timeout_seconds"
+  "worker_api_column_break",
+  "worker_internal_api_timeout_seconds",
+  "gallery_sweep_section",
+  "r2_sweep_enabled",
+  "r2_sweep_batch_size",
+  "gallery_sweep_lookback_days",
+  "gallery_sweep_column_break",
+  "gallery_index_chunk_size",
+  "analytics_section",
+  "analytics_apps_script_url",
+  "analytics_apps_script_shared_secret",
+  "analytics_column_break",
+  "analytics_sheet_tab_name"
  ],
  "fields": [
   {
-   "fieldname": "tapapp_section",
+   "fieldname": "rewards_section",
    "fieldtype": "Section Break",
-   "label": "TapApp"
+   "label": "Points & Rewards"
   },
   {
    "default": "10",
    "fieldname": "points_video_complete",
    "fieldtype": "Int",
-   "label": "Points Video Complete"
+   "label": "Points — Video Complete"
   },
   {
    "default": "1",
    "fieldname": "points_per_correct_answer",
    "fieldtype": "Int",
-   "label": "Points Per Correct Answer"
+   "label": "Points — Per Correct Quiz Answer"
   },
   {
    "default": "25",
    "fieldname": "points_submission_first_attempt",
    "fieldtype": "Int",
-   "label": "Points Submission First Attempt"
+   "label": "Points — Submission First Attempt"
   },
   {
    "default": "10",
    "fieldname": "points_submission_review_valid",
    "fieldtype": "Int",
-   "label": "Points Submission Review Valid"
+   "label": "Points — Submission Review Valid"
+  },
+  {
+   "fieldname": "rewards_column_break",
+   "fieldtype": "Column Break"
   },
   {
    "default": "1",
    "fieldname": "gems_submission_review_valid",
    "fieldtype": "Int",
-   "label": "Gems Submission Review Valid",
-   "description": "The gem reward granted once a submission's review comes back as a valid ('Success - Original') result. shared/progress/rewards.py::gems_for_submission_review_valid() reads this field directly and falls back to a hardcoded default of 1 only if this Singleton has never been saved since this field was added to the schema -- see that function's own docstring for why that fallback exists and why it is not a substitute for saving Shared Settings once post-deploy."
-  },
-  {
-   "fieldname": "tapapp_column_break",
-   "fieldtype": "Column Break"
+   "label": "Gems — Submission Review Valid",
+   "description": "Awarded once per submission, the first time its review comes back as Success - Original."
   },
   {
    "default": "2",
    "fieldname": "max_submission_attempts",
    "fieldtype": "Int",
-   "label": "Max Submission Attempts"
+   "label": "Max Attempts Per Assignment"
   },
   {
    "default": "1000",
    "fieldname": "max_submissions_per_week",
    "fieldtype": "Int",
-   "label": "Max Submissions Per Week",
-   "description": "Weekly cap on graded submission reviews per student, program context only. Checked by shared/submission/lifecycle.py::submit_artwork against ProgramEnrollment.submission_this_week before accepting a new attempt; a student at or over this cap gets CONFLICT, the same error code used for the existing per-assignment attempt cap (max_submission_attempts) -- this is a separate, weekly, cross-assignment cap, not a replacement for that one. submission_this_week itself is incremented once per graded review outcome (any result_status: Success - Original, Success - Flagged, or Failed) by shared/submission/review_result.py::handle_review_result, not at submit time -- see that field's own description on ProgramEnrollment. Kept deliberately high by default (1000) so this cap is effectively a no-op until an operator deliberately lowers it from the Shared Settings UI; no deploy required to change it, same as max_submission_attempts."
-  },
-  {
-   "default": "10",
-   "fieldname": "max_video_points",
-   "fieldtype": "Int",
-   "label": "Max Video Points"
-  },
-  {
-   "default": "10",
-   "fieldname": "max_quiz_points",
-   "fieldtype": "Int",
-   "label": "Max Quiz Points"
-  },
-  {
-   "default": "25",
-   "fieldname": "max_submission_points",
-   "fieldtype": "Int",
-   "label": "Max Submission Points"
+   "label": "Max Submissions Per Student Per Week",
+   "description": "Separate from the per-assignment cap above — this one is weekly and counts across all assignments."
   },
   {
    "fieldname": "magic_link_section",
@@ -130,60 +120,60 @@
   {
    "fieldname": "magic_link_base_url",
    "fieldtype": "Data",
-   "label": "Magic Link Base URL",
+   "label": "Base URL",
    "reqd": 1,
-   "description": "The base URL mint_magic_link (tap_app/api/auth.py) prepends to a minted token to build the full, shareable magic_link_url -- e.g. the app's deep-link domain or a web redirect endpoint that itself hands the token to the TapApp Worker's /auth/redeem. Stored here, not hardcoded, because this value differs by environment (staging vs. production) and can change independently of a Frappe deploy. The token is appended as-is, with no added query parameters or path segments, so this value should already end in whatever separator the receiving endpoint expects (a trailing '/', or a '?token=' style prefix, depending on how that endpoint is built)."
+   "description": "A minted token is appended directly to this with no separator — end it in '/' or '?token=' as your receiving endpoint expects."
   },
   {
    "fieldname": "magic_link_shared_secret",
    "fieldtype": "Password",
-   "label": "Magic Link Shared Secret",
+   "label": "Shared Secret",
    "reqd": 1,
-   "description": "HMAC secret used to mint (and, on the Worker side, verify) V2 magic links. Must be byte-identical to the Worker's own MAGIC_LINK_SECRET (set via `wrangler secret put`) -- nothing in this codebase keeps the two independently-configured secrets in sync automatically; rotating one without the other makes every link minted here fail verification on the Worker side with UNAUTHORIZED. Configured here, as a Shared Settings Password field, instead of in site_config.json, so it can be rotated from the Shared Settings doctype UI with no deploy and no bench console access, consistently with every other TapApp secret (R2, GCS, Worker Internal API, JWT) on this doctype."
-  },
-  {
-   "default": "7776000",
-   "fieldname": "magic_link_ttl_home",
-   "fieldtype": "Int",
-   "label": "Magic Link TTL - Home (seconds)",
-   "reqd": 1,
-   "description": "Default 7776000 seconds = 90 days."
-  },
-  {
-   "default": "2592000",
-   "fieldname": "magic_link_ttl_feedback",
-   "fieldtype": "Int",
-   "label": "Magic Link TTL - Feedback (seconds)",
-   "reqd": 1,
-   "description": "Default 2592000 seconds = 30 days."
-  },
-  {
-   "default": "2592000",
-   "fieldname": "magic_link_ttl_gallery",
-   "fieldtype": "Int",
-   "label": "Magic Link TTL - Gallery (seconds)",
-   "reqd": 1,
-   "description": "Default 2592000 seconds = 30 days."
+   "description": "Must match the Worker's MAGIC_LINK_SECRET exactly. Rotating one side without the other breaks every link already sent out."
   },
   {
    "fieldname": "magic_link_column_break",
    "fieldtype": "Column Break"
   },
   {
+   "default": "7776000",
+   "fieldname": "magic_link_ttl_home",
+   "fieldtype": "Int",
+   "label": "TTL — Home (seconds)",
+   "reqd": 1,
+   "description": "90 days by default."
+  },
+  {
+   "default": "2592000",
+   "fieldname": "magic_link_ttl_feedback",
+   "fieldtype": "Int",
+   "label": "TTL — Feedback (seconds)",
+   "reqd": 1,
+   "description": "30 days by default."
+  },
+  {
+   "default": "2592000",
+   "fieldname": "magic_link_ttl_gallery",
+   "fieldtype": "Int",
+   "label": "TTL — Gallery (seconds)",
+   "reqd": 1,
+   "description": "30 days by default."
+  },
+  {
    "default": "1209600",
    "fieldname": "magic_link_ttl_submit",
    "fieldtype": "Int",
-   "label": "Magic Link TTL - Submit (seconds)",
+   "label": "TTL — Submit (seconds)",
    "reqd": 1,
-   "description": "Default 1209600 seconds = 14 days."
+   "description": "14 days by default."
   },
   {
    "default": "1209600",
    "fieldname": "magic_link_ttl_later",
    "fieldtype": "Int",
-   "label": "Magic Link TTL - Later (seconds)",
+   "label": "TTL — Later (seconds)",
    "reqd": 1,
-   "description": "Default 1209600 seconds = 14 days."
+   "description": "14 days by default."
   },
   {
    "fieldname": "jwt_section",
@@ -195,7 +185,7 @@
    "fieldtype": "Password",
    "label": "JWT Secret",
    "reqd": 1,
-   "description": "Signing secret for the phone-scoped JWT issued by shared/auth/jwt_tokens.py::issue_phone_token and verified by verify_phone_token. This is a separate secret from Magic Link Shared Secret above -- the magic link and the phone token are two different credential types with two different lifetimes and two different verifiers (the Worker verifies the magic link; this JWT is verified by whichever service calls verify_phone_token), so they must never share a secret. Rotating this value invalidates every phone token already issued -- every logged-in session on this credential type will need to re-redeem a fresh magic link."
+   "description": "Separate from the Magic Link secret above — these two must never be shared. Rotating this signs out every phone token already issued."
   },
   {
    "default": "HS256",
@@ -203,7 +193,7 @@
    "fieldtype": "Data",
    "label": "JWT Algorithm",
    "reqd": 1,
-   "description": "Algorithm passed to jwt.encode/jwt.decode in shared/auth/jwt_tokens.py. Must be a PyJWT-supported HMAC or asymmetric algorithm name (e.g. HS256, HS384, HS512). Changing this on a live site invalidates every previously-issued phone token signed under the old algorithm, since verify_phone_token only accepts the currently configured algorithm."
+   "description": "Any PyJWT-supported algorithm (HS256, HS384, HS512, ...). Changing this invalidates every token signed under the old one."
   },
   {
    "fieldname": "jwt_column_break",
@@ -215,20 +205,15 @@
    "fieldtype": "Int",
    "label": "Phone Token TTL (seconds)",
    "reqd": 1,
-   "description": "How long a phone-scoped JWT (shared/auth/jwt_tokens.py::issue_phone_token) stays valid after issuance. Default 7776000 seconds = 90 days. There is no session/refresh layer behind this token -- re-logging in via a fresh magic link is the only way to get a new one -- so this value is intentionally long. Set to 0 to mint a token with no expiry claim at all (issue_phone_token only adds an `exp` claim when this is greater than 0); this is a real, supported configuration, not a misconfiguration, but means a token can never be invalidated by waiting it out -- only by rotating JWT Secret above."
-  },
-  {
-   "fieldname": "upload_section",
-   "fieldtype": "Section Break",
-   "label": "Upload Tickets"
+   "description": "90 days by default. Set to 0 for a token that never expires on its own — only JWT Secret rotation can invalidate it then."
   },
   {
    "default": "600",
    "fieldname": "upload_put_url_ttl_seconds",
    "fieldtype": "Int",
-   "label": "Upload PUT URL TTL (seconds)",
+   "label": "Upload Ticket TTL (seconds)",
    "reqd": 1,
-   "description": "How long an upload ticket created by shared/submission/tickets.py::create_ticket stays valid in the Frappe cache before expiring. This is the window the client has, after calling request_upload, to actually PUT its file to the signed URL and call confirm_upload/submit_artwork before the ticket is discarded and the whole upload must be restarted. Default 600 seconds = 10 minutes."
+   "description": "How long a student has to finish an upload after requesting one. 10 minutes by default."
   },
   {
    "fieldname": "system_section",
@@ -241,7 +226,7 @@
    "fieldtype": "Int",
    "label": "Config Cache TTL (seconds)",
    "reqd": 1,
-   "description": "How long shared/config/settings_cache.py holds this document in memory before re-reading it from the database. Read fresh off the document on every cache load, so a change here takes effect the next time the current cache slot expires -- at most one stale read at the previous TTL, never permanently stuck."
+   "description": "How long this document is held in memory before re-reading from the database."
   },
   {
    "default": "3",
@@ -249,7 +234,7 @@
    "fieldtype": "Int",
    "label": "DB Retry Attempts",
    "reqd": 1,
-   "description": "How many total attempts shared/db_retry.py::with_retry makes for a raw-SQL call that keeps hitting a retryable Postgres error (deadlock_detected / serialization_failure), before giving up and re-raising. Must be at least 1 (1 means no retrying at all -- the call is tried once and any error, retryable or not, is raised immediately)."
+   "description": "Total tries for a query hitting a deadlock or serialization error. 1 = no retrying."
   },
   {
    "default": "50",
@@ -257,69 +242,146 @@
    "fieldtype": "Int",
    "label": "DB Retry Backoff (ms)",
    "reqd": 1,
-   "description": "Fixed delay, in milliseconds, shared/db_retry.py::with_retry sleeps between retry attempts after a retryable Postgres error. Applied the same way between every pair of attempts (no exponential backoff) -- this is deliberately simple since TapApp's retryable errors (deadlock/serialization failure under row-level locking) are expected to be rare and short-lived, not a sign of sustained contention that would call for backoff growth."
+   "description": "Fixed delay between retry attempts — no exponential growth."
   },
   {
-   "fieldname": "storage_section",
-   "fieldtype": "Section Break",
-   "label": "Storage (GCS / R2)"
-  },
-  {
-   "fieldname": "gcs_bucket",
-   "fieldtype": "Data",
-   "label": "GCS Bucket"
-  },
-  {
-   "fieldname": "gcs_project_id",
-   "fieldtype": "Data",
-   "label": "GCS Project ID"
-  },
-  {
-   "fieldname": "gcs_service_account_json",
-   "fieldtype": "Password",
-   "label": "GCS Service Account JSON"
-  },
-  {
-   "fieldname": "storage_column_break",
+   "fieldname": "system_column_break",
    "fieldtype": "Column Break"
+  },
+  {
+   "default": "90",
+   "fieldname": "shared_logs_retention_days",
+   "fieldtype": "Int",
+   "label": "Shared Logs Retention (days)",
+   "reqd": 1,
+   "description": "Older job-run log rows are purged nightly after that night's own logs are written, so tonight's run is never at risk."
+  },
+  {
+   "fieldname": "r2_storage_section",
+   "fieldtype": "Section Break",
+   "label": "R2 Storage"
   },
   {
    "fieldname": "r2_account_id",
    "fieldtype": "Data",
-   "label": "R2 Account ID"
-  },
-  {
-   "fieldname": "r2_access_key_id",
-   "fieldtype": "Data",
-   "label": "R2 Access Key ID"
-  },
-  {
-   "fieldname": "r2_secret_access_key",
-   "fieldtype": "Password",
-   "label": "R2 Secret Access Key"
+   "label": "Account ID"
   },
   {
    "fieldname": "r2_bucket",
    "fieldtype": "Data",
-   "label": "R2 Bucket"
+   "label": "Bucket Name",
+   "description": "Must match the Worker's own R2_SUBMISSIONS_BUCKET_NAME."
+  },
+  {
+   "fieldname": "r2_access_key_id",
+   "fieldtype": "Data",
+   "label": "Access Key ID"
+  },
+  {
+   "fieldname": "r2_storage_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "r2_secret_access_key",
+   "fieldtype": "Password",
+   "label": "Secret Access Key"
+  },
+  {
+   "fieldname": "worker_api_section",
+   "fieldtype": "Section Break",
+   "label": "Worker Internal API"
   },
   {
    "fieldname": "worker_internal_api_url",
    "fieldtype": "Data",
-   "label": "Worker Internal API URL"
+   "label": "URL"
   },
   {
    "fieldname": "worker_internal_api_secret",
    "fieldtype": "Password",
-   "label": "Worker Internal API Secret"
+   "label": "Shared Secret",
+   "description": "Sent as the X-Internal-Secret header on every Frappe → Worker call."
+  },
+  {
+   "fieldname": "worker_api_column_break",
+   "fieldtype": "Column Break"
   },
   {
    "default": "15",
    "fieldname": "worker_internal_api_timeout_seconds",
    "fieldtype": "Int",
-   "label": "Worker Internal API Timeout (seconds)",
+   "label": "Timeout (seconds)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "gallery_sweep_section",
+   "fieldtype": "Section Break",
+   "label": "Gallery Promotion Sweep (nightly batch job)"
+  },
+  {
+   "default": "1",
+   "fieldname": "r2_sweep_enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "description": "Off = tonight's sweep is skipped entirely. Nothing is lost — pending submissions are simply picked up on a later run."
+  },
+  {
+   "default": "500",
+   "fieldname": "r2_sweep_batch_size",
+   "fieldtype": "Int",
+   "label": "Max Submissions Per Run",
    "reqd": 1,
-   "description": "HTTP request timeout used by shared/storage/gallery_promotion.py when calling the Worker's internal API (/internal/gallery/index, /internal/gallery/visibility). Applies to both the connect and read phase of each request (passed straight through to requests.post(..., timeout=...)). A value too low for the Worker's own response time will raise a requests.Timeout that gallery_promotion.py's callers must already tolerate (see shared/submission/review_result.py's own try/except around its gallery-notify call)."
+   "description": "Caps how many submissions get promoted in one night, so a large backlog can't turn into an hours-long run."
+  },
+  {
+   "default": "14",
+   "fieldname": "gallery_sweep_lookback_days",
+   "fieldtype": "Int",
+   "label": "Lookback Ceiling (days)",
+   "reqd": 1,
+   "description": "Fallback window used only on the very first run, or if the sweep hasn't succeeded in longer than this."
+  },
+  {
+   "fieldname": "gallery_sweep_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "100",
+   "fieldname": "gallery_index_chunk_size",
+   "fieldtype": "Int",
+   "label": "Rows Per Worker Call",
+   "reqd": 1,
+   "description": "Should match the Worker's own INDEX_BATCH_MAX."
+  },
+  {
+   "fieldname": "analytics_section",
+   "fieldtype": "Section Break",
+   "label": "Daily Analytics Sheet"
+  },
+  {
+   "fieldname": "analytics_apps_script_url",
+   "fieldtype": "Data",
+   "label": "Apps Script URL",
+   "reqd": 1,
+   "description": "The deployed Google Apps Script Web App that writes each night's row to the sheet."
+  },
+  {
+   "fieldname": "analytics_apps_script_shared_secret",
+   "fieldtype": "Password",
+   "label": "Shared Secret",
+   "reqd": 1,
+   "description": "Sent inside the request body (Apps Script can't reliably read custom headers). Must match the secret stored in the script itself."
+  },
+  {
+   "fieldname": "analytics_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Daily Analytics",
+   "fieldname": "analytics_sheet_tab_name",
+   "fieldtype": "Data",
+   "label": "Sheet Tab Name",
+   "reqd": 1
   }
  ],
  "index_web_pages_for_search": 1,

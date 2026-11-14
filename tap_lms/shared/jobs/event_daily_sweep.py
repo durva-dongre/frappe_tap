@@ -1,19 +1,21 @@
 """
-shared/jobs/event_maintenance.py
+shared/jobs/event_daily_sweep.py
 
 Daily sweep: closes out Event Campaigns whose end_date has passed, and
 resolves every still-'active' Student Event Enrollment row against one of
 those now-closed events to either 'completed' (if its Unit Progress row
 shows unit_status == 'Completed') or 'missed' (otherwise).
 
-Scheduled daily (hooks.py) -- events have day-granularity end_date, so a
-once-a-day sweep is sufficient; no need for hourly.
+Scheduled daily (via nightly_pipeline.py) -- events have day-granularity
+end_date, so a once-a-day sweep is sufficient; no need for hourly.
 
 Deliberately does NOT call rebuild_events_index() / export_event_to_r2()
-directly -- those live in shared/export/event_exporter.py and are invoked
-from their own doc_events hook, kept decoupled so a failure in the export
-path never blocks the enrollment-status sweep, which is the part that
-actually matters for student state correctness.
+directly -- those live in shared/export/event_exporter.py. The nightly
+pipeline orchestrator calls rebuild_events_index() itself, after this
+job's own run(), when this job actually closed anything -- keeping the
+export path decoupled from this sweep means a failure in the export path
+never blocks the enrollment-status sweep, which is the part that actually
+matters for student state correctness.
 """
 
 from __future__ import annotations
@@ -29,11 +31,11 @@ def expire_overdue_events() -> int:
        end_date < today -> status = 'Completed' (doctype has no 'Expired'
        option; 'Completed' is the correct terminal state once the window
        has closed, regardless of how many students actually finished).
-    2. For every Student Event Enrollment row still 'active' against one of
-       the events just closed: resolve to 'completed' or 'missed' by
+    2. For every Student Event Enrollment row still 'active' against one
+       of the events just closed: resolve to 'completed' or 'missed' by
        checking whether that student's corresponding Unit Progress row
-       (found via the enrollment's own `unit_progress` pointer field) shows
-       unit_status == 'Completed'.
+       (found via the enrollment's own `unit_progress` pointer field)
+       shows unit_status == 'Completed'.
     Returns the number of Event Campaign rows transitioned (the headline
     count for the Shared Logs row).
     """
@@ -68,9 +70,10 @@ def expire_overdue_events() -> int:
     for row in rows:
         new_status = "missed"
         if row.unit_progress:
-            # unit_progress stores the Unit Progress child row's own `name`,
-            # inside the student's active ProgramEnrollment.unit_progress
-            # table (see shared/progress/unit_progress.py for that shape).
+            # unit_progress stores the Unit Progress child row's own
+            # `name`, inside the student's active ProgramEnrollment.
+            # unit_progress table (see shared/progress/unit_progress.py
+            # for that shape).
             up_status = frappe.db.sql(
                 """
                 SELECT up.unit_status
@@ -93,17 +96,18 @@ def expire_overdue_events() -> int:
     return len(closed_names)
 
 
-def run() -> None:
+def run() -> dict:
     started = frappe.utils.now_datetime()
     try:
         count = expire_overdue_events()
         log_job_run(
-            "event_maintenance", "scheduled", "success",
+            "event_daily_sweep", "scheduled", "success",
             started, frappe.utils.now_datetime(), count,
         )
+        return {"status": "success", "events_closed": count}
     except Exception as exc:
         log_job_run(
-            "event_maintenance", "scheduled", "failed",
+            "event_daily_sweep", "scheduled", "failed",
             started, frappe.utils.now_datetime(), 0, {"error": str(exc)},
         )
-        raise
+        return {"status": "failed", "events_closed": 0, "error": str(exc)}

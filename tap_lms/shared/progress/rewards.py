@@ -5,8 +5,8 @@ Points/gems ledger helpers plus accessors for the reward schedule on the
 shared settings singleton. Deliberately doctype-light: these functions
 award against whatever enrollment-shaped row is handed to them (by name),
 using direct SQL increments rather than load-mutate-save, so concurrent
-awards never clobber each other and no full document load is needed on the
-hot path.
+awards never clobber each other and no full document load is needed on
+the hot path.
 
 Gem-award policy: nothing in this module auto-awards gems on video/quiz.
 The one place gems are awarded in this codebase is the feedback-review
@@ -15,15 +15,17 @@ award_gems_for_submission once per submission the moment its review comes
 back valid for the first time. Keeping that trigger in one call site makes
 "where do gems come from" auditable at a glance.
 
+SINGLETON-DEFAULT GAP
+----------------------
 Every reward-amount accessor below falls back to a hardcoded default
 instead of returning whatever Shared Settings reads back, because Shared
 Settings is a Frappe Singleton ("issingle": 1): a field's `"default"` in
 the doctype JSON only applies on save -- it does not retroactively
-backfill a Singleton row that was never re-saved after the field was added
-to the schema. On a site where the Singleton predates one of these fields
-(or predates the whole doctype) and has never been opened and saved once
-since, frappe.get_single(...).<field> reads back as None, not the schema
-default.
+backfill a Singleton row that was never re-saved after the field was
+added to the schema. On a site where the Singleton predates one of these
+fields (or predates the whole doctype) and has never been opened and
+saved once since, frappe.get_single(...).<field> reads back as None, not
+the schema default.
 
 This fallback is load-bearing, not cosmetic: award_points_by_name(name,
 None) feeds directly into "SET points = COALESCE(points,0) + %s" with
@@ -32,7 +34,7 @@ column to NULL outright -- COALESCE only protects the LEFT side of the +,
 never the right. Returning a sane int here is what keeps that arithmetic
 safe; it is not optional defensive styling.
 
-max_submissions_per_week() follows this exact same pattern: it is the new
+max_submissions_per_week() follows this exact same pattern: it is the
 weekly submission cap (shared/submission/lifecycle.py::submit_artwork
 checks ProgramEnrollment.submission_this_week against it before accepting
 a new attempt, raising CapReached/CONFLICT if the cap is already reached).
@@ -50,37 +52,32 @@ correctly saved its Shared Settings at least once will never exercise
 them; one that hasn't gets the documented default behavior instead of a
 silently corrupted points/gems column.
 
-LAST_ACTIVITY_AT POLICY (2026-11-14, this pass): award_points() and
-award_points_by_name() no longer bump last_activity_at unconditionally.
-Bumping it on every call -- including a video watch or a quiz attempt --
-meant /progress/sync's "has anything changed" check (current_epoch <=
-last_updated_epoch) fired on ANY activity, not specifically on a
-submission update. The explicit goal of this pass is: last_activity_at
-(and therefore sync's changed-detection) should advance only when a
-SUBMISSION updates -- so a plain video watch or quiz attempt does not, on
-its own, cause sync to report changed: true for the submission-related
-fields it was never meant to signal.
+LAST_ACTIVITY_AT POLICY
+-------------------------
+award_points() and award_points_by_name() do NOT bump last_activity_at
+unconditionally. The goal: last_activity_at (and therefore sync's
+"has anything changed" check) should advance only when a SUBMISSION
+updates -- so a plain video watch or quiz attempt does not, on its own,
+cause sync to report changed: true for the submission-related fields it
+was never meant to signal.
 
-This changes the contract of both functions: the caller now decides,
-explicitly, whether an activity counts as a last_activity_at-worthy event
-by passing bump_activity=True. Every existing call site is updated
-alongside this file:
+The caller decides, explicitly, whether an activity counts as a
+last_activity_at-worthy event by passing bump_activity=True:
   - shared/progress/activities.py (submit_video_watched, submit_quiz):
-    now call award_points(doc, amount, bump_activity=False) -- video/quiz
-    activity awards points but does NOT advance last_activity_at anymore.
-  - shared/submission/lifecycle.py (submit_artwork): still calls
+    call award_points(doc, amount, bump_activity=False) -- video/quiz
+    activity awards points but does NOT advance last_activity_at.
+  - shared/submission/lifecycle.py (submit_artwork): calls
     award_points(pe, points_awarded, bump_activity=True) on every
-    successful attempt (first or reattempt) -- see Decision D there, now
-    expressed via an explicit argument instead of being baked into
-    award_points's old unconditional behavior.
+    successful attempt (first or reattempt) -- see that module's
+    Decision D docstring.
   - shared/submission/review_result.py: continues to bump
     last_activity_at directly via frappe.db.set_value on its own
-    reward/completion branches -- those are both submission-outcome
-    events, unaffected by this change.
+    reward/completion branches -- both are submission-outcome events,
+    unaffected by this policy.
 
-award_points_by_name's own bump_activity parameter already existed and is
-unchanged in meaning; only award_points (the doc-mutating variant) is new
-here, gaining the same parameter for parity.
+award_points_by_name's bump_activity parameter has always existed with
+this meaning; award_points (the doc-mutating variant) carries the same
+parameter for parity.
 """
 
 from __future__ import annotations
@@ -164,11 +161,10 @@ def award_points(enrollment_doc, amount: int, bump_activity: bool = True) -> int
       - bump_activity=False (video/quiz activity callers, e.g.
         shared/progress/activities.py::submit_video_watched/submit_quiz):
         points are still added as before, but last_activity_at is left
-        untouched -- a plain video watch or quiz attempt no longer, on its
-        own, advances the enrollment's last_activity_at or triggers
-        sync's "something changed" signal. See module docstring for why
-        this call now requires an explicit choice rather than always
-        bumping.
+        untouched -- a plain video watch or quiz attempt does not, on its
+        own, advance the enrollment's last_activity_at or trigger sync's
+        "something changed" signal. See module docstring for the full
+        policy.
 
     Defaults to True (bump) to match the historical behavior for any
     caller that doesn't pass this explicitly -- but every caller in this
