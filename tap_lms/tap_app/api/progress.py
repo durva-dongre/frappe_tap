@@ -10,12 +10,12 @@ shared.progress.activities' own result dicts, because the contract
 a repeat.
 
 `points_tier` is intentionally never returned by this file, or by any
-other progress/auth endpoint in this codebase: the Worker computes it from
-points_total against its own threshold table (API_Reference.md §0.2/§3.1),
-keyed by POINT_TIERS_VERSION. Keeping that computation on the Worker side,
-not Frappe's, means the tier table can change without a Frappe deploy --
-this file has nothing to do and nothing to change if that table is ever
-revised.
+other progress/auth endpoint in this codebase: the Worker computes it
+from points_total against its own threshold table (API_Reference.md
+§0.2/§3.1), keyed by POINT_TIERS_VERSION. Keeping that computation on the
+Worker side, not Frappe's, means the tier table can change without a
+Frappe deploy -- this file has nothing to do and nothing to change if
+that table is ever revised.
 
 For context == "event", shared.progress.activities may resolve and mutate
 a ProgramEnrollment doc other than the caller's currently-active one (the
@@ -23,14 +23,24 @@ doc that actually owns the student's existing event Unit Progress row --
 see that module's docstring for why event-track writes must stay anchored
 there rather than to "whichever enrollment is active right now").
 _save_affected_docs saves whichever doc(s) were actually mutated: the
-active `pe` always (for last_activity_at/activity_this_week bookkeeping),
-plus the "owning" doc the activity function returns when it differs from
-`pe` (for points/gems and the Unit Progress row itself). It also finalizes
-the event-enrollment unit_progress pointer after save, via
+active `pe` always (for last_activity_at bookkeeping), plus the "owning"
+doc the activity function returns when it differs from `pe` (for
+points/gems and the Unit Progress row itself). It also finalizes the
+event-enrollment unit_progress pointer after save, via
 shared.progress.activities._finalize_event_enrollment_pointer, because a
-brand-new Unit Progress child row only receives its Frappe-assigned `name`
-once its parent doc is saved -- the pointer write has to happen after that
-point, not before.
+brand-new Unit Progress child row only receives its Frappe-assigned
+`name` once its parent doc is saved -- the pointer write has to happen
+after that point, not before.
+
+COMPLETION FIELDS (new, 2026-11-14): shared.progress.activities'
+submit_video_watched/submit_quiz now optionally add unit_completed /
+course_completed / next_learning_unit_id to their result dicts (see that
+module's _apply_completion_fields). _add_completion_fields_if_present
+below copies those same keys into this file's own wire response,
+unchanged, only when they are actually present on the underlying result
+-- matching the "absent means nothing changed" convention used elsewhere
+(e.g. last_submission). No logic lives here: this is pure plumbing, exactly
+like every other field this file already passes through.
 """
 
 from __future__ import annotations
@@ -48,8 +58,11 @@ from shared.profile.sync import get_sync_payload, get_last_submission_payload
 def _save_affected_docs(pe, result: dict) -> None:
     """Saves whichever ProgramEnrollment doc(s) an activity call actually
     mutated. `pe` (the active enrollment) is always saved, since
-    last_activity_at/activity_this_week bookkeeping always happens on it.
-    If the activity resolved a *different* owning doc (event-context write
+    last_activity_at bookkeeping always happens on it -- this is also what
+    persists activate_if_inactive's in-memory status flip for a student's
+    first-ever program-context activity (see shared/progress/activities.py::
+    submit_video_watched), with no separate save needed for that. If the
+    activity resolved a *different* owning doc (event-context write
     anchored to a past enrollment's existing Unit Progress row), that doc
     is saved too, and the event enrollment's unit_progress pointer is
     finalized now that the row has a real name."""
@@ -65,13 +78,25 @@ def _save_affected_docs(pe, result: dict) -> None:
         _finalize_event_enrollment_pointer(row)
 
 
+def _add_completion_fields_if_present(wire_response: dict, result: dict) -> None:
+    """Copies unit_completed/course_completed/next_learning_unit_id from
+    result into wire_response, unchanged, only for whichever of these keys
+    are actually present on result. See module docstring -- pure plumbing,
+    no logic of its own; shared/progress/activities.py's
+    _apply_completion_fields is the only place that decides whether/which
+    of these keys exist at all."""
+    for key in ("unit_completed", "course_completed", "next_learning_unit_id"):
+        if key in result:
+            wire_response[key] = result[key]
+
+
 @tap_app_method
 def submit_video_watched(student_id: str, unit_id: str, video_id: str, watched, context: str = "program"):
     watched = bool(watched)
     pe = get_active_program_enrollment(student_id)
     result = _submit_video_watched(pe, unit_id, video_id, watched, context)
     _save_affected_docs(pe, result)
-    return {
+    response = {
         "points_awarded": result["points_awarded"],
         "points_total": result["points_total"],
         "context": result["context"],
@@ -79,6 +104,8 @@ def submit_video_watched(student_id: str, unit_id: str, video_id: str, watched, 
         "video_id": result["video_id"],
         "updated_at": int(pe.last_activity_at.timestamp()),
     }
+    _add_completion_fields_if_present(response, result)
+    return response
 
 
 @tap_app_method
@@ -86,7 +113,7 @@ def submit_quiz(student_id: str, unit_id: str, quiz_id: str, answers, context: s
     pe = get_active_program_enrollment(student_id)
     result = _submit_quiz(pe, unit_id, quiz_id, answers, context)
     _save_affected_docs(pe, result)
-    return {
+    response = {
         "quiz_id": result["quiz_id"],
         "correct_count": result["correct_count"],
         "total_count": result["total_count"],
@@ -96,6 +123,8 @@ def submit_quiz(student_id: str, unit_id: str, quiz_id: str, answers, context: s
         "repeat": result["repeat"],
         "updated_at": int(pe.last_activity_at.timestamp()),
     }
+    _add_completion_fields_if_present(response, result)
+    return response
 
 
 @tap_app_method

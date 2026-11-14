@@ -38,6 +38,41 @@ def next_unit_for(program_enrollment_doc) -> str | None:
     return None
 
 
+def is_course_complete(program_enrollment_doc) -> bool:
+    """True iff every program-track unit in this enrollment's course level
+    is Completed -- i.e. next_unit_for returns None AND the course level
+    actually has at least one unit configured. Built directly on top of
+    next_unit_for (no separate traversal logic): next_unit_for already
+    returns None both when every unit is done and when the course level
+    has no units configured at all (get_ordered_units_for_course_level
+    returning an empty list) -- those two cases are NOT the same thing for
+    completion purposes, so this function distinguishes them explicitly
+    rather than treating "no next unit" as synonymous with "course
+    complete".
+
+    A course_level with zero configured units is not "complete" -- it is
+    unconfigured/empty, and reporting course_completed: true for a student
+    who was never actually assigned any content would be incorrect and
+    misleading (e.g. activities.py / review_result.py's completion
+    payload, which only ever sets course_completed: true based on this
+    function's return value).
+
+    Used by shared/progress/activities.py (submit_video_watched,
+    submit_quiz) and shared/submission/review_result.py
+    (handle_review_result) immediately after a Unit Progress row's own
+    just_completed check comes back true, to decide whether the whole
+    course -- not just this one unit -- is now finished, and therefore
+    whether to report course_completed: true (with no
+    next_learning_unit_id) or course_completed: false (with
+    next_learning_unit_id set to this function's sibling, next_unit_for's,
+    result) in that unit's completion response.
+    """
+    ordered = get_ordered_units_for_course_level(program_enrollment_doc.course_level)
+    if not ordered:
+        return False
+    return next_unit_for(program_enrollment_doc) is None
+
+
 def advance_to_next_unit(program_enrollment_doc, completed_unit_id: str) -> None:
     """No current_learning_unit field exists on ProgramEnrollment to mutate.
     "Advancing" to the next unit is a live read (next_unit_for), computed

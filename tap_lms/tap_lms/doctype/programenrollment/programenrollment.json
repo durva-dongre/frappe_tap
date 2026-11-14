@@ -19,7 +19,7 @@
   "column_break_progress",
   "points",
   "gems",
-  "activity_this_week",
+  "submission_this_week",
   "unit_progress_section",
   "unit_progress"
  ],
@@ -102,10 +102,10 @@
   },
   {
    "default": "0",
-   "fieldname": "activity_this_week",
+   "fieldname": "submission_this_week",
    "fieldtype": "Int",
-   "label": "Activity This Week",
-   "description": "Program-context only. No event-context equivalent exists yet."
+   "label": "Submission This Week",
+   "description": "Program-context only. Counts submissions only (incremented once per graded review outcome)."
   },
   {
    "fieldname": "unit_progress_section",
@@ -121,7 +121,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-11-04 00:00:00.000000",
+ "modified": "2026-11-14 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "ProgramEnrollment",

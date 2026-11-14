@@ -14,8 +14,8 @@ unit_type)" is enforced in exactly one place.
 
 A Unit Progress row is immutably tied to whichever ProgramEnrollment it was
 created under -- it is NOT guaranteed to live under whatever enrollment is
-currently "active" for a student (an enrollment can be renewed/replaced
-while an old submission's or old event's progress row still points at the
+currently "active" for a student (an enrollment can be renewed/replaced while
+an old submission's or old event's progress row still points at the
 previous one). find_unit_progress_row_for_submission and
 find_unit_progress_row_by_name_global below are the two sanctioned ways to
 look up a Unit Progress row without depending on "the active enrollment"
@@ -36,12 +36,42 @@ can live on a ProgramEnrollment that is no longer the student's active one.
 resolve_last_activity_type's event branch mirrors exactly what
 shared.events.enrollment.is_enrolled already does to resolve that row
 correctly, so both reads agree.
+
+COMPLETION SIGNAL (2026-11-14) -- recompute_unit_status /
+recompute_unit_status_by_name now return a dict, not a bare string:
+--------------------------------------------------------------------
+Both functions used to return the resulting unit_status string directly.
+They now return {"status": <that same string>, "just_completed": <bool>},
+where just_completed is True iff THIS call is what flipped the row from
+some other status to "Completed" (i.e. the row's status was NOT already
+"Completed" before this call, and IS "Completed" after it).
+
+This is additive in spirit (the original "resulting status string" is
+still available, under the "status" key) but is a breaking change to the
+call signature -- every existing caller that treated the return value as
+a bare string must be updated to read result["status"] instead. There are
+exactly two such callers in this codebase:
+  - shared/progress/activities.py (submit_video_watched, submit_quiz) --
+    calls the doc-based recompute_unit_status(row).
+  - shared/submission/review_result.py (handle_review_result) -- calls
+    the by-name recompute_unit_status_by_name(name).
+Both are updated alongside this file in this same change (see their own
+docstrings/comments for how they now use just_completed to drive course-
+completion reporting).
+
+just_completed is the one signal shared/enrollment/unit_rotation.py's
+is_course_complete, and shared/enrollment/enrollment.py's
+mark_course_completed, are gated on: a caller only bothers checking
+is_course_complete/calling mark_course_completed when just_completed is
+True for this call -- there is no point re-checking course completion on
+every single activity call when this particular call didn't even
+complete its own unit.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Optional, TypedDict
 
 import frappe
 
@@ -50,6 +80,11 @@ from shared.submission.status import is_submission_complete
 
 VALID_UNIT_TYPES = ("program", "event")
 UNIT_PROGRESS_CHILD_TABLE = "tabUnit Progress"
+
+
+class UnitStatusResult(TypedDict):
+    status: str
+    just_completed: bool
 
 
 def get_or_create_unit_progress_row(parent_doc, learning_unit: str, unit_type: str, table_fieldname: str = "unit_progress"):
@@ -176,7 +211,14 @@ def is_submission_valid(row) -> bool:
     return sub.status == "Completed" and is_submission_complete(sub.result_status)
 
 
-def recompute_unit_status_by_name(unit_progress_row_name: str) -> str:
+def recompute_unit_status_by_name(unit_progress_row_name: str) -> UnitStatusResult:
+    """Returns {"status": <resulting unit_status string>, "just_completed":
+    <bool>} -- just_completed is True iff THIS call is what flipped the
+    row from a non-"Completed" status to "Completed" (see module
+    docstring). The resulting status string is preserved under the
+    "status" key exactly as it was returned bare before this change;
+    callers that only need the string read result["status"] instead of
+    using the return value directly."""
     row = frappe.db.sql(
         f"""
         SELECT video_watched, quiz_json, submission, unit_status, completed_at
@@ -188,9 +230,10 @@ def recompute_unit_status_by_name(unit_progress_row_name: str) -> str:
         as_dict=True,
     )
     if not row:
-        return "Not Started"
+        return {"status": "Not Started", "just_completed": False}
     row = row[0]
 
+    old_status = row.unit_status
     quiz_graded = is_quiz_graded(row)
     submission_valid = is_submission_valid(row)
     any_touch = bool(row.video_watched) or quiz_graded or bool(row.submission)
@@ -224,10 +267,18 @@ def recompute_unit_status_by_name(unit_progress_row_name: str) -> str:
                 """,
                 (new_status, unit_progress_row_name),
             )
-    return new_status
+
+    just_completed = (old_status != "Completed") and (new_status == "Completed")
+    return {"status": new_status, "just_completed": just_completed}
 
 
-def recompute_unit_status(row) -> str:
+def recompute_unit_status(row) -> UnitStatusResult:
+    """Doc-based variant (mutates the live, in-memory child row object,
+    same as before this change -- the caller is still responsible for
+    saving the parent doc). Returns {"status": ..., "just_completed": ...}
+    -- see module docstring and recompute_unit_status_by_name's docstring
+    above for the exact meaning of just_completed."""
+    old_status = row.unit_status
     quiz_graded = is_quiz_graded(row)
     submission_valid = is_submission_valid(row)
     any_touch = bool(row.video_watched) or quiz_graded or bool(row.submission)
@@ -238,7 +289,9 @@ def recompute_unit_status(row) -> str:
             row.completed_at = frappe.utils.now_datetime()
     elif any_touch and row.unit_status == "Not Started":
         row.unit_status = "In Progress"
-    return row.unit_status
+
+    just_completed = (old_status != "Completed") and (row.unit_status == "Completed")
+    return {"status": row.unit_status, "just_completed": just_completed}
 
 
 def infer_last_activity_type(row) -> Optional[str]:

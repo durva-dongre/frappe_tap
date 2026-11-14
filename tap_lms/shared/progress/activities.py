@@ -7,20 +7,20 @@ Progress row, for both the "program" and "event" tracks.
 Event-track reads and writes must resolve to the same Unit Progress row,
 because `is_enrolled` (shared/events/enrollment.py) resolves a student's
 event-track row globally, by the row's own `name`, via
-`find_unit_progress_row_by_name_global` -- a Unit Progress row is
-immutably tied to whichever ProgramEnrollment it was created under, never
-to whatever enrollment happens to be "active" right now. This module's
-write path honors that same invariant: `_resolve_event_unit_progress_row`
-finds the row the *event enrollment itself* already points at (via the
-same global, by-name lookup `is_enrolled` uses, sourced from the Student's
-own `event_enrollments` child table row for this event) and returns that
-row's owning parent-doc name alongside the row, so writes stay anchored to
-whichever enrollment first created the row for this (student, event) pair
--- not to whatever enrollment happens to be active at write time. Only
-when no row exists yet (the student's first-ever activity for this event)
-is a new row created, and it is created on the currently active
-enrollment, exactly as for a first write today -- there is nothing
-"immutable" to preserve continuity with yet in that case.
+`find_unit_progress_row_by_name_global` -- a Unit Progress row is immutably
+tied to whichever ProgramEnrollment it was created under, never to whatever
+enrollment happens to be "active" right now. This module's write path honors
+that same invariant: `_resolve_event_unit_progress_row` finds the row the
+*event enrollment itself* already points at (via the same global, by-name
+lookup `is_enrolled` uses, sourced from the Student's own `event_enrollments`
+child table row for this event) and returns that row's owning parent-doc
+name alongside the row, so writes stay anchored to whichever enrollment
+first created the row for this (student, event) pair -- not to whatever
+enrollment happens to be active at write time. Only when no row exists yet
+(the student's first-ever activity for this event) is a new row created,
+and it is created on the currently active enrollment, exactly as for a first
+write today -- there is nothing "immutable" to preserve continuity with yet
+in that case.
 
 Program context does not need this resolution at all: it always reads and
 writes unit_progress rows directly on the passed-in (always active)
@@ -34,16 +34,75 @@ string (or int) before grading, because QuizQuestion.correct_option is
 always stored as a plain 1-based option index ("1", "2", "3", ...), never
 option text -- nothing in the Quiz/QuizQuestion doctypes ever stores free
 text there. Validating the shape up front, rather than simply comparing
-str(correct_option) == str(selected_key) and letting any non-matching
-value grade as "wrong," keeps a malformed answer (empty string,
-whitespace, option text from a buggy client) distinguishable as a 400 from
-a genuine wrong answer -- the two are not the same case and must not look
-the same to the caller. This mirrors the same validation on the Worker
-side (worker/src/handlers/progressHandlers.ts), so both layers agree on
-the exact same accepted shape for selected_key.
+str(correct_option) == str(selected_key) and letting any non-matching value
+grade as "wrong," keeps a malformed answer (empty string, whitespace, option
+text from a buggy client) distinguishable as a 400 from a genuine wrong
+answer -- the two are not the same case and must not look the same to the
+caller. This mirrors the same validation on the Worker side
+(worker/src/handlers/progressHandlers.ts), so both layers agree on the exact
+same accepted shape for selected_key.
 
-See shared/events/enrollment.py and shared/progress/unit_progress.py for
-the lookup primitives this module relies on.
+See shared/events/enrollment.py and shared/progress/unit_progress.py for the
+lookup primitives this module relies on.
+
+COURSE SEQUENCE INVARIANT (confirmed 2026-11-14): video is always the first
+activity logged for any unit -- a student cannot submit or take the quiz for
+a unit until video_watched is true (see
+shared/submission/lifecycle.py::_require_video_done for the submission-side
+enforcement of this; quiz has no such explicit prerequisite check in code
+today, but the product flow guarantees video precedes it in practice).
+Whichever of {submission, quiz} finishes LAST for a unit is therefore the
+one that can tip unit_status to "Completed" -- video itself can never be the
+completing activity, because something (submission and/or quiz) is always
+still outstanding when video is watched. Both submit_video_watched and
+submit_quiz below still carry the identical completion-reporting block for
+symmetry and because a quiz CAN be the completing activity (if submission
+already finished first) -- but submit_video_watched's own block is, by this
+invariant, never actually reachable with just_completed=True in practice.
+It is kept rather than omitted so the three activity-report call sites
+(video, quiz, and shared/submission/review_result.py's submission path)
+all carry the same shape and the same defensive logic, rather than having
+video be a silent special case future maintainers have to rediscover.
+
+SUBMISSION_THIS_WEEK (2026-11-14): this counter is NO LONGER touched
+anywhere in this file. It used to be bumped here, on every program-context
+video/quiz activity, as part of the old activity_this_week semantics. Per
+the new design, submission_this_week counts only graded submission review
+OUTCOMES (any result_status), incremented exactly once per outcome by
+shared/submission/review_result.py::handle_review_result -- never at
+submit time, and never for video/quiz activity at all. See that module and
+shared/progress/rewards.py::max_submissions_per_week for the weekly cap
+this counter feeds.
+
+LAST_ACTIVITY_AT POLICY (2026-11-14, this pass): submit_video_watched and
+submit_quiz now call shared.progress.rewards.award_points with
+bump_activity=False, instead of relying on award_points's old unconditional
+bump. Previously, ANY activity on a program/event enrollment -- a plain
+video watch, a quiz attempt, not just a submission -- advanced that
+enrollment's last_activity_at, which meant /progress/sync's own "has
+anything changed" check (shared.profile.sync.get_sync_payload's
+current_epoch <= last_updated_epoch comparison) fired on video/quiz activity
+too, not only on a submission update. The explicit goal of this pass is
+that last_activity_at, and therefore sync's changed-detection, should
+advance ONLY when a submission updates (see shared/submission/lifecycle.py's
+Decision D and shared/submission/review_result.py's own last_activity_at
+bumps, both unaffected by this change since those are submission-outcome
+events).
+
+This file's own `program_enrollment_doc.last_activity_at = ...` /
+`owning_doc.last_activity_at = ...` assignments, a few lines below each
+award_points call in both submit_video_watched and submit_quiz, are
+DELIBERATELY REMOVED as part of this same pass -- they were a second,
+redundant source of the exact same bump this policy is trying to stop.
+Nothing in this file sets last_activity_at anymore; that field is now
+touched only by submission-outcome code paths elsewhere in the codebase.
+
+Points themselves are completely unaffected by this change: award_points
+still adds `amount` to `owning_doc.points` in memory exactly as before --
+bump_activity only controls whether last_activity_at is also touched in the
+same call. A video watch or quiz attempt still earns and persists its
+points; it just no longer, on its own, makes the enrollment look newer to
+sync.
 """
 
 from __future__ import annotations
@@ -60,7 +119,8 @@ from shared.progress.unit_progress import (
     find_unit_progress_row_by_name_global,
 )
 from shared.progress.rewards import award_points, points_for_video, points_per_quiz_correct
-from shared.enrollment.unit_rotation import advance_to_next_unit, get_ordered_units_for_course_level
+from shared.enrollment.unit_rotation import advance_to_next_unit, get_ordered_units_for_course_level, is_course_complete
+from shared.enrollment.enrollment import mark_course_completed, activate_if_inactive
 
 
 def _validate_program_sequence(program_enrollment_doc, unit_id: str) -> None:
@@ -214,6 +274,47 @@ def resolve_video_id_for_unit(unit_id: str) -> str | None:
     return None
 
 
+def _apply_completion_fields(result: dict, program_enrollment_doc, just_completed: bool) -> None:
+    """Shared by submit_video_watched and submit_quiz: if just_completed is
+    True, decides whether the WHOLE COURSE is now finished
+    (shared.enrollment.unit_rotation.is_course_complete) and, if so, marks
+    the enrollment "completed" (shared.enrollment.enrollment.
+    mark_course_completed) -- then adds the documented completion fields
+    directly into `result` in place:
+
+      - Unit completed, course NOT complete:
+            {"unit_completed": True, "course_completed": False,
+             "next_learning_unit_id": <next unit id>}
+      - Unit completed, course IS complete (Decision B):
+            {"unit_completed": True, "course_completed": True}
+            -- no next_learning_unit_id key at all.
+      - Unit did NOT complete on this call: no keys are added at all
+        (Decision B's "absent means nothing changed" convention, matching
+        how last_submission is handled elsewhere in this codebase) --
+        result is left untouched.
+
+    mark_course_completed is idempotent (a no-op, returning False, if the
+    enrollment is already "completed") -- safe to call on every call where
+    just_completed is True, even if an earlier call already completed the
+    course (shouldn't happen given just_completed's own definition, but
+    mark_course_completed tolerates it regardless).
+    """
+    if not just_completed:
+        return
+
+    result["unit_completed"] = True
+
+    if is_course_complete(program_enrollment_doc):
+        mark_course_completed(program_enrollment_doc.name)
+        result["course_completed"] = True
+        # Decision B: no next_learning_unit_id key at all when the course
+        # is complete.
+    else:
+        from shared.enrollment.unit_rotation import next_unit_for
+        result["course_completed"] = False
+        result["next_learning_unit_id"] = next_unit_for(program_enrollment_doc)
+
+
 def submit_video_watched(program_enrollment_doc, unit_id: str, video_id: str, watched: bool, context: str = "program") -> dict:
     """Validates video_id against the unit's configured video, then flips
     video_watched once (idempotent on repeat). Advances the student to the
@@ -223,7 +324,34 @@ def submit_video_watched(program_enrollment_doc, unit_id: str, video_id: str, wa
     For context == "event", resolves the owning Unit Progress row globally
     (see _resolve_event_unit_progress_row) instead of assuming it lives on
     the currently active enrollment, so writes stay anchored to wherever
-    the student's event progress actually started."""
+    the student's event progress actually started.
+
+    First-ever row creation (program context) also activates the
+    enrollment if it is currently "default" or "no_activity"
+    (shared.enrollment.enrollment.activate_if_inactive) -- a student's
+    first logged activity for an enrollment is exactly the signal that
+    should move it out of "default"/"no_activity" into "active". This
+    mutates program_enrollment_doc.status in memory only; the caller
+    (tap_app/api/progress.py::_save_affected_docs) already saves
+    program_enrollment_doc unconditionally at the end of every call, so
+    the flip is persisted for free -- no extra save is added here. Per
+    this project's scope, submit_video_watched's own wire response is NOT
+    changed to carry a "status" field (that field is reserved for
+    login/sync responses only, per the "status change notification only
+    on login/sync" decision) -- the status change still happens and is
+    persisted, it is simply not surfaced on THIS particular response.
+
+    LAST_ACTIVITY_AT (2026-11-14, this pass): this function no longer
+    advances program_enrollment_doc.last_activity_at (or owning_doc's, for
+    an event-context write) in any way. The award_points call below passes
+    bump_activity=False explicitly, and the old, separate
+    `program_enrollment_doc.last_activity_at = frappe.utils.now_datetime()`
+    / `owning_doc.last_activity_at = ...` assignments that used to sit
+    right after it have been removed outright -- see module docstring's
+    LAST_ACTIVITY_AT POLICY section for why. A video watch still earns and
+    persists points exactly as before; it just no longer makes the
+    enrollment look "newer" to /progress/sync's changed-detection.
+    """
     if context == "program":
         _validate_program_sequence(program_enrollment_doc, unit_id)
 
@@ -237,9 +365,24 @@ def submit_video_watched(program_enrollment_doc, unit_id: str, video_id: str, wa
         owning_doc, row = _resolve_event_unit_progress_row(
             program_enrollment_doc, program_enrollment_doc.student, unit_id,
         )
+        is_first_ever_row = False
     else:
         owning_doc = program_enrollment_doc
+        existing_rows_before = [
+            r for r in (program_enrollment_doc.unit_progress or [])
+            if r.unit_type == "program"
+        ]
+        is_first_ever_row = len(existing_rows_before) == 0
         row = get_or_create_unit_progress_row(program_enrollment_doc, unit_id, context)
+
+    if context == "program" and is_first_ever_row:
+        # Student's first-ever program-context activity for this
+        # enrollment -- flip default/no_activity -> active. Never touches
+        # paused/manual/completed/dropped. See activate_if_inactive's own
+        # docstring for why this mutates in memory only (persistence is
+        # the caller's job, already happening via the unconditional
+        # pe.save() in tap_app/api/progress.py::_save_affected_docs).
+        activate_if_inactive(program_enrollment_doc)
 
     points_awarded = 0
     repeat = False
@@ -247,22 +390,21 @@ def submit_video_watched(program_enrollment_doc, unit_id: str, video_id: str, wa
         if not row.video_watched:
             row.video_watched = 1
             points_awarded = points_for_video()
-            award_points(owning_doc, points_awarded)
+            # bump_activity=False: a video watch awards points but must NOT
+            # advance last_activity_at -- that field (and therefore
+            # /progress/sync's own changed-detection) is reserved for
+            # submission-outcome events only. See module docstring's
+            # LAST_ACTIVITY_AT POLICY section and
+            # shared/progress/rewards.py::award_points's own docstring.
+            award_points(owning_doc, points_awarded, bump_activity=False)
         else:
             repeat = True
 
-    recompute_unit_status(row)
-    if row.unit_status == "Completed" and context == "program":
+    status_result = recompute_unit_status(row)
+    if status_result["status"] == "Completed" and context == "program":
         advance_to_next_unit(program_enrollment_doc, unit_id)
 
-    if context == "program":
-        program_enrollment_doc.activity_this_week = (program_enrollment_doc.activity_this_week or 0) + 1
-
-    program_enrollment_doc.last_activity_at = frappe.utils.now_datetime()
-    if owning_doc is not program_enrollment_doc:
-        owning_doc.last_activity_at = frappe.utils.now_datetime()
-
-    return {
+    result = {
         "points_awarded": points_awarded,
         "points_total": program_enrollment_doc.points or 0,
         "context": context,
@@ -273,6 +415,17 @@ def submit_video_watched(program_enrollment_doc, unit_id: str, video_id: str, wa
         "_owning_doc": owning_doc,
         "_row": row,
     }
+
+    # Decision C: kept for symmetry across all three completion-reporting
+    # call sites, even though the course-sequence invariant documented at
+    # the top of this file means just_completed can never actually be True
+    # here in practice (video is always first; something else is always
+    # still outstanding). Only ever adds unit_completed/course_completed/
+    # next_learning_unit_id to `result` -- never removes or overwrites any
+    # of the keys set above.
+    _apply_completion_fields(result, program_enrollment_doc, status_result["just_completed"])
+
+    return result
 
 
 def resolve_quiz_id_for_unit(unit_id: str) -> str | None:
@@ -393,7 +546,26 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
     (see _resolve_event_unit_progress_row) -- same resolution as
     submit_video_watched, so quiz writes stay anchored to the enrollment
     that owns the row, matching what is_enrolled's read path already
-    does."""
+    does.
+
+    LIVE completion-reporting path: per the confirmed unit sequence
+    (video always first; submission and quiz can finish in either order),
+    quiz CAN be the activity that tips a unit to "Completed" -- when
+    submission already finished first. This function's completion block
+    (via _apply_completion_fields) is therefore not merely symmetric
+    decoration the way submit_video_watched's is; it is reachable and
+    expected to fire in real usage.
+
+    LAST_ACTIVITY_AT (2026-11-14, this pass): same change as
+    submit_video_watched above -- award_points is now called with
+    bump_activity=False, and the old, separate
+    `program_enrollment_doc.last_activity_at = frappe.utils.now_datetime()`
+    / `owning_doc.last_activity_at = ...` assignments that used to follow
+    it have been removed. A quiz attempt still earns and persists points
+    exactly as before; it no longer, on its own, advances last_activity_at
+    or triggers /progress/sync's changed-detection. See module docstring's
+    LAST_ACTIVITY_AT POLICY section.
+    """
     if context == "event":
         owning_doc, row = _resolve_event_unit_progress_row(
             program_enrollment_doc, program_enrollment_doc.student, unit_id,
@@ -417,7 +589,9 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
     total_count = check_result["total_count"]
 
     points_awarded = correct_count * points_per_quiz_correct()
-    award_points(owning_doc, points_awarded)
+    # bump_activity=False -- same reasoning as submit_video_watched above:
+    # a quiz attempt awards points but must not advance last_activity_at.
+    award_points(owning_doc, points_awarded, bump_activity=False)
 
     row.quiz_json = frappe.as_json({
         "quiz_id": quiz_id,
@@ -427,18 +601,11 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
         "total_count": total_count,
     })
 
-    recompute_unit_status(row)
-    if row.unit_status == "Completed" and context == "program":
+    status_result = recompute_unit_status(row)
+    if status_result["status"] == "Completed" and context == "program":
         advance_to_next_unit(program_enrollment_doc, unit_id)
 
-    if context == "program":
-        program_enrollment_doc.activity_this_week = (program_enrollment_doc.activity_this_week or 0) + 1
-
-    program_enrollment_doc.last_activity_at = frappe.utils.now_datetime()
-    if owning_doc is not program_enrollment_doc:
-        owning_doc.last_activity_at = frappe.utils.now_datetime()
-
-    return {
+    result = {
         "quiz_id": quiz_id,
         "correct_count": correct_count,
         "total_count": total_count,
@@ -449,6 +616,10 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
         "_owning_doc": owning_doc,
         "_row": row,
     }
+
+    _apply_completion_fields(result, program_enrollment_doc, status_result["just_completed"])
+
+    return result
 
 
 def _parse_quiz_json(raw) -> dict | None:

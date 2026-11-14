@@ -4,38 +4,32 @@ from tap_lms.tap_app.api import tap_app_method
 from shared.auth.roster import get_students_for_phone, student_belongs_to_phone
 from shared.auth.magic_link import create_magic_link_v2
 from shared.config.secrets_cache import get_magic_link_shared_secret, get_magic_link_ttl, get_magic_link_base_url
-from shared.enrollment.active_batch import get_active_program_enrollment
-from shared.profile.student import get_profile_fields
-from shared.progress.unit_progress import resolve_current_unit_for_track, resolve_last_activity_type_for_track
-from shared.enrollment.unit_rotation import next_unit_for
+from shared.profile.sync import get_profile_select_payload
 from shared.errors import StudentNotFound, InvalidInput
 
 _VALID_DEST_TYPES = ("home", "feedback", "submit", "later", "gallery")
 
 
 def _build_resume_payload(student_id: str) -> dict:
-    pe = get_active_program_enrollment(student_id)
-    profile = get_profile_fields(student_id)
-    current_unit = resolve_current_unit_for_track(pe, "program", fallback_resolver=next_unit_for)
-    last_activity = resolve_last_activity_type_for_track(pe, "program")
-    return {
-        "student_id": student_id,
-        "name": profile["name1"],
-        "grade": profile["grade"],
-        "points": pe.points or 0,
-        "gems": pe.gems or 0,
-        "current_learning_unit": current_unit,
-        "last_activity_type": last_activity,
-        "state_id": profile["state_id"],
-        "district_id": profile["district_id"],
-        "school_id": profile["school_id"],
-        "state_name": profile["state_name"],
-        "district_name": profile["district_name"],
-        "school_name": profile["school_name"],
-        "course_id": pe.course_level,
-        "language": profile["language_code"],
-        "updated_at": int(pe.last_activity_at.timestamp()) if pe.last_activity_at else 0,
-    }
+    """Delegates to shared.profile.sync.get_profile_select_payload --
+    the exact same resume-payload shape /auth/redeem, /auth/select_profile,
+    and shared.auth.login.select_profile all now share, with exactly one
+    implementation. Previously this function duplicated get_profile_select_payload's
+    logic inline; it is now a thin pass-through so this file, sync.py, and
+    shared/auth/login.py all stay in agreement by construction rather than
+    by three independently-maintained copies.
+
+    STATUS AUTO-ACTIVATION (new, 2026-11-14): because this now calls
+    get_profile_select_payload directly, every /auth/redeem and
+    /auth/select_profile response gets the same status auto-activation
+    (default/no_activity -> active) and conditional "status" field
+    get_sync_payload already carries -- this is the "notify this status
+    and status change to frontend login or sync" requirement's auth-side
+    half. See shared/profile/sync.py::get_profile_select_payload and
+    shared.enrollment.enrollment.activate_if_inactive for the full
+    behavior and persistence details.
+    """
+    return get_profile_select_payload(student_id)
 
 
 @tap_app_method
@@ -52,7 +46,14 @@ def redeem_magic_link(phone: str):
     whether any other sibling on the same phone can log in. Only when
     EVERY sibling lacks an active enrollment does this raise
     StudentNotFound, which matches the documented "no student with an
-    active-batch enrollment" error case exactly."""
+    active-batch enrollment" error case exactly.
+
+    Each sibling's own payload may or may not carry a "status" key,
+    independently -- whichever siblings' enrollments happened to be
+    "default" or "no_activity" at the moment of this call get activated
+    and get the key; siblings already active/paused/manual/completed/
+    dropped do not. This is a per-student signal, not a per-phone one.
+    """
     students = get_students_for_phone(phone)
     payloads = []
     for s in students:

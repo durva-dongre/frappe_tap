@@ -6,20 +6,30 @@ submission.get) and submit_artwork. Every submission-shaped response this
 file produces carries `submission_id` as the sole identifier -- never a
 bare `name` field -- matching API_Reference.md's and the Worker
 contract's documented shape for submit_artwork, submission.list, and
-submission.get alike. `name` (Frappe's own document name) is the same
-value under the hood for this source, but is deliberately not exposed as
-a second key: one canonical identifier field name removes a class of
-client-side bugs where the wrong field gets read for the same underlying
-value. A submission's numeric mark is returned as `points`, not `score` --
-Submission.grade is the underlying stored field, but the wire key name
-matches points_total/points_awarded/points_tier elsewhere in this API, so
-a client never has to remember a different vocabulary for a submission's
-mark versus its other point-shaped fields. `points` can be JSON null for
-an ungraded submission (Submission.grade is nullable); the Worker's
-util/errors.ts::ok() preserves null values deliberately (only `undefined`
-keys are stripped), so this reaches the app as a real null, not an absent
-key or a 0 -- treat it like the other documented nullable fields in
-API_Reference.md §0.1.
+submission.get alike.
+
+submission_id is recovered via
+shared.submission.object_naming.resolve_wire_submission_id -- there is no
+`worker_submission_id` column on the Submission doctype, and none will be
+added. resolve_wire_submission_id parses the Worker-minted id straight out
+of Submission.submission_url when it matches the expected tapapp
+object-key shape (populated asynchronously by imgana's
+process_submission_async for a tapapp-sourced row), falling back to the
+Frappe autoname for a row still Pending/early-Processing (submission_url
+not yet populated) or any row whose submission_url never matches that
+shape. `name` (Frappe's own document name) is therefore NOT always equal
+to `submission_id` here the instant a row is created, but converges to the
+Worker-shaped id once the async upload job has run -- see that module's
+docstring for the full reasoning. A submission's numeric mark is returned
+as `points`, not `score` -- Submission.grade is the underlying stored
+field, but the wire key name matches points_total/points_awarded/
+points_tier elsewhere in this API, so a client never has to remember a
+different vocabulary for a submission's mark versus its other
+point-shaped fields. `points` can be JSON null for an ungraded submission
+(Submission.grade is nullable); the Worker's util/errors.ts::ok()
+preserves null values deliberately (only `undefined` keys are stripped),
+so this reaches the app as a real null, not an absent key or a 0 -- treat
+it like the other documented nullable fields in API_Reference.md §0.1.
 
 Deliberately NO points_awarded/gems_awarded on list/get: submission.list
 and submission.get are plain, ungated historical reads -- there is no
@@ -44,7 +54,8 @@ passed straight into shared.submission.lifecycle.submit_artwork, whose own
 signature (student_id, assignment_id, submission_url, context) and
 downstream call into tap_lms.imgana.submission.submit_artwork are both
 unaffected by this file. Neither imgana nor feedback_handler/
-feedback_consumer.py needs any awareness of object_key at all.
+feedback_consumer.py needs any awareness of object_key at all -- and
+neither is ever modified for any of this.
 
 GCS bucket used to build the URL: Shared Settings.gcs_bucket, via
 get_gcs_credentials()["bucket"] (shared/config/secrets_cache.py). This
@@ -52,9 +63,11 @@ must be configured to the same bucket as the Worker's own
 GCS_AUTHENTICATED_BUCKET (`"tap-submission"` in worker/wrangler.toml) --
 if the two ever disagree, the URL built here points at a different bucket
 than the one the Worker's signed PUT actually wrote to, and the object
-will 404 on Frappe's own submission record. This is an infrastructure
-precondition to verify in Shared Settings, not something this code can
-detect or correct for on its own.
+will 404 on Frappe's own submission record. This is also the exact URL
+shape shared.submission.object_naming.extract_object_key_from_submission_url
+parses back apart on every later read, so this is a double-duty
+precondition: get it wrong and both the object's own existence AND every
+later submission_id recovery break together.
 
 idempotency_key is accepted here and ignored: the Worker already wraps the
 whole call in its own Cache-API-backed idempotency layer
@@ -90,6 +103,7 @@ from shared.progress.unit_progress import (
     attempt_info_for_submission,
     find_unit_progress_row_for_submission,
 )
+from shared.submission.object_naming import resolve_wire_submission_id
 from shared.errors import InvalidInput, NotFound
 
 
@@ -103,6 +117,15 @@ def _build_submission_url_from_object_key(object_key: str) -> str:
     for the submit_artwork path. Mirrors exactly what the Worker's own
     publicHttpsUrl()/signV4Url() build the URL shape from
     (worker/src/storage/gcs.ts): https://storage.googleapis.com/{bucket}/{key}.
+
+    This exact shape is also what
+    shared.submission.object_naming.extract_object_key_from_submission_url
+    parses back apart on every later read -- the two functions are
+    deliberate inverses of each other, so changing this URL shape here
+    without updating that one (or vice versa) breaks every later
+    submission_id recovery silently (it would just fall back to the Frappe
+    autoname instead of erroring, since that function never raises -- see
+    its own docstring).
 
     Does not URL-encode path segments here the way the Worker's publicHttpsUrl
     does (encodeURIComponent per segment) -- object_key is already validated
@@ -150,7 +173,8 @@ def submit_artwork(
 
     This function's return value comes straight from
     shared.submission.lifecycle.submit_artwork, whose own docstring is the
-    authority on what that return shape contains and why.
+    authority on what that return shape contains and why -- including how
+    its own `submission_id` is recovered without any schema change.
     """
     submission_url = _build_submission_url_from_object_key(object_key)
 
@@ -159,6 +183,7 @@ def submit_artwork(
         assignment_id=assignment_id,
         submission_url=submission_url,
         context=context,
+        object_key=object_key,
     )
 
 
@@ -216,9 +241,9 @@ def _submission_wire_shape(sub, attempt_number: int, attempts_remaining: int, co
     for once per row alongside attempt_info_for_submission and shouldn't be
     duplicated inside this shaping function.
 
-    Identifier: only `submission_id` -- no bare `name` key anywhere in this
-    shape. `sub.name` (Frappe's own document name) is read internally to
-    populate submission_id but is never itself a separate response key.
+    Identifier: `submission_id` is recovered via
+    shared.submission.object_naming.resolve_wire_submission_id -- never
+    `sub.name` directly. No bare `name` key anywhere in this shape.
 
     Score/mark: returned as `points` (not `score`). See module docstring
     for why. `points` can be JSON null for an ungraded submission -- this
@@ -230,7 +255,7 @@ def _submission_wire_shape(sub, attempt_number: int, attempts_remaining: int, co
     /progress/last_submission's last_submission payload.
     """
     return {
-        "submission_id": sub.name,
+        "submission_id": resolve_wire_submission_id(sub),
         "assignment_id_link": _resolve_assignment_id_link(sub),
         "status": sub.status,
         "result_status": sub.result_status,

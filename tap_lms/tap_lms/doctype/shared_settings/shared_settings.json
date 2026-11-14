@@ -13,6 +13,7 @@
   "gems_submission_review_valid",
   "tapapp_column_break",
   "max_submission_attempts",
+  "max_submissions_per_week",
   "max_video_points",
   "max_quiz_points",
   "max_submission_points",
@@ -95,6 +96,13 @@
    "fieldname": "max_submission_attempts",
    "fieldtype": "Int",
    "label": "Max Submission Attempts"
+  },
+  {
+   "default": "1000",
+   "fieldname": "max_submissions_per_week",
+   "fieldtype": "Int",
+   "label": "Max Submissions Per Week",
+   "description": "Weekly cap on graded submission reviews per student, program context only. Checked by shared/submission/lifecycle.py::submit_artwork against ProgramEnrollment.submission_this_week before accepting a new attempt; a student at or over this cap gets CONFLICT, the same error code used for the existing per-assignment attempt cap (max_submission_attempts) -- this is a separate, weekly, cross-assignment cap, not a replacement for that one. submission_this_week itself is incremented once per graded review outcome (any result_status: Success - Original, Success - Flagged, or Failed) by shared/submission/review_result.py::handle_review_result, not at submit time -- see that field's own description on ProgramEnrollment. Kept deliberately high by default (1000) so this cap is effectively a no-op until an operator deliberately lowers it from the Shared Settings UI; no deploy required to change it, same as max_submission_attempts."
   },
   {
    "default": "10",
@@ -317,7 +325,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-11-13 00:00:00.000000",
+ "modified": "2026-11-14 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Tap Lms",
  "name": "Shared Settings",

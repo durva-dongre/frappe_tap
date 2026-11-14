@@ -6,11 +6,14 @@ from shared.jobs._log import log_job_run
 
 
 def reset_weekly_activity() -> int:
+    """Resets ProgramEnrollment.submission_this_week to 0 for every
+    enrollment that currently has a nonzero value. this job only ever zeroes the column, it does
+    not care how it got incremented."""
     result = frappe.db.sql(
         """
         UPDATE "tabProgramEnrollment"
-           SET activity_this_week = 0, modified = NOW()
-         WHERE activity_this_week != 0
+           SET submission_this_week = 0, modified = NOW()
+         WHERE submission_this_week != 0
         RETURNING name
         """
     )

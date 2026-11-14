@@ -11,6 +11,7 @@ from shared.config.secrets_cache import (
     get_worker_internal_secret,
     get_worker_internal_api_timeout_seconds,
 )
+from shared.submission.object_naming import resolve_wire_submission_id
 
 # Must match the Worker's FIELD_PATTERNS.submission_id exactly
 # (worker/src/storage/keys.ts): /^[a-z2-7]{6,16}$/ -- lowercase base32, the
@@ -34,17 +35,30 @@ def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
     function anyway, and "image"/"video" is all the gallery's media_type
     column accepts.
 
-    submission_id is validated against the exact shape the Worker's
-    internalHandlers.ts::validateRow requires (FIELD_PATTERNS.submission_id)
-    before the request is sent, because a submission with no
-    worker_submission_id set (any legacy/imgana-pipeline submission, since
-    only the TapApp path sets that field) would otherwise fall back to
-    submission_doc.name, which is typically Frappe's own doc-name format
-    (e.g. "SUB-0503") and does not match the Worker's required
-    ^[a-z2-7]{6,16}$ shape -- the Worker would reject the whole batch with
-    INVALID_INPUT regardless, so validating here first fails fast, locally,
-    with a log line that names the real problem, instead of round-tripping
-    to the Worker to discover the same thing.
+    submission_id is recovered via
+    shared.submission.object_naming.resolve_wire_submission_id -- there is
+    no `worker_submission_id` column on the Submission doctype, and none
+    will be added. resolve_wire_submission_id instead parses the Worker-
+    minted id straight out of submission_doc.submission_url when it matches
+    the expected tapapp object-key shape, falling back to the Frappe
+    autoname otherwise. This function is only ever called from
+    shared.submission.review_result.handle_review_result's gallery branch,
+    which runs strictly after grading has completed -- at that point
+    imgana's async process_submission_async has always already run and
+    populated submission_url, so submission_id resolved here is reliably
+    the Worker-shaped id for every genuinely tapapp-sourced submission.
+
+    The id is still validated against the exact shape the Worker's
+    internalHandlers.ts::validateRow requires
+    (_WORKER_SUBMISSION_ID_PATTERN) before the request is sent: a
+    submission whose submission_url never matched the expected tapapp
+    shape (a non-tapapp/legacy/imgana-pipeline submission, or any other
+    row resolve_wire_submission_id had to fall back to the Frappe autoname
+    for) would otherwise be sent under an id the Worker's own
+    FIELD_PATTERNS.submission_id regex rejects regardless -- validating
+    here first fails fast, locally, with a log line that names the real
+    problem, instead of round-tripping to the Worker to discover the same
+    thing.
 
     HTTP timeout: both calls in this module use
     get_worker_internal_api_timeout_seconds() (Shared Settings.
@@ -61,27 +75,19 @@ def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
         )
         return
 
-    # submission_id sent to the gallery index is the Worker-minted id when one
-    # exists (worker_submission_id, persisted by shared.submission.lifecycle's
-    # TapApp path), falling back to Frappe's own autoname hash for legacy/
-    # imgana-pipeline submissions (which is exactly what the R2 object key's
-    # own {submission_id} segment was built from in
-    # gallery_r2_promotion.promote_submission_media_to_r2 -- the two must
-    # always agree, since the Worker parses the id back out of the object_key
-    # on the read side).
-    submission_id = getattr(submission_doc, "worker_submission_id", None) or submission_doc.name
+    submission_id = resolve_wire_submission_id(submission_doc)
 
     if not _WORKER_SUBMISSION_ID_PATTERN.match(submission_id or ""):
         frappe.logger().error(
             f"notify_worker_gallery_index: submission_id={submission_id!r} for "
             f"Submission {submission_doc.name} does not match the Worker's "
-            f"required shape (^[a-z2-7]{{6,16}}$). This submission has no "
-            f"worker_submission_id set and its Frappe doc name is not "
-            f"Worker-compatible -- refusing to send a payload the Worker's "
+            f"required shape (^[a-z2-7]{{6,16}}$). resolve_wire_submission_id "
+            f"could not recover a Worker-shaped id from this submission's "
+            f"submission_url -- refusing to send a payload the Worker's "
             f"internalHandlers.ts::validateRow will reject anyway. Skipping "
             f"gallery index for this submission; it will not appear in the "
-            f"gallery until worker_submission_id is backfilled or this "
-            f"source starts setting it."
+            f"gallery until its submission_url matches the expected tapapp "
+            f"object-key shape."
         )
         return
 
