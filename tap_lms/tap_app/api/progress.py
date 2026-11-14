@@ -5,6 +5,15 @@ Worker-facing wrappers for the three progress-reporting activity routes
 (submit_video_watched, submit_quiz) and the two sync routes (progress_sync,
 last_submission).
 
+BUGFIX (updated_at None-safety): pe.last_activity_at can legitimately be
+None the first time this doc is ever touched by a call that passes
+bump_activity=False and never previously had any activity recorded (e.g.
+a "repeat" video-watched call on a fresh enrollment, or a quiz-only
+enrollment that never submitted). Both submit_video_watched and
+submit_quiz now fall back to the current server time for `updated_at`
+when pe.last_activity_at is still None after the activity call, instead
+of crashing on NoneType.timestamp().
+
 submit_video_watched's and submit_quiz's responses return `context` and
 `repeat` directly from shared.progress.activities' own result dicts,
 because the contract (API_Reference.md §3.1/§3.2) requires both fields on
@@ -46,6 +55,8 @@ this file already passes through.
 
 from __future__ import annotations
 
+import frappe
+
 from tap_lms.tap_app.api import tap_app_method
 from shared.enrollment.active_batch import get_active_program_enrollment
 from shared.progress.activities import (
@@ -79,6 +90,21 @@ def _save_affected_docs(pe, result: dict) -> None:
         _finalize_event_enrollment_pointer(row)
 
 
+def _resolve_updated_at(pe) -> int:
+    """The one place `updated_at` is computed for submit_video_watched /
+    submit_quiz's wire response. pe.last_activity_at can legitimately
+    still be None after _save_affected_docs -- e.g. a "repeat" call
+    (video already watched, so award_points/bump_activity never ran) on
+    an enrollment that has never otherwise had activity recorded. Falls
+    back to the current server time in that case rather than crashing on
+    NoneType.timestamp(). This fallback is a real, meaningful timestamp
+    for "as of now" -- it is not a sentinel the client needs to treat
+    specially."""
+    if pe.last_activity_at:
+        return int(pe.last_activity_at.timestamp())
+    return int(frappe.utils.now_datetime().timestamp())
+
+
 def _add_completion_fields_if_present(wire_response: dict, result: dict) -> None:
     """Copies unit_completed/course_completed/next_learning_unit_id from
     result into wire_response, unchanged, only for whichever of these keys
@@ -103,7 +129,7 @@ def submit_video_watched(student_id: str, unit_id: str, video_id: str, watched, 
         "context": result["context"],
         "repeat": result["repeat"],
         "video_id": result["video_id"],
-        "updated_at": int(pe.last_activity_at.timestamp()),
+        "updated_at": _resolve_updated_at(pe),
     }
     _add_completion_fields_if_present(response, result)
     return response
@@ -122,7 +148,7 @@ def submit_quiz(student_id: str, unit_id: str, quiz_id: str, answers, context: s
         "points_total": result["points_total"],
         "context": result["context"],
         "repeat": result["repeat"],
-        "updated_at": int(pe.last_activity_at.timestamp()),
+        "updated_at": _resolve_updated_at(pe),
     }
     _add_completion_fields_if_present(response, result)
     return response

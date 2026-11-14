@@ -16,7 +16,8 @@ the WhatsApp channel. imgana's function takes a plain, already-public
 submission URL and handles its own media detection; this module is
 responsible for everything imgana's function doesn't do: attempt-cap
 enforcement, the weekly submission-cap enforcement, the video prerequisite
-gate, the Unit Progress row write, the first-attempt points award.
+gate, the Unit Progress row write, the first-attempt points award, and
+(see BUGFIX below) stamping program_enrollment onto the new row.
 
 Worker route wiring: tap_app/api/submission.py::submit_artwork is the only
 whitelisted entrypoint the Worker calls for this. Do not point the Worker
@@ -32,6 +33,36 @@ from -- runs AFTER this function returns. A client that needs a
 submission's id/state reads it from /progress/sync or
 /progress/last_submission instead, both of which resolve the row
 themselves (never from a client-supplied id).
+
+BUGFIX -- program_enrollment is now stamped on the newly created
+Submission row, immediately after imgana reports success:
+
+tap_lms.imgana.submission.submit_artwork (and the _create_submission
+helper it calls) never sets Submission.program_enrollment -- it's shared
+with the WhatsApp channel, which has no ProgramEnrollment concept at all,
+so that field is simply never in its write list. Previously nothing on
+the TapApp side corrected this either, so every Submission row created
+through this path had program_enrollment = NULL forever.
+
+This mattered because shared/profile/sync.py::_find_last_submission_row
+filters `WHERE program_enrollment = program_enrollment_name` when looking
+for a student's most recently updated submission to report in
+/progress/sync and /progress/last_submission. A submission with
+program_enrollment = NULL can never match that filter, no matter how
+recently it was created or graded -- it is permanently invisible to both
+of those endpoints. It also meant
+shared/submission/review_result.py::handle_review_result's own fallback
+(`row.get("parent") if row else None) or submission_doc.program_enrollment`)
+could never fall back to anything useful for a row with no resolvable Unit
+Progress row, since submission_doc.program_enrollment was always None too.
+
+Fix: this module -- which is the one place in the TapApp-facing call chain
+that actually holds a loaded `pe` (the active ProgramEnrollment) alongside
+the newly created submission's name -- now writes
+Submission.program_enrollment = pe.name directly, via a minimal
+frappe.db.set_value call, immediately after imgana confirms success and
+before returning. No change to imgana itself is needed or made; imgana
+remains exactly as it is, shared unmodified with the WhatsApp channel.
 
 resolve_learning_unit_for_assignment's primary lookup queries
 tabUnitContentItem.content_type / tabUnitContentItem.content. That query
@@ -358,6 +389,25 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     submission's id/state from /progress/sync or /progress/last_submission
     instead.
 
+    BUGFIX: immediately after imgana creates the Submission row, this
+    function stamps Submission.program_enrollment = pe.name directly, via
+    a minimal frappe.db.set_value call. imgana's own pipeline is shared
+    with the WhatsApp channel, which has no ProgramEnrollment concept at
+    all, so it never sets this field itself -- this module is the one
+    place in the TapApp-facing call chain that actually holds both `pe`
+    and the newly created submission's name at the same time, so it's this
+    function's responsibility to make the connection. Without this write,
+    the row is permanently invisible to
+    shared/profile/sync.py::_find_last_submission_row, which filters on
+    program_enrollment = <active enrollment name> -- see module docstring
+    for the full reasoning. update_modified=False is used deliberately:
+    this is an immediate, same-transaction correction of the row imgana
+    just inserted, not a later edit, so it must not shift `modified` past
+    what imgana's own insert set -- that timestamp is what
+    _find_last_submission_row's own "ORDER BY modified desc" and
+    tap_app/api/submission.py::_resolve_updated_at_epoch both rely on as
+    the row's true "last changed" signal.
+
     DECISION D: last_activity_at is bumped via award_points(pe, ...,
     bump_activity=True) on EVERY successful attempt (first or reattempt),
     not only on the first attempt. Points themselves are only ever awarded
@@ -431,6 +481,13 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
             f"submit_artwork never returns an identifier for the new row."
         )
 
+    # BUGFIX: stamp program_enrollment onto the new Submission row -- see
+    # module docstring and this function's own docstring above for the
+    # full reasoning. This is the one write that was previously missing
+    # end-to-end, since imgana's own _create_submission never populates
+    # this field (it has no ProgramEnrollment concept at all).
+    frappe.db.set_value("Submission", sub_name, "program_enrollment", pe.name, update_modified=False)
+
     row.submission = sub_name
     row.submission_attempts += 1
     recompute_unit_status(row)
@@ -458,5 +515,9 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
         "points_awarded": points_awarded,
         "points_total": pe.points,
         "context": context,
+        # BUGFIX: same None-safety as tap_app/api/progress.py's
+        # _resolve_updated_at -- pe.last_activity_at is normally set by the
+        # award_points(..., bump_activity=True) call just above, but stays
+        # defensive here in case that ever changes.
         "updated_at": int(pe.last_activity_at.timestamp()) if pe.last_activity_at else int(frappe.utils.now_datetime().timestamp()),
     }

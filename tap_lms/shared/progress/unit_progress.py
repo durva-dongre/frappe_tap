@@ -98,6 +98,19 @@ in principle fall back to "In Progress" -- clearing completed_at in that
 case keeps the timestamp from going stale, matching the "recompute fully
 from source signals on every call" philosophy already used for
 unit_status itself.
+
+BUGFIX -- infer_last_activity_type no longer always prefers "quiz":
+
+Previously this function checked is_quiz_graded(row) FIRST,
+unconditionally, before ever looking at the submission signal. Since a
+quiz can only be graded once per unit (a second attempt raises
+CapReached) but a submission can be reattempted and re-graded well after
+the quiz was already recorded, "quiz was ever graded" being first in this
+precedence chain meant last_activity_type permanently reported "quiz"
+for any unit where the quiz happened to be graded before the (possibly
+much later) submission grading landed -- masking the more recent
+submission event indefinitely. See the function's own docstring below
+for the fix and its limits.
 """
 
 from __future__ import annotations
@@ -169,7 +182,7 @@ def find_unit_progress_row_by_name_global(row_name: str) -> Optional[dict]:
     rows = frappe.db.sql(
         f"""
         SELECT name, parent, unit_type, learning_unit, video_watched,
-               quiz_json, submission, submission_attempts, unit_status
+               quiz_json, submission, submission_attempts, unit_status, modified
         FROM "{UNIT_PROGRESS_CHILD_TABLE}"
         WHERE name = %s
         LIMIT 1
@@ -184,7 +197,7 @@ def find_unit_progress_row_for_submission(submission_name: str) -> Optional[dict
     rows = frappe.db.sql(
         f"""
         SELECT name, parent, unit_type, learning_unit, video_watched,
-               quiz_json, submission, submission_attempts, unit_status
+               quiz_json, submission, submission_attempts, unit_status, modified
         FROM "{UNIT_PROGRESS_CHILD_TABLE}"
         WHERE submission = %s
         LIMIT 1
@@ -361,12 +374,58 @@ def recompute_unit_status(row) -> UnitStatusResult:
 
 
 def infer_last_activity_type(row) -> Optional[str]:
-    if is_quiz_graded(row):
-        return "quiz"
+    """Reports the most recently updated of the three possible per-unit
+    activity signals (video, quiz, submission).
+
+    BUGFIX: previously this always returned "quiz" whenever the quiz had
+    ever been graded, with no regard for whether a submission was graded
+    more recently. Quiz is one-shot per unit (CapReached on a second
+    attempt), but a submission can be reattempted and re-graded well
+    after the quiz, so "quiz was ever graded" being permanently first in
+    this precedence chain meant a student whose submission was graded
+    after their quiz would show last_activity_type: "quiz" forever,
+    masking the more recent submission event.
+
+    Unit Progress rows carry no per-signal timestamp of their own
+    (video_watched/quiz_json/submission are plain boolean/pointer fields
+    with no "when"), so a fully exact chronological ordering across all
+    three signals isn't representable without a schema change, which is
+    out of scope here. What IS representable with existing fields:
+    comparing the linked Submission's own `modified` timestamp (bumped on
+    every grading-pipeline update -- see shared/submission/review_result.py)
+    against this Unit Progress row's own `modified` timestamp. If the
+    submission is valid/graded (is_submission_valid) and its own
+    `modified` is at or after this row's `modified`, the submission is
+    reported as more recent than quiz -- this directly fixes the reported,
+    concrete case (grading landing after the quiz was already recorded)
+    without claiming perfect fidelity for every conceivable interleaving.
+
+    Accepts either a Frappe Document child row (attribute access,
+    row.modified present as a live field) or a plain dict such as the ones
+    find_unit_progress_row_for_submission / find_unit_progress_row_by_name_global
+    return (which now also select `modified` -- see those functions above)
+    -- both call sites that feed rows into this function rely on one or
+    the other shape.
+
+    Precedence is otherwise unchanged from before: quiz, then submission,
+    then video, for whichever case the submission-recency check above
+    doesn't resolve (e.g. no submission at all, or a submission that
+    exists but isn't yet validly graded).
+    """
+    quiz_graded = is_quiz_graded(row)
     submission = row.submission if hasattr(row, "submission") else row.get("submission")
+    video_watched = row.video_watched if hasattr(row, "video_watched") else row.get("video_watched")
+
+    if submission and is_submission_valid(row):
+        row_modified = row.modified if hasattr(row, "modified") else row.get("modified")
+        sub_modified = frappe.db.get_value("Submission", submission, "modified")
+        if not row_modified or (sub_modified and sub_modified >= row_modified):
+            return "submission"
+
+    if quiz_graded:
+        return "quiz"
     if submission:
         return "submission"
-    video_watched = row.video_watched if hasattr(row, "video_watched") else row.get("video_watched")
     if video_watched:
         return "video"
     return None
