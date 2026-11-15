@@ -102,13 +102,38 @@ the stored row held the display name instead.
 
 _build_index_payload now writes student.state_id / student.district_id /
 student.school_id directly (the Link doc-name values themselves), each
-lowercased, matching exactly what the Worker's gallery scope resolution
-(shared/profile/student.py::get_profile_scope,
+sanitized and lowercased, matching exactly what the Worker's gallery scope
+resolution (shared/profile/student.py::get_profile_scope,
 worker/src/storage/profileScope.ts::normalizeScopeValue) stores and
 compares against. The separate State/District/School name lookups (via
 frappe.db.get_value) are removed entirely -- they are no longer needed
 anywhere in this function, since the ids themselves are now the values
 written to D1.
+
+v12 fix -- state/district/school sanitized via sanitize_scope_value, not
+just lowercased: the Worker's own gallery scope-column validation
+(GALLERY_SCOPE_FIELD_PATTERNS, worker/src/db/gallery.ts) requires each of
+state/district/school to match /^[a-z0-9-]{2,60}$/ -- lowercase
+alphanumeric and hyphen ONLY. A Student's state_id/district_id/school_id
+(Frappe Link doc-names) are not guaranteed to already be shaped that way:
+a district_id like "Mumbai Suburban" or a School autonamed as
+"Green Valley School-SC00536" both contain a literal space, which
+`.lower()` alone does nothing to fix. Sending such a value straight
+through to /internal/gallery/index caused the Worker's own validateRow to
+reject the ENTIRE batch with INVALID_INPUT (every row in that call, not
+just the offending one, since gallery_items rows are inserted
+all-or-nothing) -- uploads to R2 would succeed while the corresponding D1
+write silently failed every night.
+
+_build_index_payload now sanitizes state/district/school via
+shared.submission.object_naming.sanitize_scope_value, which collapses
+every run of disallowed characters to a single '-' and lowercases the
+result, guaranteeing a value that always matches the Worker's own
+pattern. This replaces the previous bare `.lower() or None` calls on
+these three fields entirely. See sanitize_scope_value's own docstring for
+the read-path caveat this change does not independently resolve (the
+Worker's read-side profileScope.ts::normalizeScopeValue applies a
+narrower, non-collapsing normalization rule).
 """
 
 from __future__ import annotations
@@ -129,6 +154,7 @@ from shared.submission.object_naming import (
     build_object_key,
     extract_gcs_bucket_and_key,
     sanitize_key_segment,
+    sanitize_scope_value,
     submission_type_from_content_type,
     submission_type_from_ext,
 )
@@ -412,16 +438,23 @@ def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict
     assignment_id query param) and always matching the assignment_id
     segment already embedded in this same row's own object_key.
 
-    state/district/school are now the student's own Link-field VALUES
+    state/district/school are the student's own Link-field VALUES
     (state_id / district_id / school_id -- the doc names/ids themselves),
-    lowercased, NOT display names resolved via a separate doctype lookup.
-    See module docstring's v11 fix note for the full reasoning -- in
-    short, this is what the Worker's own gallery scope resolution
-    (shared/profile/student.py::get_profile_scope,
-    worker/src/storage/profileScope.ts) stores and compares against, and
-    is the only way gallery_items.school can ever match a real student's
-    profile scope, since School.name (the id) and School.name1 (the
-    display name) are two different strings by construction.
+    each run through sanitize_scope_value -- NOT merely lowercased, and
+    NOT display names resolved via a separate doctype lookup. See module
+    docstring's v11 and v12 fix notes for the full reasoning. In short:
+    (a) the id, not the display name, is what the Worker's own gallery
+    scope resolution (shared/profile/student.py::get_profile_scope,
+    worker/src/storage/profileScope.ts) stores and compares against --
+    this is the only way gallery_items.school can ever match a real
+    student's profile scope, since School.name (the id) and School.name1
+    (the display name) are two different strings by construction; and
+    (b) that id must additionally be sanitized to the Worker's
+    GALLERY_SCOPE_FIELD_PATTERNS shape (lowercase [a-z0-9-]{2,60}) before
+    being sent, because a raw Link doc-name (especially School.name,
+    autonamed as "{name1}-SC{#####}") is not guaranteed to already be
+    shaped that way and can contain a literal space, which the Worker's
+    own validateRow rejects, 400ing the entire batch.
     """
     student = frappe.db.get_value(
         "Student", sub["student_id"],
@@ -436,16 +469,14 @@ def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict
         "student_id": sub["student_id"],
         "submission_id": sub["name"],
         "first_name": student.get("name1"),
-        # IDs, not display names -- see v11 fix note above. state_id and
-        # district_id already ARE their own display strings by doctype
-        # construction (State/District autoname on the name field
-        # itself), so lowercasing the id changes nothing in practice for
-        # those two; school_id is where this actually matters, since
-        # School.name (the id, e.g. "Green Valley School-SC00536") is a
-        # different string from School.name1 ("Green Valley School").
-        "state": (student.get("state_id") or "").lower() or None,
-        "district": (student.get("district_id") or "").lower() or None,
-        "school": (student.get("school_id") or "").lower() or None,
+        # Sanitized via sanitize_scope_value -- not a bare .lower() --
+        # so the value always matches the Worker's own
+        # GALLERY_SCOPE_FIELD_PATTERNS regardless of what characters the
+        # underlying Student Link field actually contains. See v12 fix
+        # note above.
+        "state": sanitize_scope_value(student.get("state_id")),
+        "district": sanitize_scope_value(student.get("district_id")),
+        "school": sanitize_scope_value(student.get("school_id")),
         "grade": int(student["grade"]) if student.get("grade") else None,
         "media_type": media_type,
         "object_key": r2_object_key,

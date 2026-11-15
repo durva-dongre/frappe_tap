@@ -37,20 +37,61 @@ other validation) happily allows, but which the Worker's own
 OBJECT_KEY_PATTERN (worker/src/handlers/internalHandlers.ts, used to
 validate every row pushed to /internal/gallery/index) rejects outright,
 since that pattern's path-segment character classes never include a
-space. Previously build_object_key interpolated its inputs into the key
-string unmodified, so a submission whose assignment_id contained a space
-(or any other character outside [A-Za-z0-9_-]) produced an R2 object key
-that the nightly sweep (shared/jobs/gallery_promotion_sweep.py) could
-successfully copy media under, but which the Worker's indexBatch handler
-would then reject with INVALID_INPUT at indexing time -- silently
-dropping that row from the gallery with a confusing, hard-to-trace 400.
-build_object_key now runs both assignment_id and student_id through
-sanitize_key_segment before building the key, so every caller
-(gallery_promotion_sweep.py, gallery_r2_promotion.py, any future caller)
+space. build_object_key now runs both assignment_id and student_id
+through sanitize_key_segment before building the key, so every caller
 automatically produces a key that always matches the Worker's own
 pattern, with no caller needing to remember to pre-sanitize its own
 inputs. See sanitize_key_segment's own docstring for the exact
 substitution rule and its accepted trade-offs.
+
+v12 fix -- NEW sanitize_scope_value, for state/district/school:
+The gallery's D1 scope columns (gallery_items.state/district/school) are
+validated by the Worker against a DIFFERENT, stricter character class
+than an object-key path segment: GALLERY_SCOPE_FIELD_PATTERNS
+(worker/src/db/gallery.ts) requires /^[a-z0-9-]{2,60}$/ -- lowercase
+alphanumeric and hyphen ONLY, no underscore (sanitize_key_segment, by
+contrast, keeps underscores, because it targets the Worker's
+OBJECT_KEY_PATTERN path-segment class, [A-Za-z0-9_-], which is a
+different, looser rule for a different field).
+
+Student.state_id / district_id / school_id are Frappe Link doc-names,
+not guaranteed to already be shaped to the Worker's stricter scope-value
+pattern. In particular, School.name is autonamed as
+"format:{name1}-SC{#####}" (tap_lms/doctype/school/school.json), so it
+can contain a literal space whenever name1 does (e.g.
+"Green Valley School-SC00536"); State.name/District.name happen to BE
+their own display string by autoname convention, but are not guaranteed
+never to contain a space or other punctuation either (e.g.
+district_id="Mumbai Suburban"). Previously these three fields were only
+`.lower()`'d before being sent to the Worker's /internal/gallery/index,
+with no further character sanitization -- a value like "mumbai suburban"
+would pass that lower() unchanged, then fail the Worker's own
+validateRow regex check, 400ing the ENTIRE batch (every row sent in that
+call, not just the offending one), since the Worker inserts gallery_items
+rows all-or-nothing per call (db.batch()).
+
+sanitize_scope_value fixes this the same way sanitize_key_segment already
+fixes assignment_id/student_id for the object-key path: collapse every
+run of one or more disallowed characters to a single '-', so the result
+always matches the Worker's own pattern regardless of what the underlying
+Student Link field actually contains.
+
+READ-PATH CAVEAT (does not fully solve the problem on its own): this
+sanitizer only affects the WRITE path -- what gets stored in D1's
+gallery_items.state/district/school columns. The gallery's READ-side
+scope resolution (worker/src/storage/profileScope.ts::
+normalizeScopeValue) applies a DIFFERENT, narrower rule: it only
+lowercases and trims, it does NOT collapse spaces/punctuation the way
+sanitize_scope_value does. If a student's live profile scope value
+itself contains a space or other disallowed character, the Worker's own
+read-side normalizeScopeValue will not match what this function wrote to
+D1, because the two functions use different normalization. This
+sanitizer eliminates the write-path 400; confirming school/district/state
+gallery scoping continues to actually MATCH for such a student is a
+separate, Worker-side concern (either teach profileScope.ts's
+normalizeScopeValue the same character-collapsing rule, or ensure the
+underlying doc names never contain characters outside [a-z0-9-] in the
+first place).
 
 WIRE SUBMISSION ID RECOVERY (no schema change)
 ------------------------------------------------
@@ -136,6 +177,16 @@ OBJECT_KEY_RE = re.compile(
 # object key.
 _KEY_SEGMENT_DISALLOWED_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 
+# Matches the Worker's GALLERY_SCOPE_FIELD_PATTERNS character class for
+# state/district/school exactly: lowercase [a-z0-9-] ONLY -- no
+# underscore, unlike _KEY_SEGMENT_DISALLOWED_CHARS above, which is a
+# different, looser rule for a different field (an object-key path
+# segment, not a D1 gallery scope column). A RUN of one or more
+# disallowed characters collapses to a SINGLE '-' (not one '-' per
+# disallowed character), so "mumbai   suburban" becomes
+# "mumbai-suburban", not "mumbai---suburban".
+_SCOPE_VALUE_DISALLOWED_CHARS = re.compile(r"[^a-z0-9-]+")
+
 EXT_FOR_SUBMISSION_TYPE = {"image": "webp", "video": "mp4"}
 CONTENT_TYPE_FOR_SUBMISSION_TYPE = {"image": "image/webp", "video": "video/mp4"}
 SUBMISSION_TYPE_FOR_EXT = {v: k for k, v in EXT_FOR_SUBMISSION_TYPE.items()}
@@ -202,16 +253,83 @@ def sanitize_key_segment(value: str) -> str:
     the caller -- build_object_key -- will fail its own regex match
     downstream if an empty segment is genuinely invalid).
 
-    Collisions are an accepted, bounded trade-off: two distinct raw values
-    that sanitize to the same string (e.g. "A B" and "A-B" both becoming
-    "A-B") would collide under this scheme. This is no worse than the
-    status quo for a value that previously failed to index at all, and is
-    rare in practice -- assignment ids and student ids are not freely
-    chosen by many independent, adversarial actors.
+    NOTE: unlike sanitize_scope_value below, this replaces each
+    individual disallowed character with its own '-' (so "A  B" becomes
+    "A--B", not "A-B") -- kept exactly as originally shipped, since
+    object-key uniqueness/collision behavior for this function is already
+    relied upon elsewhere and should not change here. Collisions are an
+    accepted, bounded trade-off either way: two distinct raw values that
+    sanitize to the same string would collide under this scheme. This is
+    no worse than the status quo for a value that previously failed to
+    index at all, and is rare in practice -- assignment ids and student
+    ids are not freely chosen by many independent, adversarial actors.
     """
     if not value:
         return value
     return _KEY_SEGMENT_DISALLOWED_CHARS.sub("-", value.strip())
+
+
+def sanitize_scope_value(value: str | None) -> str | None:
+    """Sanitizes a state/district/school value for the gallery's D1 scope
+    columns, so it always matches the Worker's own
+    GALLERY_SCOPE_FIELD_PATTERNS (worker/src/db/gallery.ts) exactly --
+    lowercase, [a-z0-9-]{2,60} only, no underscore.
+
+    This exists because Student.state_id / district_id / school_id are
+    Frappe Link doc-names, and nothing guarantees those names are already
+    shaped to the Worker's stricter scope-value pattern. School.name in
+    particular is autonamed as "format:{name1}-SC{#####}"
+    (tap_lms/doctype/school/school.json), so it can contain a literal
+    space whenever name1 does (e.g. "Green Valley School-SC00536");
+    State.name/District.name happen to BE their own display string by
+    autoname convention, but are not guaranteed to be free of spaces or
+    other punctuation either.
+
+    Previously these three fields were only `.lower()`'d before being
+    sent to the Worker's /internal/gallery/index, with no further
+    character sanitization -- a value like "mumbai suburban" would pass
+    that lower() unchanged, then be rejected outright by the Worker's own
+    validateRow regex check, 400ing the WHOLE batch (every row sent in
+    that call, not just the offending one), since gallery_items rows are
+    inserted all-or-nothing per db.batch() call.
+
+    Every RUN of one or more disallowed characters (anything other than
+    a-z, 0-9, or '-') collapses to a SINGLE '-' (not one '-' per
+    disallowed character, unlike sanitize_key_segment above) -- so
+    "mumbai suburban" becomes "mumbai-suburban" and
+    "Green Valley School-SC00536" becomes "green-valley-school-sc00536",
+    both now valid against /^[a-z0-9-]{2,60}$/. Leading/trailing
+    whitespace is stripped first (via .strip()), and any leading/trailing
+    '-' left over after collapsing is stripped too, so a value that was
+    entirely disallowed characters doesn't produce a bare "-" string.
+
+    Returns None for a falsy input -- there is nothing to sanitize, and
+    the caller does not need a separate `or None` at the call site (this
+    function already normalizes "no real value" down to None on its own,
+    whether the input was empty/None to begin with or became empty after
+    stripping disallowed characters). Call sites can therefore write
+    `sanitize_scope_value(student.get("state_id"))` directly.
+
+    READ-PATH CAVEAT: this only affects the WRITE path into D1. The
+    gallery's READ-side scope resolution
+    (worker/src/storage/profileScope.ts::normalizeScopeValue) applies a
+    DIFFERENT, narrower rule -- it only lowercases and trims, it does NOT
+    collapse spaces/punctuation. If a student's live profile scope value
+    itself contains a space or other disallowed character, the Worker's
+    own read-side normalizeScopeValue will not produce the same string
+    this function wrote to D1, so school/district/state-level gallery
+    matching could still silently fail for that student even after this
+    fix is applied. Confirming end-to-end scope matching for such values
+    is a separate, Worker-side concern -- either teach profileScope.ts's
+    normalizeScopeValue the same character-collapsing rule, or ensure the
+    underlying doc names never contain characters outside [a-z0-9-] in
+    the first place.
+    """
+    if not value:
+        return None
+    collapsed = _SCOPE_VALUE_DISALLOWED_CHARS.sub("-", value.strip().lower())
+    stripped = collapsed.strip("-")
+    return stripped or None
 
 
 def build_object_key(assignment_id: str, student_id: str, submission_id: str, attempt: int, ext: str) -> str:

@@ -11,7 +11,7 @@ from shared.config.secrets_cache import (
     get_worker_internal_secret,
     get_worker_internal_api_timeout_seconds,
 )
-from shared.submission.object_naming import resolve_wire_submission_id
+from shared.submission.object_naming import resolve_wire_submission_id, sanitize_scope_value
 
 # Must match the Worker's FIELD_PATTERNS.submission_id exactly
 # (worker/src/storage/keys.ts): /^[a-z2-7]{6,16}$/ -- lowercase base32, the
@@ -103,6 +103,38 @@ def notify_worker_gallery_index(submission_doc, unit_progress_row: dict | None,
 
 
 def _build_index_row(submission_doc, student: dict, submission_id: str, r2_object_key: str, media_type: str) -> dict:
+    """Builds the single-row payload for notify_worker_gallery_index.
+
+    v12 fix -- state/district/school sanitized via sanitize_scope_value,
+    not just lowercased: previously this function resolved display names
+    (State.state_name / District.district_name / School.name1) and
+    lowercased them with no further character sanitization. A display
+    name containing a space (most commonly School.name1, e.g.
+    "Green Valley School") would be sent to the Worker's own
+    /internal/gallery/index exactly as-is apart from case, which fails
+    the Worker's GALLERY_SCOPE_FIELD_PATTERNS regex
+    (/^[a-z0-9-]{2,60}$/ -- no spaces allowed) and 400s the whole call.
+    Every value now goes through sanitize_scope_value, which both
+    normalizes case and collapses any run of disallowed characters
+    (including spaces) to a single '-', so the result always matches the
+    Worker's pattern. See shared.submission.object_naming.
+    sanitize_scope_value's own docstring for the read-path caveat this
+    does not independently resolve.
+
+    NOTE: this single-row path still resolves and sends DISPLAY NAMES
+    (not the student's raw state_id/district_id/school_id Link values)
+    for state/district/school -- unlike gallery_promotion_sweep.py's own
+    _build_index_payload, which was separately fixed (v11) to send the
+    ids themselves, since School.name (the id) and School.name1 (the
+    display name) are different strings and only the id matches what the
+    Worker's own profile-scope resolution compares against for the
+    "school" fallback level. This function is currently dormant (see
+    notify_worker_gallery_index's own docstring) and has not been
+    revisited for that same id-vs-display-name distinction; if this
+    single-row path is ever reactivated, apply the same id-based fix
+    gallery_promotion_sweep.py already received, in addition to this
+    sanitization fix.
+    """
     state_name = frappe.db.get_value("State", student.get("state_id"), "state_name") if student.get("state_id") else None
     district_name = frappe.db.get_value("District", student.get("district_id"), "district_name") if student.get("district_id") else None
     school_name = frappe.db.get_value("School", student.get("school_id"), "name1") if student.get("school_id") else None
@@ -113,13 +145,9 @@ def _build_index_row(submission_doc, student: dict, submission_id: str, r2_objec
         "student_id": submission_doc.student_id,
         "submission_id": submission_id,
         "first_name": student.get("name1"),
-        # A missing value here is valid -- the Worker's
-        # internalHandlers.ts::validateRow treats it as an empty string,
-        # which falls through gallery's own fallback cascade rather than
-        # hard-rejecting the whole batch.
-        "state": (state_name or "").lower() or None,
-        "district": (district_name or "").lower() or None,
-        "school": school_name,
+        "state": sanitize_scope_value(state_name),
+        "district": sanitize_scope_value(district_name),
+        "school": sanitize_scope_value(school_name),
         "grade": int(student["grade"]) if student.get("grade") else None,
         "media_type": media_type,
         "object_key": r2_object_key,
@@ -131,12 +159,14 @@ def _build_index_row(submission_doc, student: dict, submission_id: str, r2_objec
 def notify_worker_gallery_index_batch(rows: list[dict]) -> None:
     """Pushes a whole chunk of already-built index-row dicts in one
     request to /internal/gallery/index. Each row dict must already have
-    the exact shape _build_index_row produces (academic_year,
-    assignment_id, student_id, submission_id, first_name, state, district,
-    school, grade, media_type, object_key, score, promoted_at) -- the
-    nightly sweep (shared/jobs/gallery_promotion_sweep.py) is the one
-    caller, building these from its own per-submission R2-promotion
-    results.
+    the exact shape _build_index_row/_build_index_payload produce
+    (academic_year, assignment_id, student_id, submission_id, first_name,
+    state, district, school, grade, media_type, object_key, score,
+    promoted_at), with state/district/school already sanitized via
+    sanitize_scope_value and assignment_id already sanitized via
+    sanitize_key_segment -- the nightly sweep (shared/jobs/
+    gallery_promotion_sweep.py) is the one caller, building these from its
+    own per-submission R2-promotion results.
 
     No-op (returns immediately) for an empty list -- the Worker's own
     indexBatch handler rejects an empty rows array, so there is nothing
