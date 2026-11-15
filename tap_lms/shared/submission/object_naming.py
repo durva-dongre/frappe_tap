@@ -27,6 +27,31 @@ a silent mismatch between what Frappe considers a valid key and what the
 Worker's own gallery indexing will accept. OBJECT_KEY_RE now matches the
 Worker's FIELD_PATTERNS/OBJECT_KEY_PATTERN exactly on both bounds.
 
+v10 fix -- build_object_key sanitizes its path-segment inputs:
+assignment_id/student_id values reaching build_object_key are not
+guaranteed to already be shaped like the Worker's own
+[A-Za-z0-9_-]{3,80} FIELD_PATTERNS -- a legacy/WhatsApp-sourced
+assignment_id such as "Spaceship Assignment-62591" contains a space,
+which FIELD_PATTERNS.assignment_id (used elsewhere in this codebase for
+other validation) happily allows, but which the Worker's own
+OBJECT_KEY_PATTERN (worker/src/handlers/internalHandlers.ts, used to
+validate every row pushed to /internal/gallery/index) rejects outright,
+since that pattern's path-segment character classes never include a
+space. Previously build_object_key interpolated its inputs into the key
+string unmodified, so a submission whose assignment_id contained a space
+(or any other character outside [A-Za-z0-9_-]) produced an R2 object key
+that the nightly sweep (shared/jobs/gallery_promotion_sweep.py) could
+successfully copy media under, but which the Worker's indexBatch handler
+would then reject with INVALID_INPUT at indexing time -- silently
+dropping that row from the gallery with a confusing, hard-to-trace 400.
+build_object_key now runs both assignment_id and student_id through
+sanitize_key_segment before building the key, so every caller
+(gallery_promotion_sweep.py, gallery_r2_promotion.py, any future caller)
+automatically produces a key that always matches the Worker's own
+pattern, with no caller needing to remember to pre-sanitize its own
+inputs. See sanitize_key_segment's own docstring for the exact
+substitution rule and its accepted trade-offs.
+
 WIRE SUBMISSION ID RECOVERY (no schema change)
 ------------------------------------------------
 There is deliberately no `worker_submission_id` column on the Submission
@@ -103,6 +128,14 @@ OBJECT_KEY_RE = re.compile(
     r"(?P<submission_id>[a-z2-7]{6,16})-(?P<attempt>[1-9][0-9]?)\.(?P<ext>[a-z0-9]{1,10})$"
 )
 
+# Matches the Worker's OBJECT_KEY_PATTERN character class for the
+# assignment_id/student_id path segments exactly: [A-Za-z0-9_-]. Anything
+# outside this set (spaces, punctuation, unicode, etc.) is replaced with a
+# single '-' by sanitize_key_segment below, so a raw, unvalidated
+# assignment_id/student_id can always be safely interpolated into an R2
+# object key.
+_KEY_SEGMENT_DISALLOWED_CHARS = re.compile(r"[^A-Za-z0-9_-]")
+
 EXT_FOR_SUBMISSION_TYPE = {"image": "webp", "video": "mp4"}
 CONTENT_TYPE_FOR_SUBMISSION_TYPE = {"image": "image/webp", "video": "video/mp4"}
 SUBMISSION_TYPE_FOR_EXT = {v: k for k, v in EXT_FOR_SUBMISSION_TYPE.items()}
@@ -142,8 +175,59 @@ CONTENT_TYPE_TO_SUBMISSION_TYPE = {
 _GCS_URL_PREFIX = "https://storage.googleapis.com/"
 
 
+def sanitize_key_segment(value: str) -> str:
+    """Replaces every character not in [A-Za-z0-9_-] with '-', so the
+    result is always safe to interpolate into an R2/GCS object key's
+    assignment_id or student_id path segment, and always matches the
+    Worker's own OBJECT_KEY_PATTERN character class for that segment
+    (worker/src/handlers/internalHandlers.ts).
+
+    This exists because callers of build_object_key are not guaranteed to
+    have already validated their assignment_id/student_id against the
+    Worker's stricter key-segment shape. FIELD_PATTERNS.assignment_id
+    (worker/src/storage/keys.ts, mirrored by shared.submission.lifecycle's
+    own validation) is more permissive -- it allows a literal space -- so a
+    legacy/WhatsApp-sourced assignment_id like "Spaceship Assignment-62591"
+    passes that check but still contains a character the Worker's
+    OBJECT_KEY_PATTERN will reject once it reaches /internal/gallery/index.
+    Sanitizing once, here, at key-build time, means every caller of
+    build_object_key gets a key that downstream gallery indexing will
+    always accept, instead of each caller needing to remember to
+    pre-sanitize its own inputs.
+
+    Leading/trailing whitespace is stripped first, then every remaining
+    disallowed character (including any interior whitespace, punctuation,
+    or non-ASCII character) is replaced with a single '-'. An empty or
+    falsy input is returned unchanged (there is nothing to sanitize, and
+    the caller -- build_object_key -- will fail its own regex match
+    downstream if an empty segment is genuinely invalid).
+
+    Collisions are an accepted, bounded trade-off: two distinct raw values
+    that sanitize to the same string (e.g. "A B" and "A-B" both becoming
+    "A-B") would collide under this scheme. This is no worse than the
+    status quo for a value that previously failed to index at all, and is
+    rare in practice -- assignment ids and student ids are not freely
+    chosen by many independent, adversarial actors.
+    """
+    if not value:
+        return value
+    return _KEY_SEGMENT_DISALLOWED_CHARS.sub("-", value.strip())
+
+
 def build_object_key(assignment_id: str, student_id: str, submission_id: str, attempt: int, ext: str) -> str:
-    return f"tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}"
+    """Builds the tapapp object key, sanitizing assignment_id and
+    student_id first (see sanitize_key_segment) so the result always
+    matches the Worker's own OBJECT_KEY_PATTERN, regardless of whether the
+    caller's raw inputs already did. submission_id and ext are not
+    sanitized here -- submission_id is always Worker-minted
+    ([a-z2-7]{6,16}, see storage/keys.ts::mintSubmissionId) and ext is
+    always resolved from a fixed, known-safe table
+    (EXT_FOR_SUBMISSION_TYPE / the Worker's ACCEPTED_FORMATS_FOR), so
+    neither can contain a character this function would need to clean up.
+    """
+    safe_assignment_id = sanitize_key_segment(assignment_id)
+    safe_student_id = sanitize_key_segment(student_id)
+    return f"tapapp/{safe_assignment_id}/{safe_student_id}/{submission_id}-{attempt}.{ext}"
 
 
 def parse_object_key(object_key: str) -> dict:
