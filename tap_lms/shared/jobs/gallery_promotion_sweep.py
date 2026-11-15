@@ -22,6 +22,35 @@ This also makes the sweep self-healing: a row whose R2 copy succeeded but
 whose D1 index call failed last night is still "not in D1," so it's
 naturally re-attempted tonight with no separate stuck-state tracking.
 
+BUGFIX (eligibility window field): _fetch_eligible_submissions and
+_count_eligible_submissions previously filtered on Submission.created_at.
+A submission with normal creation time but UNUSUALLY SLOW grading (stuck
+in Processing for longer than the sweep's lookback window before finally
+completing) would have a created_at that falls OUTSIDE the window by the
+time it actually becomes gallery-eligible -- the sweep would never select
+it, regardless of how recently it genuinely became eligible, since
+created_at never changes. This was a silent, permanent gallery-promotion
+gap for any submission whose grading latency exceeded the lookback
+window, and it also meant _count_eligible_submissions (which feeds
+gallery_remaining_backlog in the nightly analytics row) systematically
+UNDERCOUNTED the real backlog, since a slow-graded-but-now-eligible row
+with an old created_at was invisible to both functions.
+
+Both functions now filter on Submission.completed_at instead --
+completed_at is set exactly once, by feedback_processor.py::update_submission,
+at the moment a submission's grading actually finishes and its
+result_status/status become final. This is also the same field
+shared/jobs/analytics_daily.py already uses for its own
+submission_success_original/submission_success_flagged/submission_failed
+window queries, so the "day"/"window" definition is now consistent across
+both jobs rather than created_at being used here and completed_at being
+used there for conceptually the same kind of query.
+
+A submission with completed_at IS NULL (not yet graded, or an older row
+predating this field's reliable population) is correctly excluded by the
+`completed_at >= since` comparison -- NULL never satisfies a >= comparison
+in SQL, so this requires no separate "IS NOT NULL" guard.
+
 WINDOW ANCHORING. The window is not a blind rolling N-day scan every
 night -- it anchors to this job's own last successful run (read back from
 Shared Logs), so a normal night's sweep only asks about "since yesterday,"
@@ -104,10 +133,18 @@ def _resolve_sweep_window() -> tuple[int, bool]:
 
 def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
     """Submissions that are Completed + is_submission_complete-eligible
-    (Success - Original or Success - Flagged), created within the window,
-    oldest first, capped at `limit`. Mirrors exactly the completion
-    filter review_result.py uses for is_gallery_eligible, just expressed
-    as a direct SQL query here instead of an in-memory boolean check."""
+    (Success - Original or Success - Flagged), whose grading COMPLETED
+    within the window, oldest first, capped at `limit`. Mirrors exactly
+    the completion filter review_result.py uses for is_gallery_eligible,
+    just expressed as a direct SQL query here instead of an in-memory
+    boolean check.
+
+    Filters on completed_at, not created_at -- see module docstring's
+    "BUGFIX" section for why: a submission's eligibility moment is when
+    its grading finishes, not when it was first created, and a
+    slow-graded submission's created_at can fall outside the window even
+    though it only just became eligible.
+    """
     from datetime import datetime
 
     since_dt = datetime.fromtimestamp(since_epoch)
@@ -116,12 +153,12 @@ def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
     rows = frappe.db.sql(
         """
         SELECT name, assign_id, assignment_id_link, student_id, submission_url,
-               grade, created_at, status, result_status
+               grade, created_at, completed_at, status, result_status
           FROM "tabSubmission"
          WHERE status = 'Completed'
            AND result_status IN %(statuses)s
-           AND created_at >= %(since)s
-         ORDER BY created_at ASC
+           AND completed_at >= %(since)s
+         ORDER BY completed_at ASC
          LIMIT %(limit)s
         """,
         {"statuses": complete_statuses, "since": since_dt, "limit": limit},
@@ -133,7 +170,8 @@ def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
 def _count_eligible_submissions(since_epoch: int) -> int:
     """Unbounded count of the same filter _fetch_eligible_submissions uses,
     for reporting remaining backlog size -- not used to drive the loop
-    itself, only to size the nightly report."""
+    itself, only to size the nightly report. Filters on completed_at, same
+    as _fetch_eligible_submissions above and for the same reason."""
     from datetime import datetime
 
     since_dt = datetime.fromtimestamp(since_epoch)
@@ -144,7 +182,7 @@ def _count_eligible_submissions(since_epoch: int) -> int:
         SELECT COUNT(*) FROM "tabSubmission"
          WHERE status = 'Completed'
            AND result_status IN %(statuses)s
-           AND created_at >= %(since)s
+           AND completed_at >= %(since)s
         """,
         {"statuses": complete_statuses, "since": since_dt},
     )
@@ -333,7 +371,7 @@ def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict
     school_name = frappe.db.get_value("School", student.get("school_id"), "name1") if student.get("school_id") else None
 
     return {
-        "academic_year": (sub.get("created_at") or frappe.utils.now_datetime()).year,
+        "academic_year": (sub.get("completed_at") or sub.get("created_at") or frappe.utils.now_datetime()).year,
         "assignment_id": sub.get("assign_id") or sub.get("assignment_id_link"),
         "student_id": sub["student_id"],
         "submission_id": sub["name"],

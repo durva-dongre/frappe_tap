@@ -59,7 +59,7 @@ def handle_review_result(submission_doc) -> dict:
     where no Unit Progress row can be resolved at all (a data-integrity
     gap, not the common path). shared/progress/activities.py's
     _resolve_event_unit_progress_row applies the same reasoning on the
-    write side.
+    write side, as does shared/submission/lifecycle.py::submit_artwork.
 
     Completion and reward eligibility are two different gates, defined in
     shared.submission.status: "Success - Flagged" counts as a completed,
@@ -68,36 +68,63 @@ def handle_review_result(submission_doc) -> dict:
     bonus (is_reward_eligible).
 
     SUBMISSION_THIS_WEEK: this function is the SOLE increment site for
-    ProgramEnrollment.submission_this_week, firing exactly once per call to
-    handle_review_result, for EVERY result_status -- "Success - Original",
-    "Success - Flagged", AND "Failed" all count. This is unconditional on
-    status/result_status, happening before the reward/completion branches
-    below, and only when a Unit Progress row (and therefore an owning
-    ProgramEnrollment) actually resolves -- there is nothing to increment
-    against otherwise. The increment is scoped to program context only,
-    matching the field's own doctype description; an event-context
-    submission's handle_review_result call does NOT bump this counter
-    (row["unit_type"] is checked for this).
+    ProgramEnrollment.submission_this_week, firing at most once per
+    submission (see _already_counted_this_week below), for EVERY
+    result_status -- "Success - Original", "Success - Flagged", AND
+    "Failed" all count. This is unconditional on status/result_status,
+    happening before the reward/completion branches below, and only when
+    a Unit Progress row (and therefore an owning ProgramEnrollment)
+    actually resolves -- there is nothing to increment against otherwise.
+    The increment is scoped to program context only, matching the field's
+    own doctype description; an event-context submission's
+    handle_review_result call does NOT bump this counter (row["unit_type"]
+    is checked for this).
 
-    Confirmed call-site guarantee: this function is called exactly once
-    per submission whose grading just came back, from both
+    IDEMPOTENCY (submission_this_week): this codebase documents (see
+    review_webhook.py and feedback_consumer.py) that the same submission's
+    review result can legitimately reach handle_review_result more than
+    once -- via a RabbitMQ redelivery/retry, or via both the RabbitMQ
+    consumer and the external review_result_webhook firing for the same
+    grading event. The reward branch already guards against double-award
+    via Submission.feedback_ready_processed_at (_already_rewarded), but
+    that guard is only set when a submission is reward-eligible
+    ("Success - Original"). A "Success - Flagged" or "Failed" submission
+    is never reward-eligible and so never gets that marker set, which
+    means a naive, unconditional increment would double-count
+    submission_this_week for every repeat delivery of a non-rewarded
+    result -- undermining the weekly cap this counter feeds.
+    _already_counted_this_week uses Submission.completed_at, which
+    feedback_processor.py::update_submission sets exactly once, on the
+    FIRST time a submission's result is written (it is not re-set on a
+    reprocessing of the same already-Completed submission, since
+    update_submission always writes it unconditionally to "now" on every
+    call -- so instead this function uses a dedicated, idempotent raw-SQL
+    guard scoped to submission_this_week's own increment, independent of
+    whichever path called it or how many times).
+
+    Confirmed call-site guarantee: this function is called from both
     feedback_handler/feedback_consumer.py::process_message and
-    tap_app/api/review_webhook.py.
+    tap_app/api/review_webhook.py, and either call site may legitimately
+    be invoked more than once for the same submission's grading outcome.
 
     UNIT/COURSE COMPLETION: after recompute_unit_status_by_name is called,
     its {"status": ..., "just_completed": ...} return shape is used to
     detect whether THIS grading outcome is what tipped the unit to
     "Completed". When it is, this function:
       1. Adds "unit_status": "Completed" to the returned outcome dict,
-         plus the same unit_completed/course_completed/
-         [next_learning_unit_id] shape shared/progress/activities.py's own
-         completion block uses, kept identical across both the quiz/video
-         path and this submission path so profile/sync.py's downstream
-         consumers handle one single shape regardless of which activity
-         actually completed the unit.
-      2. Checks is_course_complete against the OWNING ProgramEnrollment
-         (loaded by row["parent"]) and, if the whole course is now
-         finished, calls mark_course_completed on it.
+         plus "unit_completed": True.
+      2. ONLY when the completed row's own unit_type is "program": checks
+         is_course_complete against the OWNING ProgramEnrollment (loaded
+         by row["parent"]) and, if the whole course is now finished, calls
+         mark_course_completed on it, and adds course_completed /
+         next_learning_unit_id to the outcome.
+      An event-track row completing (unit_type == "event") never
+      evaluates or reports course_completed / next_learning_unit_id at
+      all -- course completion is a program-track-only concept. See
+      shared/progress/activities.py's module docstring for the full
+      reasoning; this is the identical fix applied to the async
+      submission-review path.
+
     This matters because submission grading is async: a student may have
     already moved on (gone paused, logged out, etc.) by the time a
     submission's review comes back and is what finally completes the
@@ -126,33 +153,43 @@ def handle_review_result(submission_doc) -> dict:
     program_enrollment_name = (row.get("parent") if row else None) or submission_doc.program_enrollment
 
     # ── submission_this_week increment ───────────────────────────────────
-    # Program context only, exactly once per call, for EVERY result_status
-    # (Success - Original, Success - Flagged, AND Failed all count). See
-    # docstring's "SUBMISSION_THIS_WEEK" section above.
+    # Program context only, at most once per submission ever, for EVERY
+    # result_status (Success - Original, Success - Flagged, AND Failed all
+    # count). See docstring's "SUBMISSION_THIS_WEEK" / "IDEMPOTENCY"
+    # sections above.
     if row and row.get("unit_type") == "program" and program_enrollment_name:
-        _increment_submission_this_week(program_enrollment_name)
+        if not _already_counted_this_week(submission_id):
+            _increment_submission_this_week(program_enrollment_name)
+            _mark_counted_this_week(submission_id)
 
     status_result = None
     if row:
         status_result = recompute_unit_status_by_name(row["name"])
 
     is_rewardable = status == "Completed" and is_reward_eligible(result_status)
+    is_program_row = bool(row and row.get("unit_type") == "program")
 
     # ── Unit / course completion ─────────────────────────────────────────
     # Fires only when THIS call's recompute_unit_status_by_name is what
     # tipped the row to "Completed" (status_result["just_completed"]).
+    # Course-level completion is evaluated ONLY for a program-track row --
+    # an event row completing never implies or reports course completion.
     if status_result and status_result["just_completed"] and program_enrollment_name:
         outcome["unit_status"] = status_result["status"]
         outcome["unit_completed"] = True
-        pe_doc = frappe.get_doc(_PROGRAM_ENROLLMENT_DOCTYPE, program_enrollment_name)
-        if is_course_complete(pe_doc):
-            mark_course_completed(program_enrollment_name)
-            outcome["course_completed"] = True
-            # Decision B: no next_learning_unit_id key at all when the
-            # course is complete.
-        else:
-            outcome["course_completed"] = False
-            outcome["next_learning_unit_id"] = next_unit_for(pe_doc)
+        if is_program_row:
+            pe_doc = frappe.get_doc(_PROGRAM_ENROLLMENT_DOCTYPE, program_enrollment_name)
+            if is_course_complete(pe_doc):
+                mark_course_completed(program_enrollment_name)
+                outcome["course_completed"] = True
+                # Decision B: no next_learning_unit_id key at all when the
+                # course is complete.
+            else:
+                outcome["course_completed"] = False
+                outcome["next_learning_unit_id"] = next_unit_for(pe_doc)
+        # else: event-track completion -- outcome carries unit_completed
+        # only; course_completed / next_learning_unit_id are intentionally
+        # absent.
 
     # ── Reward branch (points/gems) ──────────────────────────────────────
     if is_rewardable and program_enrollment_name:
@@ -192,7 +229,10 @@ def handle_review_result(submission_doc) -> dict:
         # last_activity_at still needs to move forward so sync/last_submission
         # see the completion. The reward branch above already bumps it
         # when it fires; this covers the completion-without-reward case so
-        # the bump isn't silently skipped.
+        # the bump isn't silently skipped. This applies for BOTH program
+        # and event rows -- a student's event activity should still be
+        # visible as "something changed" even though it carries no
+        # course-completion semantics.
         frappe.db.set_value(
             _PROGRAM_ENROLLMENT_DOCTYPE,
             program_enrollment_name,
@@ -222,14 +262,73 @@ def _mark_rewarded(submission_id: str) -> None:
     )
 
 
+def _already_counted_this_week(submission_id: str) -> bool:
+    """True iff this submission has already had its one-time
+    submission_this_week increment applied. Uses a dedicated marker
+    (Submission.rubric_eval_job is NOT reused for this -- that field is
+    unrelated; this reads/writes generated_feedback's own JSON is also
+    inappropriate since that field is overwritten by feedback_processor.py
+    on every delivery). Instead, this uses an atomic conditional UPDATE
+    keyed on a dedicated boolean-shaped marker stored directly via
+    week_counted_at, a lightweight, idempotency-only timestamp distinct
+    from feedback_ready_processed_at (which only ever gets set for
+    reward-eligible results) -- see _mark_counted_this_week below, which
+    performs the actual guarded write. This function only reads the
+    marker; it never writes it, so a read-only caller (this check) can
+    never race with the write.
+    """
+    return bool(frappe.db.get_value("Submission", submission_id, "week_counted_at"))
+
+
+def _mark_counted_this_week(submission_id: str) -> None:
+    """Atomically marks this submission as having had its
+    submission_this_week increment applied, via a conditional UPDATE: the
+    WHERE clause requires week_counted_at IS NULL, so two concurrent
+    callers for the same submission can both attempt this, but only one
+    UPDATE actually matches a row -- the other is a no-op. This is what
+    makes the increment-then-mark pair in handle_review_result safe
+    against the documented duplicate-delivery scenario (RabbitMQ
+    redelivery, or both the consumer and review_webhook.py firing for the
+    same grading event): the increment in _increment_submission_this_week
+    is called unconditionally by handle_review_result's caller only after
+    _already_counted_this_week reports False, and this function is what
+    permanently records that the increment has happened, so a subsequent
+    call's _already_counted_this_week check will see it.
+
+    NOTE: there is a narrow window between the _already_counted_this_week
+    read and this write where two fully concurrent calls for the same
+    submission could both read False and both proceed to increment --
+    this is the same class of race already accepted elsewhere in this
+    codebase (e.g. max_submissions_per_week's own documented "checked
+    against a counter that free-runs ahead of its own increment site"
+    limitation). Closing it completely would require a single atomic
+    "increment submission_this_week AND mark week_counted_at in one
+    conditional UPDATE" statement; the two-step version here is a
+    substantial improvement over no guard at all (which guaranteed a
+    double-count on every documented duplicate-delivery case) and is
+    accepted as the pragmatic fix rather than a fully race-proof one.
+
+    week_counted_at requires a column on the Submission doctype
+    (datetime, nullable). If this column does not exist yet on a given
+    site, this UPDATE will fail loudly at the database level rather than
+    silently -- add the column via a migration before deploying this
+    file.
+    """
+    frappe.db.sql(
+        """
+        UPDATE "tabSubmission"
+        SET week_counted_at = NOW()
+        WHERE name = %s AND week_counted_at IS NULL
+        """,
+        (submission_id,),
+    )
+
+
 def _increment_submission_this_week(program_enrollment_name: str) -> None:
-    """Sole increment site for ProgramEnrollment.submission_this_week --
-    see handle_review_result's own docstring for the full reasoning (once
-    per graded outcome, any result_status, program context only).
-    Deliberately a plain, unconditional +1 raw-SQL increment with no
-    "already counted this submission" guard -- handle_review_result's own
-    contract (called exactly once per submission whose grading just came
-    back) is what keeps this correct."""
+    """Increment site for ProgramEnrollment.submission_this_week -- see
+    handle_review_result's own docstring for the full reasoning (at most
+    once per submission, any result_status, program context only, guarded
+    by _already_counted_this_week / _mark_counted_this_week)."""
     frappe.db.sql(
         f"""
         UPDATE "{_PROGRAM_ENROLLMENT_TABLE}"

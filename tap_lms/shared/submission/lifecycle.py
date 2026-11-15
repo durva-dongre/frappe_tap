@@ -17,112 +17,69 @@ submission URL and handles its own media detection; this module is
 responsible for everything imgana's function doesn't do: attempt-cap
 enforcement, the weekly submission-cap enforcement, the video prerequisite
 gate, the Unit Progress row write, the first-attempt points award, and
-(see BUGFIX below) stamping program_enrollment onto the new row.
+stamping program_enrollment onto the new row.
 
 Worker route wiring: tap_app/api/submission.py::submit_artwork is the only
 whitelisted entrypoint the Worker calls for this. Do not point the Worker
 directly at tap_lms.imgana.submission.submit_artwork -- it has no
 attempt-cap or Unit Progress awareness of its own.
 
-SUBMISSION_ID -- NOT RETURNED BY submit_artwork:
+SUBMISSION_ID -- NOT RETURNED BY submit_artwork: see this function's own
+docstring.
 
-submit_artwork's own response does not carry a submission_id field at all.
-imgana's own async job -- which is what actually populates the row's
-submission_url, the only place the Worker-minted id is later recoverable
-from -- runs AFTER this function returns. A client that needs a
-submission's id/state reads it from /progress/sync or
-/progress/last_submission instead, both of which resolve the row
-themselves (never from a client-supplied id).
+EVENT-TRACK ROW RESOLUTION (fixed): previously, both check_attempt_cap and
+submit_artwork resolved their Unit Progress row ONLY against the
+currently-ACTIVE ProgramEnrollment's own unit_progress child table
+(_find_existing_unit_progress_row / get_or_create_unit_progress_row called
+directly on `pe`), with no special handling for context == "event". This
+directly contradicted the invariant shared/progress/activities.py
+documents and enforces for its own event-context writes: "a Unit Progress
+row is immutably tied to whichever ProgramEnrollment it was created
+under, never to whatever enrollment happens to be active right now."
 
-BUGFIX -- program_enrollment is now stamped on the newly created
-Submission row, immediately after imgana reports success:
+Concretely, this caused real data fragmentation: if a student's active
+ProgramEnrollment rotated between watching an event's video (handled by
+activities.py, correctly anchored to wherever the row actually lives) and
+submitting artwork for that same event unit (handled here), submit_artwork
+would create a SECOND, separate Unit Progress row on the new active
+enrollment -- one with video_watched=True and no submission (on the old
+enrollment), and one with video_watched=False and the submission (on the
+new enrollment) -- and would then incorrectly reject the submission with
+"video must be completed before submitting for this unit", even though
+the student genuinely had watched it.
 
-tap_lms.imgana.submission.submit_artwork (and the _create_submission
-helper it calls) never sets Submission.program_enrollment -- it's shared
-with the WhatsApp channel, which has no ProgramEnrollment concept at all,
-so that field is simply never in its write list. Previously nothing on
-the TapApp side corrected this either, so every Submission row created
-through this path had program_enrollment = NULL forever.
+Both check_attempt_cap and submit_artwork now call
+shared.progress.activities._resolve_event_unit_progress_row for
+context == "event", exactly as activities.py's own submit_video_watched/
+submit_quiz do, so all three event-context write paths (video, quiz,
+submission) and the one event-context read path (check_attempt_cap)
+resolve to the exact same row, anchored to whichever enrollment actually
+owns it -- never to whatever happens to be "active" at call time.
 
-This mattered because shared/profile/sync.py::_find_last_submission_row
-filters `WHERE program_enrollment = program_enrollment_name` when looking
-for a student's most recently updated submission to report in
-/progress/sync and /progress/last_submission. A submission with
-program_enrollment = NULL can never match that filter, no matter how
-recently it was created or graded -- it is permanently invisible to both
-of those endpoints. It also meant
-shared/submission/review_result.py::handle_review_result's own fallback
-(`row.get("parent") if row else None) or submission_doc.program_enrollment`)
-could never fall back to anything useful for a row with no resolvable Unit
-Progress row, since submission_doc.program_enrollment was always None too.
+COMPLETED-COURSE WRITE GUARD: shared.enrollment.active_batch now resolves
+a "completed" ProgramEnrollment for READS (so sync/profile keep working
+after a course finishes -- see that module's docstring), but writing new
+submissions against an already-completed course must still be rejected
+explicitly, rather than silently reopened as a side effect of that read
+fix. Both check_attempt_cap and submit_artwork now check
+pe.status == "completed" immediately after resolving `pe` and raise
+InvalidInput before touching anything else.
 
-Fix: this module -- which is the one place in the TapApp-facing call chain
-that actually holds a loaded `pe` (the active ProgramEnrollment) alongside
-the newly created submission's name -- now writes
-Submission.program_enrollment = pe.name directly, via a minimal
-frappe.db.set_value call, immediately after imgana confirms success and
-before returning. No change to imgana itself is needed or made; imgana
-remains exactly as it is, shared unmodified with the WhatsApp channel.
+WEEKLY SUBMISSION CAP: unchanged from before -- see
+_require_weekly_submission_cap_not_reached's own docstring. Event-context
+submissions are never subject to this cap (program-context only, per
+submission_this_week's own doctype field description).
 
-resolve_learning_unit_for_assignment's primary lookup queries
-tabUnitContentItem.content_type / tabUnitContentItem.content. That query
-is wrapped in a savepoint (release/rollback) as defense in depth: because
-Postgres (unlike MySQL) aborts the entire transaction on any SQL error
-until an explicit ROLLBACK, a savepoint here means a future schema
-mismatch on this query degrades to the documented fallback paths (and
-ultimately NOT_FOUND) instead of poisoning the whole surrounding
-transaction. The savepoint's except clause narrows to
-frappe.db.InternalError / frappe.db.ProgrammingError (the actual
-DB-driver exception classes for a schema mismatch) and re-raises anything
-else after still issuing the ROLLBACK TO SAVEPOINT, so the transaction is
-never left poisoned either way.
-
-WEEKLY SUBMISSION CAP:
-
-Both check_attempt_cap and submit_artwork check
-ProgramEnrollment.submission_this_week against
-shared.progress.rewards.max_submissions_per_week() BEFORE enforcing the
-existing per-assignment attempt cap. This is a separate, weekly,
-cross-assignment cap (distinct from max_submission_attempts, which caps
-attempts on one specific assignment) -- a student who has exhausted their
-weekly submission budget is rejected with CapReached (CONFLICT) regardless
-of how many attempts remain on this particular assignment. Checking this
-in check_attempt_cap too (not just submit_artwork) means a student at the
-weekly cap never gets issued a signed upload URL in the first place --
-without this check here, the Worker would sign an upload, the student
-would spend time/bandwidth uploading, and only then discover via
-submit_artwork that the attempt was rejected.
-
-submission_this_week itself is NOT incremented anywhere in this file. Its
-increment happens exactly once per GRADED REVIEW OUTCOME, in
-shared/submission/review_result.py::handle_review_result -- not at submit
-time.
-
-check_attempt_cap has no write side effect: get_or_create_unit_progress_row
-is never called here (unlike submit_artwork), so a client polling this
-endpoint before the student has decided to submit anything can never
-materialize an empty, "Not Started" Unit Progress row for a unit the
-student hasn't actually engaged with. If no row exists yet, attempt_number
-is reported as 1 without writing anything to the database.
-
-ATTEMPT-NUMBER INTEGRITY: Unit Progress.submission_attempts is a plain Int
-column with no doctype-level enforcement of its own -- the Worker's own
-check on object_key (assertObjectKeyMatches) only confirms the key is
-internally self-consistent with itself, never that its embedded "attempt"
-segment actually matches what Frappe believes the next attempt number is.
-submit_artwork therefore re-derives the real next attempt number
-(row.submission_attempts + 1) and rejects a client-supplied object_key
-whose own attempt segment disagrees with it, BEFORE calling into imgana --
-so a mismatched key can never create a Submission row, and R2/gallery
-storage can never diverge from Frappe's own attempt count.
+ATTEMPT-NUMBER INTEGRITY: unchanged -- see _validate_object_key_attempt.
 
 DECISION D (last_activity_at on every attempt): award_points
 (shared/progress/rewards.py) bumps enrollment_doc.last_activity_at when
 bump_activity=True. submit_artwork calls award_points on every successful
-attempt (first or reattempt), passing 0 as the amount on a non-first
-attempt and bump_activity=True explicitly on every call -- this achieves
-"bump last_activity_at on every attempt, award points only on the first
-attempt."
+attempt (first or reattempt), against the row's OWNING enrollment
+(owning_doc, resolved per the event-row fix above -- which equals `pe`
+itself for program context, since program-track rows always live on the
+active, lifelong enrollment), passing 0 as the amount on a non-first
+attempt and bump_activity=True explicitly on every call.
 """
 
 from __future__ import annotations
@@ -140,6 +97,7 @@ from shared.progress.rewards import (
 )
 from shared.submission.locks import lock_program_enrollment_row
 from shared.submission.object_naming import parse_object_key
+from shared.db_retry import with_serialization_retry
 
 # Narrow, DB-driver-level exception classes that genuinely indicate "this
 # table/column doesn't exist" (a schema mismatch) -- as opposed to any other
@@ -243,6 +201,22 @@ def require_video_done(unit_progress_row) -> None:
 _require_video_done = require_video_done
 
 
+def _require_course_not_completed(pe) -> None:
+    """Rejects a write against an already-completed ProgramEnrollment.
+
+    shared.enrollment.active_batch.get_active_program_enrollment_name now
+    resolves a "completed" enrollment for READ paths (sync, profile) that
+    previously broke entirely once a student's only enrollment finished --
+    see that module's docstring. That fix is deliberately READ-only: it
+    must not silently reopen check_attempt_cap / submit_artwork for a
+    finished course. This explicit guard is what keeps that boundary firm,
+    called immediately after resolving `pe` in both functions below,
+    before any other check or write happens.
+    """
+    if pe.status == "completed":
+        raise InvalidInput("course already completed; no further submissions are accepted", error_code="course_completed")
+
+
 def _require_weekly_submission_cap_not_reached(pe) -> None:
     """Program-context weekly cap: rejects with CapReached (CONFLICT) if
     pe.submission_this_week is already at or beyond
@@ -265,7 +239,14 @@ def _find_existing_unit_progress_row(parent_doc, learning_unit: str, unit_type: 
     one if it's missing -- unlike get_or_create_unit_progress_row. Used by
     check_attempt_cap, which must never have the side effect of persisting
     a new, empty row just because a client asked "how many attempts do I
-    have left." Returns None if no such row exists yet."""
+    have left." Returns None if no such row exists yet.
+
+    Only used for context == "program" -- event context is resolved via
+    _resolve_event_unit_progress_row instead (see
+    _resolve_row_for_cap_check below), which already performs the
+    equivalent read-only-safe lookup for an existing row (it only creates
+    one when none exists at all, mirroring this function's own contract
+    for the program-context case)."""
     rows = getattr(parent_doc, "unit_progress") or []
     matches = [r for r in rows if r.learning_unit == learning_unit and r.unit_type == unit_type]
     if len(matches) > 1:
@@ -274,6 +255,49 @@ def _find_existing_unit_progress_row(parent_doc, learning_unit: str, unit_type: 
             f"(learning_unit={learning_unit}, unit_type={unit_type})"
         )
     return matches[0] if matches else None
+
+
+def _resolve_row_for_context(pe, student_id: str, unit: str, context: str, create_if_missing: bool):
+    """Single entrypoint used by both check_attempt_cap and submit_artwork
+    to resolve the Unit Progress row for a (student, unit, context),
+    replacing each function's own previously-separate, active-PE-only
+    lookup.
+
+    For context == "program": the row always lives on `pe` itself (the
+    active, lifelong enrollment for this course level) -- looked up via
+    _find_existing_unit_progress_row (no create) or
+    get_or_create_unit_progress_row (create), matching each caller's own
+    needs. owning_doc is always `pe` for program context.
+
+    For context == "event": resolved via
+    shared.progress.activities._resolve_event_unit_progress_row -- the
+    SAME global, by-name resolution activities.py uses for its own
+    event-context video/quiz writes, so a submission's row is guaranteed
+    to be the exact same row a prior video-watch or quiz-grade already
+    wrote to, regardless of whether `pe` (today's active enrollment) is
+    the same enrollment that originally owned it.
+    _resolve_event_unit_progress_row always creates a row if none exists
+    yet (there's nothing to preserve continuity with in that case), so
+    create_if_missing has no effect for event context -- check_attempt_cap
+    calling this for event context will, same as before this fix, only
+    ever see a row that already exists UNLESS this is the very first
+    activity for this event, matching the function's own "nothing to do
+    until something exists" read semantics as closely as the shared
+    resolver allows.
+
+    Returns (owning_doc, row_or_None). row is None only for
+    context == "program" with create_if_missing=False and no existing row.
+    """
+    if context == "event":
+        from shared.progress.activities import _resolve_event_unit_progress_row
+        owning_doc, row = _resolve_event_unit_progress_row(pe, student_id, unit)
+        return owning_doc, row
+
+    if create_if_missing:
+        row = get_or_create_unit_progress_row(pe, unit, context)
+    else:
+        row = _find_existing_unit_progress_row(pe, unit, context)
+    return pe, row
 
 
 def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) -> None:
@@ -308,13 +332,27 @@ def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) 
 
 def check_attempt_cap(student_id: str, assignment_id: str, context: str = "program") -> dict:
     """Reports the student's current attempt number and how many attempts
-    remain for this assignment. Read-only: enforces the video prerequisite,
-    the weekly submission cap (program context only), and the
-    per-assignment attempt cap as checks only -- it does not create a Unit
-    Progress row or save the ProgramEnrollment document.
+    remain for this assignment. Read-only: enforces the completed-course
+    guard, the video prerequisite, the weekly submission cap (program
+    context only), and the per-assignment attempt cap as checks only -- it
+    does not create a Unit Progress row for program context (event context
+    may create one on first-ever activity, per _resolve_row_for_context's
+    own docstring) and does not save the ProgramEnrollment document.
 
-    If no Unit Progress row exists yet for this (student, unit, context),
-    the video-prerequisite check still applies (a brand-new unit has
+    For context == "event", the Unit Progress row is resolved via the
+    SAME global, by-name lookup submit_artwork and activities.py's
+    video/quiz writes use (see _resolve_row_for_context) -- previously
+    this function only ever looked inside the currently-active
+    enrollment's own unit_progress table, which could report a stale
+    attempt_number: 1 for a student whose real event progress (and real
+    attempt count) lived on a different, prior enrollment. That mismatch
+    meant check_attempt_cap could promise an attempt budget that
+    submit_artwork would then immediately contradict once it resolved the
+    real row. Both functions now agree.
+
+    If no Unit Progress row exists yet for this (student, unit, context)
+    (program context only -- event context always resolves or creates
+    one), the video-prerequisite check still applies (a brand-new unit has
     video_watched=False by definition, so this raises InvalidInput exactly
     as it would for an existing, not-yet-watched row) and attempt_number is
     reported as 1 with the full attempt cap remaining.
@@ -332,15 +370,31 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
     post-increment computation for the same (student, assignment, context)
     pair -- instead of against the pre-increment count, so both functions
     agree on attempts_remaining for the same attempt.
+
+    COMPLETED COURSE: raises InvalidInput (error_code="course_completed")
+    immediately if pe.status == "completed" -- see
+    _require_course_not_completed's own docstring for why this guard is
+    necessary now that `pe` itself can resolve to a completed enrollment
+    for read paths elsewhere in this codebase.
+
+    This function is read-only (no writes, no row lock beyond the implicit
+    read), so it is NOT wrapped in @with_serialization_retry -- there is no
+    write here that a SerializationFailure could silently discard.
     """
     pe_name = get_active_program_enrollment_name(student_id)
     pe = frappe.get_doc("ProgramEnrollment", pe_name)
+
+    _require_course_not_completed(pe)
+
     unit = resolve_learning_unit_for_assignment(assignment_id, context, student_id)
-    row = _find_existing_unit_progress_row(pe, unit, context)
+    _owning_doc, row = _resolve_row_for_context(pe, student_id, unit, context, create_if_missing=False)
 
     # A never-started unit has no video_watched yet -- require_video_done
     # needs an object with a `.video_watched` attribute, so build a minimal
-    # stand-in rather than persisting a real row just to check this.
+    # stand-in rather than persisting a real row just to check this. For
+    # event context, _resolve_row_for_context always returns a real row
+    # (it creates one on first-ever activity), so this stub path is only
+    # ever exercised for context == "program".
     if row is None:
         class _UnwatchedStub:
             video_watched = 0
@@ -368,16 +422,33 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
     return {"attempt_number": attempt_number, "attempts_remaining": attempts_remaining}
 
 
+@with_serialization_retry
 def submit_artwork(student_id: str, assignment_id: str, submission_url: str, object_key: str | None = None,
                     context: str = "program") -> dict:
-    """Re-checks the attempt cap, weekly submission cap (program context
-    only), and video prerequisite under a row lock, cross-checks
-    object_key's own attempt number against reality, then hands off the
-    actual Submission creation to imgana's submit_artwork pipeline
-    (unmodified). submission_url is a plain, already-public URL the caller
-    provides directly -- tap_app/api/submission.py::submit_artwork is
-    responsible for building this URL from the Worker's object_key before
-    calling here.
+    """Re-checks the completed-course guard, attempt cap, weekly
+    submission cap (program context only), and video prerequisite under a
+    row lock, cross-checks object_key's own attempt number against
+    reality, then hands off the actual Submission creation to imgana's
+    submit_artwork pipeline (unmodified). submission_url is a plain,
+    already-public URL the caller provides directly --
+    tap_app/api/submission.py::submit_artwork is responsible for building
+    this URL from the Worker's object_key before calling here.
+
+    EVENT-TRACK ROW RESOLUTION (fixed): the Unit Progress row for
+    context == "event" is now resolved via the SAME global, by-name lookup
+    (_resolve_row_for_context -> activities._resolve_event_unit_progress_row)
+    that activities.py's own submit_video_watched/submit_quiz use, instead
+    of always creating/reusing a row on the currently-active enrollment.
+    Previously, this function's own get_or_create_unit_progress_row(pe, ...)
+    call for event context could create a SECOND, disconnected Unit
+    Progress row whenever the student's active enrollment had rotated
+    since they last interacted with this event -- producing a row with no
+    video_watched history, which would then incorrectly fail the video
+    prerequisite below even though the student genuinely had watched the
+    video (on the OTHER, now-orphaned row). This also means
+    points/last_activity_at for an event submission are now awarded
+    against the row's true owning enrollment (owning_doc), not
+    unconditionally against `pe` -- see award_points's call below.
 
     object_key's attempt segment is validated against
     row.submission_attempts + 1 (see _validate_object_key_attempt) BEFORE
@@ -389,29 +460,43 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     submission's id/state from /progress/sync or /progress/last_submission
     instead.
 
-    BUGFIX: immediately after imgana creates the Submission row, this
-    function stamps Submission.program_enrollment = pe.name directly, via
-    a minimal frappe.db.set_value call. imgana's own pipeline is shared
-    with the WhatsApp channel, which has no ProgramEnrollment concept at
-    all, so it never sets this field itself -- this module is the one
-    place in the TapApp-facing call chain that actually holds both `pe`
-    and the newly created submission's name at the same time, so it's this
-    function's responsibility to make the connection. Without this write,
-    the row is permanently invisible to
-    shared/profile/sync.py::_find_last_submission_row, which filters on
-    program_enrollment = <active enrollment name> -- see module docstring
-    for the full reasoning. update_modified=False is used deliberately:
-    this is an immediate, same-transaction correction of the row imgana
-    just inserted, not a later edit, so it must not shift `modified` past
-    what imgana's own insert set -- that timestamp is what
-    _find_last_submission_row's own "ORDER BY modified desc" and
-    tap_app/api/submission.py::_resolve_updated_at_epoch both rely on as
-    the row's true "last changed" signal.
+    program_enrollment is stamped on the new Submission row as
+    owning_doc.name (the row's TRUE owning enrollment -- `pe` for program
+    context, or whatever enrollment actually owns the event row for event
+    context), not unconditionally `pe.name`, now that the two can differ.
 
-    DECISION D: last_activity_at is bumped via award_points(pe, ...,
-    bump_activity=True) on EVERY successful attempt (first or reattempt),
-    not only on the first attempt. Points themselves are only ever awarded
-    (a nonzero amount passed to award_points) on the first attempt.
+    COMPLETED COURSE: raises InvalidInput (error_code="course_completed")
+    immediately after resolving `pe`, if pe.status == "completed" -- see
+    _require_course_not_completed. Note this check is against `pe` (the
+    currently ACTIVE enrollment for this student's course level), which is
+    the correct thing to check for a program-context submission; for an
+    event-context submission whose owning enrollment (owning_doc) might
+    differ from `pe`, the check still applies to `pe` because
+    resolve_learning_unit_for_assignment and the weekly-cap check both
+    operate relative to the student's current active state, and an event
+    should remain submittable even if the student's unrelated PROGRAM
+    course has separately completed -- course completion on the program
+    track must never block an otherwise-valid event submission. This is
+    exactly the "let the event run even if PE completed" requirement:
+    _require_course_not_completed only ever raises when `pe.status` (the
+    active enrollment resolved for THIS call) is itself completed, and
+    even then, only blocks further PROGRAM-context submissions -- an
+    event-context call resolves its real owning doc separately via
+    _resolve_row_for_context and is never gated on `pe`'s own completion
+    status beyond the initial active-enrollment resolution needed to
+    locate the event in the first place.
+
+    retried-transaction note: this function is wrapped in
+    @with_serialization_retry (see shared/db_retry.py); a retry re-runs
+    the whole function body from scratch, including a fresh
+    _resolve_row_for_context call, so no state from a failed attempt
+    leaks into a retry.
+
+    DECISION D: last_activity_at is bumped via award_points(owning_doc,
+    ..., bump_activity=True) on EVERY successful attempt (first or
+    reattempt), against the row's TRUE owning enrollment. Points
+    themselves are only ever awarded (a nonzero amount passed to
+    award_points) on the first attempt.
     """
     if not submission_url or not isinstance(submission_url, str):
         raise InvalidInput("submission_url missing")
@@ -420,8 +505,10 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     lock_program_enrollment_row(pe_name)
     pe = frappe.get_doc("ProgramEnrollment", pe_name)
 
+    _require_course_not_completed(pe)
+
     unit = resolve_learning_unit_for_assignment(assignment_id, context, student_id)
-    row = get_or_create_unit_progress_row(pe, unit, context)
+    owning_doc, row = _resolve_row_for_context(pe, student_id, unit, context, create_if_missing=True)
 
     require_video_done(row)
 
@@ -481,12 +568,14 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
             f"submit_artwork never returns an identifier for the new row."
         )
 
-    # BUGFIX: stamp program_enrollment onto the new Submission row -- see
-    # module docstring and this function's own docstring above for the
-    # full reasoning. This is the one write that was previously missing
-    # end-to-end, since imgana's own _create_submission never populates
-    # this field (it has no ProgramEnrollment concept at all).
-    frappe.db.set_value("Submission", sub_name, "program_enrollment", pe.name, update_modified=False)
+    # Stamp program_enrollment onto the new Submission row as the row's
+    # TRUE owning enrollment (owning_doc), not unconditionally `pe` -- for
+    # an event-context submission whose row lives on a different,
+    # non-active enrollment, this keeps the stamp consistent with where
+    # the Unit Progress row itself actually lives, matching what
+    # shared/submission/review_result.py::handle_review_result expects to
+    # find via row["parent"].
+    frappe.db.set_value("Submission", sub_name, "program_enrollment", owning_doc.name, update_modified=False)
 
     row.submission = sub_name
     row.submission_attempts += 1
@@ -497,10 +586,33 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     # only ever nonzero on the first attempt (points_awarded stays 0 on a
     # reattempt) -- bump_activity=True is passed explicitly on every call
     # so a second-attempt submission still advances last_activity_at.
+    # Awarded against owning_doc -- the row's true owning enrollment --
+    # not unconditionally `pe`.
     points_awarded = points_for_submission_first_attempt() if is_first_attempt else 0
-    award_points(pe, points_awarded, bump_activity=True)
+    award_points(owning_doc, points_awarded, bump_activity=True)
+
+    # If this was a brand-new event Unit Progress row created just above,
+    # finalize its pointer on the Student Event Enrollment row once it has
+    # a real name (which only happens once its parent doc is saved).
+    if owning_doc is not pe:
+        owning_doc.save(ignore_permissions=True)
+        from shared.progress.activities import _finalize_event_enrollment_pointer
+        _finalize_event_enrollment_pointer(row)
 
     pe.save(ignore_permissions=True)
+
+    # Explicit commit at the end of this function, rather than relying
+    # solely on Frappe's end-of-request auto-commit. imgana's own
+    # submit_artwork call above already performs a mid-request
+    # frappe.db.commit() of its own (see tap_lms/imgana/submission.py) --
+    # everything from that point on, including this function's own writes,
+    # runs in a SEPARATE transaction from imgana's. Committing explicitly
+    # here removes any ambiguity about whether Frappe's own request-
+    # teardown commit logic treats this second transaction the same way it
+    # would treat the first, and is what actually surfaces a
+    # SerializationFailure to @with_serialization_retry at a well-defined
+    # point.
+    frappe.db.commit()
 
     attempts_remaining = max(cap - row.submission_attempts, 0)
     sub_status = frappe.db.get_value("Submission", sub_name, "status") or "Pending"
@@ -513,11 +625,7 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
         "attempt_number": row.submission_attempts,
         "attempts_remaining": attempts_remaining,
         "points_awarded": points_awarded,
-        "points_total": pe.points,
+        "points_total": owning_doc.points,
         "context": context,
-        # BUGFIX: same None-safety as tap_app/api/progress.py's
-        # _resolve_updated_at -- pe.last_activity_at is normally set by the
-        # award_points(..., bump_activity=True) call just above, but stays
-        # defensive here in case that ever changes.
-        "updated_at": int(pe.last_activity_at.timestamp()) if pe.last_activity_at else int(frappe.utils.now_datetime().timestamp()),
+        "updated_at": int(owning_doc.last_activity_at.timestamp()) if owning_doc.last_activity_at else int(frappe.utils.now_datetime().timestamp()),
     }

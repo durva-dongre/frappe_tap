@@ -8,6 +8,25 @@ submissions into the same bucket layout reuses this unchanged.
 Key shape (must match the Worker's own storage/keys.ts byte-for-byte):
     tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}
 
+v9 fix -- OBJECT_KEY_RE bounds tightened to match the Worker exactly:
+Previously this regex allowed assignment_id/student_id as short as 1
+character (`{1,80}`) and placed no upper bound on the extension
+(`[a-z0-9]+`), while the Worker's own patterns
+(worker/src/storage/keys.ts::FIELD_PATTERNS, used by
+assertObjectKeyMatches, and worker/src/handlers/internalHandlers.ts::
+OBJECT_KEY_PATTERN, used by the nightly sweep's gallery index validation)
+both require `{3,80}` for assignment_id/student_id and cap the extension
+at `{1,10}`. In practice the Worker validates a client-submitted
+object_key before it ever reaches Frappe, so the looser Frappe-side regex
+was not independently exploitable through that path -- but a key this
+regex alone would accept (a 1-2 char assignment_id/student_id, or an
+absurdly long extension) could be rejected by the Worker's own
+/internal/gallery/index validation if it were ever pushed there (e.g. by
+a future internal job parsing keys without the Worker in front), causing
+a silent mismatch between what Frappe considers a valid key and what the
+Worker's own gallery indexing will accept. OBJECT_KEY_RE now matches the
+Worker's FIELD_PATTERNS/OBJECT_KEY_PATTERN exactly on both bounds.
+
 WIRE SUBMISSION ID RECOVERY (no schema change)
 ------------------------------------------------
 There is deliberately no `worker_submission_id` column on the Submission
@@ -72,10 +91,16 @@ import re
 
 from shared.errors import InvalidInput
 
+# Bounds now match the Worker exactly:
+#   - assignment_id / student_id: {3,80}, matching worker/src/storage/keys.ts::
+#     FIELD_PATTERNS.assignment_id / FIELD_PATTERNS.student_id, and
+#     worker/src/handlers/internalHandlers.ts::OBJECT_KEY_PATTERN.
+#   - ext: {1,10}, matching worker/src/storage/keys.ts's filename regex
+#     ([a-zA-Z0-9]{1,10}) and OBJECT_KEY_PATTERN's own [A-Za-z0-9]{1,10}.
 OBJECT_KEY_RE = re.compile(
-    r"^tapapp/(?P<assignment_id>[A-Za-z0-9_-]{1,80})/"
-    r"(?P<student_id>[A-Za-z0-9_-]{1,80})/"
-    r"(?P<submission_id>[a-z2-7]{6,16})-(?P<attempt>[1-9][0-9]?)\.(?P<ext>[a-z0-9]+)$"
+    r"^tapapp/(?P<assignment_id>[A-Za-z0-9_-]{3,80})/"
+    r"(?P<student_id>[A-Za-z0-9_-]{3,80})/"
+    r"(?P<submission_id>[a-z2-7]{6,16})-(?P<attempt>[1-9][0-9]?)\.(?P<ext>[a-z0-9]{1,10})$"
 )
 
 EXT_FOR_SUBMISSION_TYPE = {"image": "webp", "video": "mp4"}

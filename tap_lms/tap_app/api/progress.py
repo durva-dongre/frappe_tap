@@ -45,12 +45,38 @@ point, not before.
 Completion fields: shared.progress.activities' submit_video_watched/
 submit_quiz optionally add unit_completed / course_completed /
 next_learning_unit_id to their result dicts (see that module's
-_apply_completion_fields). _add_completion_fields_if_present below copies
-those same keys into this file's own wire response, unchanged, only when
-they are actually present on the underlying result -- matching the "absent
-means nothing changed" convention used elsewhere (e.g. last_submission).
-No logic lives here: this is pure plumbing, exactly like every other field
-this file already passes through.
+_apply_completion_fields, which now gates course_completed /
+next_learning_unit_id on context == "program" -- an event activity
+completing never carries course-level semantics).
+_add_completion_fields_if_present below copies those same keys into this
+file's own wire response, unchanged, only when they are actually present
+on the underlying result -- matching the "absent means nothing changed"
+convention used elsewhere (e.g. last_submission). No logic lives here:
+this is pure plumbing, exactly like every other field this file already
+passes through.
+
+COMPLETED-COURSE WRITE GUARD (new): shared.enrollment.active_batch now
+resolves a "completed" ProgramEnrollment for reads (so /progress/sync and
+friends keep working once a course finishes -- see that module and
+shared/profile/sync.py). That fix is deliberately read-only: writing new
+activity against an already-completed PROGRAM-context enrollment must
+still be rejected explicitly, so this file now raises InvalidInput
+immediately if pe.status == "completed" AND context == "program",
+mirroring the identical guard added to
+shared.submission.lifecycle.check_attempt_cap / submit_artwork.
+
+This guard is deliberately scoped to context == "program" only: an event
+activity (video/quiz) must remain fully functional even when the
+student's PROGRAM course on this same ProgramEnrollment has separately
+completed -- "let the event run even if the ProgramEnrollment is
+completed" is an explicit requirement, since an event's own Unit Progress
+row may happen to live on a PE whose program track is already finished,
+and that has nothing to do with whether the event itself is still
+enrollable/playable. For context == "event", this file does not check
+pe.status at all; shared.progress.activities._resolve_event_unit_progress_row
+resolves the row's true owning enrollment independently, and that
+resolution is never gated on the ACTIVE enrollment's own completion
+status.
 """
 
 from __future__ import annotations
@@ -59,12 +85,27 @@ import frappe
 
 from tap_lms.tap_app.api import tap_app_method
 from shared.enrollment.active_batch import get_active_program_enrollment
+from shared.errors import InvalidInput
 from shared.progress.activities import (
     submit_video_watched as _submit_video_watched,
     submit_quiz as _submit_quiz,
     _finalize_event_enrollment_pointer,
 )
 from shared.profile.sync import get_sync_payload, get_last_submission_payload
+
+
+def _require_course_not_completed_for_program_write(pe, context: str) -> None:
+    """Rejects a program-context write against an already-completed
+    ProgramEnrollment. Deliberately a no-op for context == "event" -- see
+    module docstring's "COMPLETED-COURSE WRITE GUARD" section for why
+    event activity must remain available regardless of the enrollment's
+    own program-track completion status.
+    """
+    if context == "program" and pe.status == "completed":
+        raise InvalidInput(
+            "course already completed; no further program activity is accepted",
+            error_code="course_completed",
+        )
 
 
 def _save_affected_docs(pe, result: dict) -> None:
@@ -111,7 +152,9 @@ def _add_completion_fields_if_present(wire_response: dict, result: dict) -> None
     are actually present on result. See module docstring -- pure plumbing,
     no logic of its own; shared/progress/activities.py's
     _apply_completion_fields is the only place that decides whether/which
-    of these keys exist at all."""
+    of these keys exist at all (and, since the context-gating fix, never
+    adds course_completed/next_learning_unit_id for an event-context
+    result)."""
     for key in ("unit_completed", "course_completed", "next_learning_unit_id"):
         if key in result:
             wire_response[key] = result[key]
@@ -121,6 +164,7 @@ def _add_completion_fields_if_present(wire_response: dict, result: dict) -> None
 def submit_video_watched(student_id: str, unit_id: str, video_id: str, watched, context: str = "program"):
     watched = bool(watched)
     pe = get_active_program_enrollment(student_id)
+    _require_course_not_completed_for_program_write(pe, context)
     result = _submit_video_watched(pe, unit_id, video_id, watched, context)
     _save_affected_docs(pe, result)
     response = {
@@ -138,6 +182,7 @@ def submit_video_watched(student_id: str, unit_id: str, video_id: str, watched, 
 @tap_app_method
 def submit_quiz(student_id: str, unit_id: str, quiz_id: str, answers, context: str = "program"):
     pe = get_active_program_enrollment(student_id)
+    _require_course_not_completed_for_program_write(pe, context)
     result = _submit_quiz(pe, unit_id, quiz_id, answers, context)
     _save_affected_docs(pe, result)
     response = {

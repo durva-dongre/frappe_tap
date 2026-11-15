@@ -62,11 +62,10 @@ in case the video-first requirement is ever relaxed in the future, and
 costs nothing today.
 
 SUBMISSION_THIS_WEEK: this counter is NOT touched anywhere in this file.
-It is incremented exactly once per graded submission review OUTCOME by
-shared/submission/review_result.py::handle_review_result -- never at
-submit time, and never for video/quiz activity at all. See that module
-and shared/progress/rewards.py::max_submissions_per_week for the weekly
-cap this counter feeds.
+It is incremented by shared/submission/review_result.py::handle_review_result
+-- never at submit time, and never for video/quiz activity at all. See
+that module and shared/progress/rewards.py::max_submissions_per_week for
+the weekly cap this counter feeds.
 
 LAST_ACTIVITY_AT POLICY: submit_video_watched and submit_quiz call
 shared.progress.rewards.award_points with bump_activity=False -- a plain
@@ -75,6 +74,29 @@ last_activity_at or trigger /progress/sync's "has anything changed"
 check. last_activity_at advances only on a submission update (see
 shared/submission/lifecycle.py and shared/submission/review_result.py's
 own last_activity_at bumps).
+
+COURSE-COMPLETION SCOPING (event vs. program): course completion
+(`course_completed` / `next_learning_unit_id` / calling
+mark_course_completed) is a PROGRAM-TRACK concept only. An event's Unit
+Progress row completing (video+quiz+submission all done for that one
+event unit) has nothing to do with whether the student's program course
+is finished -- the two tracks live on Unit Progress rows that happen to
+share a parent ProgramEnrollment document, but are otherwise unrelated.
+
+Previously, _apply_completion_fields evaluated is_course_complete /
+mark_course_completed for ANY just_completed row, including event-context
+ones, with no context check at all. Since an event's owning enrollment
+(resolved via _resolve_event_unit_progress_row) can be a real, otherwise
+unrelated ProgramEnrollment whose own PROGRAM track genuinely is already
+fully complete, finishing an event activity on that enrollment would
+incorrectly report course_completed: true (and call mark_course_completed
+a second, harmless-but-wrong time) purely as a side effect of event
+activity. _apply_completion_fields now takes an explicit `context`
+argument and only evaluates course completion when context == "program";
+an event-context completion still reports unit_completed: true (the unit
+itself is done), but never course_completed or next_learning_unit_id --
+those keys are simply absent, consistent with this codebase's "absent
+means not applicable" convention.
 """
 
 from __future__ import annotations
@@ -170,6 +192,12 @@ def _resolve_event_unit_progress_row(program_enrollment_doc, student_id: str, le
     student's progress on this event's unit" -- one dead, one live --
     with no way to tell which is authoritative from outside this
     function.
+
+    This is the single source of truth for event-row resolution: it is
+    used by this module's own submit_video_watched/submit_quiz, AND by
+    shared.submission.lifecycle.submit_artwork and check_attempt_cap (via
+    import), so all three event-context write/read paths resolve to the
+    exact same row.
     """
     event_row = _find_active_event_enrollment_row(student_id, learning_unit)
 
@@ -232,13 +260,11 @@ def _resolve_event_unit_progress_row(program_enrollment_doc, student_id: str, le
         # A brand-new child row appended via `append()` has no `name` yet
         # until the parent doc is saved (Frappe assigns child-table names on
         # insert/save). If it's not yet assigned, the pointer write above is
-        # a no-op (None); the caller (submit_video_watched/submit_quiz)
-        # saves program_enrollment_doc at the end of the request, after
-        # which `row.name` will be populated. We re-set the pointer in that
-        # case via a scheduled-after-save step: simplest correct fix is to
-        # have the caller persist the pointer after its own save, so we
-        # surface that need by stashing the event_row name on the returned
-        # row object for the caller to finish wiring up if necessary.
+        # a no-op (None); the caller (submit_video_watched/submit_quiz/
+        # submit_artwork) saves program_enrollment_doc at the end of the
+        # request, after which `row.name` will be populated. We re-set the
+        # pointer in that case via _finalize_event_enrollment_pointer below,
+        # called by the caller after its own save.
         if not getattr(row, "name", None):
             row._pending_event_enrollment_pointer = event_row["name"]
 
@@ -246,7 +272,8 @@ def _resolve_event_unit_progress_row(program_enrollment_doc, student_id: str, le
 
 
 def _finalize_event_enrollment_pointer(row) -> None:
-    """Called by the API-layer wrapper (tap_app/api/progress.py) after
+    """Called by the API-layer wrapper (tap_app/api/progress.py, and
+    shared.submission.lifecycle.submit_artwork) after
     program_enrollment_doc.save() -- at which point a freshly-appended Unit
     Progress child row finally has its own `name` assigned by Frappe. If
     _resolve_event_unit_progress_row had to defer the Student Event
@@ -279,20 +306,27 @@ def resolve_video_id_for_unit(unit_id: str) -> str | None:
     return None
 
 
-def _apply_completion_fields(result: dict, program_enrollment_doc, just_completed: bool) -> None:
+def _apply_completion_fields(result: dict, program_enrollment_doc, just_completed: bool, context: str) -> None:
     """Shared by submit_video_watched and submit_quiz: if just_completed is
-    True, decides whether the WHOLE COURSE is now finished
-    (shared.enrollment.unit_rotation.is_course_complete) and, if so, marks
-    the enrollment "completed" (shared.enrollment.enrollment.
-    mark_course_completed) -- then adds the documented completion fields
-    directly into `result` in place:
+    True, adds "unit_completed": True to `result` in place.
 
-      - Unit completed, course NOT complete:
+    Course-level completion (course_completed / next_learning_unit_id /
+    calling mark_course_completed) is evaluated and reported ONLY when
+    context == "program" -- see module docstring's "COURSE-COMPLETION
+    SCOPING" section for why an event unit completing must never imply or
+    report anything about course completion, even though both tracks can
+    share the same owning ProgramEnrollment document.
+
+      - context == "program", unit completed, course NOT complete:
             {"unit_completed": True, "course_completed": False,
              "next_learning_unit_id": <next unit id>}
-      - Unit completed, course IS complete:
+      - context == "program", unit completed, course IS complete:
             {"unit_completed": True, "course_completed": True}
             -- no next_learning_unit_id key at all.
+      - context == "event", unit completed:
+            {"unit_completed": True}
+            -- no course_completed or next_learning_unit_id key at all;
+            event completion has no course-level meaning.
       - Unit did NOT complete on this call: no keys are added at all
         ("absent means nothing changed" convention, matching how
         last_submission is handled elsewhere in this codebase) -- result
@@ -300,14 +334,20 @@ def _apply_completion_fields(result: dict, program_enrollment_doc, just_complete
 
     mark_course_completed is idempotent (a no-op, returning False, if the
     enrollment is already "completed") -- safe to call on every call where
-    just_completed is True, even if an earlier call already completed the
-    course (shouldn't happen given just_completed's own definition, but
-    mark_course_completed tolerates it regardless).
+    just_completed is True and context == "program", even if an earlier
+    call already completed the course.
     """
     if not just_completed:
         return
 
     result["unit_completed"] = True
+
+    if context != "program":
+        # Event-track completion has no course-level meaning. Report that
+        # the unit finished; say nothing about course_completed or
+        # next_learning_unit_id, which only make sense for the program
+        # track.
+        return
 
     if is_course_complete(program_enrollment_doc):
         mark_course_completed(program_enrollment_doc.name)
@@ -407,10 +447,12 @@ def submit_video_watched(program_enrollment_doc, unit_id: str, video_id: str, wa
     # Kept for symmetry across all three completion-reporting call sites.
     # With the video-first invariant enforced on the quiz path too (see
     # module docstring), just_completed genuinely cannot fire here in
-    # practice (something else is always still outstanding when video is
-    # watched) -- but the block is retained so all three call sites carry
-    # the same shape.
-    _apply_completion_fields(result, program_enrollment_doc, status_result["just_completed"])
+    # practice for context == "program" (something else is always still
+    # outstanding when video is watched) -- but for context == "event" it
+    # CAN fire (video can be the last of the three signals for an event
+    # unit), so this call is live, not purely defensive. context is passed
+    # through so course-completion is never evaluated for an event row.
+    _apply_completion_fields(result, program_enrollment_doc, status_result["just_completed"], context)
 
     return result
 
@@ -585,7 +627,9 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
     quiz CAN be the activity that tips a unit to "Completed" -- when
     submission already finished first. This function's completion block
     (via _apply_completion_fields) is reachable and expected to fire in
-    real usage.
+    real usage for context == "program"; for context == "event" it only
+    ever reports unit_completed, never course_completed (see that
+    function's docstring).
 
     LAST_ACTIVITY_AT: award_points is called with bump_activity=False -- a
     quiz attempt still earns and persists points; it does not, on its own,
@@ -655,7 +699,7 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
         "_row": row,
     }
 
-    _apply_completion_fields(result, program_enrollment_doc, status_result["just_completed"])
+    _apply_completion_fields(result, program_enrollment_doc, status_result["just_completed"], context)
 
     return result
 
