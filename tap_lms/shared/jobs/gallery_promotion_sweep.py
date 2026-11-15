@@ -55,6 +55,60 @@ In real traffic, completed_at is always set by update_submission the
 moment a submission finishes grading; a NULL completed_at on a Completed
 submission indicates the row was created/edited outside that normal path
 (e.g. manual testing) rather than a gap in the grading pipeline itself.
+
+v10 fix -- assignment_id sanitized before being sent to D1:
+_build_index_payload previously sent sub.get("assign_id") (or
+assignment_id_link) to D1's gallery_items.assignment_id column completely
+unmodified. A legacy/WhatsApp-sourced assignment_id can contain a space
+(e.g. "Spaceship Assignment-62591"), which the Worker's own
+ASSIGNMENT_ID_PATTERN (worker/src/handlers/galleryHandlers.ts, used to
+validate the assignment_id query param on GET /gallery) rejects outright
+with INVALID_INPUT -- meaning a client could never query the gallery by
+assignment_id for such a row, even once it was successfully indexed. This
+mirrors the same character-class mismatch already fixed in
+shared.submission.object_naming.build_object_key for the R2 object key
+itself (see that module's v10 fix note) -- the two must use the same
+sanitized value, or a row's D1 assignment_id and its embedded
+object_key's assignment_id segment disagree with each other, which is
+confusing and makes "does this row's key match its own assignment_id"
+no longer true by inspection. _build_index_payload below calls
+shared.submission.object_naming.sanitize_key_segment on assignment_id
+before including it in the payload sent to notify_worker_gallery_index_batch,
+so the D1 column's value is always queryable and always matches the
+assignment_id segment baked into the row's own object_key.
+
+v11 fix -- store ids, not display names, for state/district/school:
+_build_index_payload previously resolved school_id/state_id/district_id
+down to their human-readable display names (school.name1, state.state_name,
+district.district_name) before writing them into gallery_items. For
+state/district this happened to be harmless, because State.name and
+District.name ARE their own display strings (autoname: "field:state_name"
+/ "field:district_name" -- see tap_lms/doctype/state/state.json and
+tap_lms/doctype/district/district.json), so the id and the display name
+are the same string by construction.
+
+School is NOT the same: School.name is autonamed as
+"format:{name1}-SC{#####}" (tap_lms/doctype/school/school.json), so a
+School's own doc name/id (e.g. "Green Valley School-SC00536") is a
+DIFFERENT string from its name1 field (e.g. "Green Valley School").
+student.school_id (a Link to School) stores that doc name/id, and that is
+exactly what the Worker's own get_profile_scope
+(shared/profile/student.py) and the Worker's scope_cache_token both carry
+as `school` -- NOT the resolved name1. Resolving school_id down to name1
+before writing to D1 meant gallery_items.school could never match a
+real student's profile scope at the "school" fallback level: the Worker
+queries D1 with the student's school_id (via normalizeScopeValue), but
+the stored row held the display name instead.
+
+_build_index_payload now writes student.state_id / student.district_id /
+student.school_id directly (the Link doc-name values themselves), each
+lowercased, matching exactly what the Worker's gallery scope resolution
+(shared/profile/student.py::get_profile_scope,
+worker/src/storage/profileScope.ts::normalizeScopeValue) stores and
+compares against. The separate State/District/School name lookups (via
+frappe.db.get_value) are removed entirely -- they are no longer needed
+anywhere in this function, since the ids themselves are now the values
+written to D1.
 """
 
 from __future__ import annotations
@@ -74,6 +128,7 @@ from shared.config.secrets_cache import (
 from shared.submission.object_naming import (
     build_object_key,
     extract_gcs_bucket_and_key,
+    sanitize_key_segment,
     submission_type_from_content_type,
     submission_type_from_ext,
 )
@@ -182,6 +237,13 @@ def _promote_one_submission_to_r2(
     """Copies one submission's media from GCS to R2, under the gallery's
     tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}
     key shape, and returns {"r2_object_key": ..., "media_type": ...}.
+
+    build_object_key (shared.submission.object_naming) sanitizes
+    assignment_id/student_id internally before building the key, so the
+    object_key this function returns is always safe to index via
+    /internal/gallery/index regardless of what raw characters the source
+    assignment_id/student_id actually contain -- no sanitization needed
+    here on this function's own part.
 
     Returns None (logged at info level) for any legitimately-nothing-to-
     promote case: missing identifiers, no usable GCS submission_url, R2
@@ -341,25 +403,49 @@ def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict
     gallery_promotion.py::_build_index_row but operates on a plain dict
     (from the raw SQL query above) rather than a loaded Submission doc,
     since this sweep never loads the full doc for each row -- it's all
-    done off the lighter raw-SQL row to keep the loop cheap."""
+    done off the lighter raw-SQL row to keep the loop cheap.
+
+    assignment_id is sanitized via sanitize_key_segment before being
+    included in the payload -- see module docstring's v10 fix note. This
+    keeps the D1 gallery_items.assignment_id column always queryable
+    through the Worker's own ASSIGNMENT_ID_PATTERN (GET /gallery's
+    assignment_id query param) and always matching the assignment_id
+    segment already embedded in this same row's own object_key.
+
+    state/district/school are now the student's own Link-field VALUES
+    (state_id / district_id / school_id -- the doc names/ids themselves),
+    lowercased, NOT display names resolved via a separate doctype lookup.
+    See module docstring's v11 fix note for the full reasoning -- in
+    short, this is what the Worker's own gallery scope resolution
+    (shared/profile/student.py::get_profile_scope,
+    worker/src/storage/profileScope.ts) stores and compares against, and
+    is the only way gallery_items.school can ever match a real student's
+    profile scope, since School.name (the id) and School.name1 (the
+    display name) are two different strings by construction.
+    """
     student = frappe.db.get_value(
         "Student", sub["student_id"],
         ["name1", "grade", "school_id", "state_id", "district_id"], as_dict=True,
     ) or {}
 
-    state_name = frappe.db.get_value("State", student.get("state_id"), "state_name") if student.get("state_id") else None
-    district_name = frappe.db.get_value("District", student.get("district_id"), "district_name") if student.get("district_id") else None
-    school_name = frappe.db.get_value("School", student.get("school_id"), "name1") if student.get("school_id") else None
+    raw_assignment_id = sub.get("assign_id") or sub.get("assignment_id_link")
 
     return {
         "academic_year": (sub.get("completed_at") or sub.get("created_at") or frappe.utils.now_datetime()).year,
-        "assignment_id": sub.get("assign_id") or sub.get("assignment_id_link"),
+        "assignment_id": sanitize_key_segment(raw_assignment_id),
         "student_id": sub["student_id"],
         "submission_id": sub["name"],
         "first_name": student.get("name1"),
-        "state": (state_name or "").lower() or None,
-        "district": (district_name or "").lower() or None,
-        "school": school_name,
+        # IDs, not display names -- see v11 fix note above. state_id and
+        # district_id already ARE their own display strings by doctype
+        # construction (State/District autoname on the name field
+        # itself), so lowercasing the id changes nothing in practice for
+        # those two; school_id is where this actually matters, since
+        # School.name (the id, e.g. "Green Valley School-SC00536") is a
+        # different string from School.name1 ("Green Valley School").
+        "state": (student.get("state_id") or "").lower() or None,
+        "district": (student.get("district_id") or "").lower() or None,
+        "school": (student.get("school_id") or "").lower() or None,
         "grade": int(student["grade"]) if student.get("grade") else None,
         "media_type": media_type,
         "object_key": r2_object_key,
