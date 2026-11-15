@@ -22,49 +22,45 @@ This also makes the sweep self-healing: a row whose R2 copy succeeded but
 whose D1 index call failed last night is still "not in D1," so it's
 naturally re-attempted tonight with no separate stuck-state tracking.
 
+WINDOW: fixed 26-hour rolling lookback, every night, unconditionally --
+see _resolve_sweep_window below. No anchoring to this job's own run
+history (previously anchored to the last successful Shared Logs row for
+this job, with a lookback-day ceiling as fallback). The rolling window is
+simpler to reason about and immune to being thrown off by a manual test
+run, a disabled night, or a prior failure -- "last 26 hours, every night"
+never needs run-history bookkeeping to stay correct. The 2-hour overlap
+over a plain 24h window is deliberate headroom against clock drift and
+boundary-adjacent completed_at values; re-scanning that overlap is cheap
+and side-effect-free because the known_ids diff below already drops
+anything D1 has already indexed before any R2 copy or D1 write happens.
+
 BUGFIX (eligibility window field): _fetch_eligible_submissions and
-_count_eligible_submissions previously filtered on Submission.created_at.
-A submission with normal creation time but UNUSUALLY SLOW grading (stuck
-in Processing for longer than the sweep's lookback window before finally
+_count_eligible_submissions filter on Submission.completed_at, not
+created_at. A submission with normal creation time but UNUSUALLY SLOW
+grading (stuck in Processing for longer than the window before finally
 completing) would have a created_at that falls OUTSIDE the window by the
-time it actually becomes gallery-eligible -- the sweep would never select
-it, regardless of how recently it genuinely became eligible, since
-created_at never changes. This was a silent, permanent gallery-promotion
-gap for any submission whose grading latency exceeded the lookback
-window, and it also meant _count_eligible_submissions (which feeds
-gallery_remaining_backlog in the nightly analytics row) systematically
-UNDERCOUNTED the real backlog, since a slow-graded-but-now-eligible row
-with an old created_at was invisible to both functions.
-
-Both functions now filter on Submission.completed_at instead --
-completed_at is set exactly once, by feedback_processor.py::update_submission,
-at the moment a submission's grading actually finishes and its
-result_status/status become final. This is also the same field
-shared/jobs/analytics_daily.py already uses for its own
+time it actually becomes gallery-eligible -- filtering on completed_at
+(set exactly once, by feedback_processor.py::update_submission, at the
+moment grading actually finishes) avoids that gap. This is also the same
+field shared/jobs/analytics_daily.py already uses for its own
 submission_success_original/submission_success_flagged/submission_failed
-window queries, so the "day"/"window" definition is now consistent across
-both jobs rather than created_at being used here and completed_at being
-used there for conceptually the same kind of query.
+window queries, so the "day"/"window" definition is consistent across
+both jobs.
 
-A submission with completed_at IS NULL (not yet graded, or an older row
-predating this field's reliable population) is correctly excluded by the
-`completed_at >= since` comparison -- NULL never satisfies a >= comparison
-in SQL, so this requires no separate "IS NOT NULL" guard.
-
-WINDOW ANCHORING. The window is not a blind rolling N-day scan every
-night -- it anchors to this job's own last successful run (read back from
-Shared Logs), so a normal night's sweep only asks about "since yesterday,"
-keeping both the Frappe query and the D1 known_ids calls cheap and narrow.
-gallery_sweep_lookback_days is the CEILING/fallback, used only on the very
-first run ever, or when the gap since the last success exceeds it (a
-broken job for many days does not scan "all of history" -- it caps at the
-configured number of days back and lets the remaining backlog spill into
-subsequent nights via the same self-healing set-difference).
+A submission with completed_at IS NULL (not yet graded, or a manually
+seeded/test row that bypassed the normal grading pipeline) is correctly
+excluded by the `completed_at >= since` comparison -- NULL never satisfies
+a >= comparison in SQL, so this requires no separate "IS NOT NULL" guard.
+In real traffic, completed_at is always set by update_submission the
+moment a submission finishes grading; a NULL completed_at on a Completed
+submission indicates the row was created/edited outside that normal path
+(e.g. manual testing) rather than a gap in the grading pipeline itself.
 """
 
 from __future__ import annotations
 
 import mimetypes
+import time
 from typing import Optional, TypedDict
 
 import frappe
@@ -73,7 +69,6 @@ from shared.config.secrets_cache import (
     get_gcs_credentials,
     get_r2_credentials,
     get_r2_sweep_batch_size,
-    get_gallery_sweep_lookback_days,
     get_gallery_index_chunk_size,
 )
 from shared.submission.object_naming import (
@@ -93,6 +88,12 @@ from shared.jobs._log import log_job_run
 _GCS_DOWNLOAD_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only"
 _GCS_API_TIMEOUT_SECONDS = 30
 
+# Fixed rolling lookback window, every night. 26h (not 24h) deliberately
+# overlaps the previous night's window by 2 hours as headroom against
+# clock drift or a completed_at landing right at a boundary. See module
+# docstring's "WINDOW" section for why re-scanning the overlap is safe.
+ROLLING_WINDOW_HOURS = 26
+
 
 class R2PromotionResult(TypedDict):
     r2_object_key: str
@@ -100,35 +101,19 @@ class R2PromotionResult(TypedDict):
 
 
 def _resolve_sweep_window() -> tuple[int, bool]:
-    """Returns (since_epoch, hit_ceiling). Anchors to this job's own last
-    successful Shared Logs row (source="gallery_promotion_sweep",
-    status="success", most recent finished_at). Falls back to
-    now - gallery_sweep_lookback_days*86400 on a first-ever run, or clamps
-    to that same floor if the last success is further back than the
-    ceiling allows -- hit_ceiling is True in the latter two cases, so the
-    caller can flag it in the result for visibility."""
-    import time
+    """Returns (since_epoch, hit_lookback_ceiling). Always a fixed
+    ROLLING_WINDOW_HOURS-hour lookback from right now -- no read of
+    Shared Logs, no dependency on whether last night's run succeeded,
+    failed, or didn't run at all.
 
-    ceiling_days = get_gallery_sweep_lookback_days()
-    ceiling_epoch = int(time.time()) - ceiling_days * 86400
-
-    last_success = frappe.db.sql(
-        """
-        SELECT finished_at FROM "tabShared Logs"
-         WHERE source = 'gallery_promotion_sweep' AND status = 'success'
-         ORDER BY finished_at DESC
-         LIMIT 1
-        """,
-        as_dict=True,
-    )
-
-    if not last_success or not last_success[0].get("finished_at"):
-        return ceiling_epoch, True
-
-    last_epoch = int(last_success[0]["finished_at"].timestamp())
-    if last_epoch < ceiling_epoch:
-        return ceiling_epoch, True
-    return last_epoch, False
+    hit_lookback_ceiling is always False now -- the ceiling concept from
+    the old anchored-window design no longer applies. Kept in the return
+    shape only so run_sweep()'s own result dict, and anything downstream
+    reading it (nightly_pipeline.py's pipeline_context, analytics_daily.py),
+    don't need a field rename.
+    """
+    since_epoch = int(time.time()) - ROLLING_WINDOW_HOURS * 3600
+    return since_epoch, False
 
 
 def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
@@ -141,9 +126,7 @@ def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
 
     Filters on completed_at, not created_at -- see module docstring's
     "BUGFIX" section for why: a submission's eligibility moment is when
-    its grading finishes, not when it was first created, and a
-    slow-graded submission's created_at can fall outside the window even
-    though it only just became eligible.
+    its grading finishes, not when it was first created.
     """
     from datetime import datetime
 
@@ -359,8 +342,6 @@ def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict
     (from the raw SQL query above) rather than a loaded Submission doc,
     since this sweep never loads the full doc for each row -- it's all
     done off the lighter raw-SQL row to keep the loop cheap."""
-    import time
-
     student = frappe.db.get_value(
         "Student", sub["student_id"],
         ["name1", "grade", "school_id", "state_id", "district_id"], as_dict=True,
