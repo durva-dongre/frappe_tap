@@ -5,78 +5,41 @@ Worker-facing wrappers for the three progress-reporting activity routes
 (submit_video_watched, submit_quiz) and the two sync routes (progress_sync,
 last_submission).
 
-BUGFIX (updated_at None-safety): pe.last_activity_at can legitimately be
-None the first time this doc is ever touched by a call that passes
-bump_activity=False and never previously had any activity recorded (e.g.
-a "repeat" video-watched call on a fresh enrollment, or a quiz-only
-enrollment that never submitted). Both submit_video_watched and
-submit_quiz now fall back to the current server time for `updated_at`
-when pe.last_activity_at is still None after the activity call, instead
-of crashing on NoneType.timestamp().
-
-submit_video_watched's and submit_quiz's responses return `context` and
-`repeat` directly from shared.progress.activities' own result dicts,
-because the contract (API_Reference.md §3.1/§3.2) requires both fields on
-every call, including a repeat.
-
-`points_tier` is intentionally never returned by this file, or by any other
-progress/auth endpoint in this codebase: the Worker computes it from
-points_total against its own threshold table (API_Reference.md §0.2/§3.1),
-keyed by POINT_TIERS_VERSION. Keeping that computation on the Worker side,
-not Frappe's, means the tier table can change without a Frappe deploy --
-this file has nothing to do and nothing to change if that table is ever
-revised.
+`points_tier` is intentionally never returned by this file: the Worker
+computes it from points_total against its own threshold table.
 
 For context == "event", shared.progress.activities may resolve and mutate
 a ProgramEnrollment doc other than the caller's currently-active one (the
-doc that actually owns the student's existing event Unit Progress row --
-see that module's docstring for why event-track writes must stay anchored
-there rather than to "whichever enrollment is active right now").
+doc that actually owns the student's existing event Unit Progress row).
 _save_affected_docs saves whichever doc(s) were actually mutated: the
-active `pe` always (for last_activity_at bookkeeping), plus the "owning"
-doc the activity function returns when it differs from `pe` (for
-points/gems and the Unit Progress row itself). It also finalizes the
-event-enrollment unit_progress pointer after save, via
-shared.progress.activities._finalize_event_enrollment_pointer, because a
-brand-new Unit Progress child row only receives its Frappe-assigned `name`
-once its parent doc is saved -- the pointer write has to happen after that
-point, not before.
+active `pe` always (for last_activity_at bookkeeping on the student's main
+record), plus the "owning" doc the activity function returns when it
+differs from `pe` (for points/gems and the Unit Progress row itself). It
+also finalizes the event-enrollment unit_progress pointer after save.
+
+WIRE-FIELD / OWNING-DOC CONSISTENCY: points_total and updated_at in the
+wire response must both come from whichever doc actually received the
+write for this call -- `result["_owning_doc"]`, not unconditionally the
+caller's active `pe`. shared.progress.activities already returns
+points_total computed off owning_doc; _resolve_updated_at below mirrors
+that by taking the same owning_doc explicitly, instead of always reading
+pe.last_activity_at. For program context owning_doc and pe are the same
+object, so nothing changes there; for event context on a non-active
+enrollment, this is what keeps updated_at in sync with the enrollment that
+was actually touched.
 
 Completion fields: shared.progress.activities' submit_video_watched/
 submit_quiz optionally add unit_completed / course_completed /
-next_learning_unit_id to their result dicts (see that module's
-_apply_completion_fields, which now gates course_completed /
-next_learning_unit_id on context == "program" -- an event activity
-completing never carries course-level semantics).
+next_learning_unit_id to their result dicts.
 _add_completion_fields_if_present below copies those same keys into this
-file's own wire response, unchanged, only when they are actually present
-on the underlying result -- matching the "absent means nothing changed"
-convention used elsewhere (e.g. last_submission). No logic lives here:
-this is pure plumbing, exactly like every other field this file already
-passes through.
+file's own wire response, unchanged, only when actually present.
 
-COMPLETED-COURSE WRITE GUARD (new): shared.enrollment.active_batch now
-resolves a "completed" ProgramEnrollment for reads (so /progress/sync and
-friends keep working once a course finishes -- see that module and
-shared/profile/sync.py). That fix is deliberately read-only: writing new
-activity against an already-completed PROGRAM-context enrollment must
-still be rejected explicitly, so this file now raises InvalidInput
-immediately if pe.status == "completed" AND context == "program",
-mirroring the identical guard added to
-shared.submission.lifecycle.check_attempt_cap / submit_artwork.
-
-This guard is deliberately scoped to context == "program" only: an event
-activity (video/quiz) must remain fully functional even when the
-student's PROGRAM course on this same ProgramEnrollment has separately
-completed -- "let the event run even if the ProgramEnrollment is
-completed" is an explicit requirement, since an event's own Unit Progress
-row may happen to live on a PE whose program track is already finished,
-and that has nothing to do with whether the event itself is still
-enrollable/playable. For context == "event", this file does not check
-pe.status at all; shared.progress.activities._resolve_event_unit_progress_row
-resolves the row's true owning enrollment independently, and that
-resolution is never gated on the ACTIVE enrollment's own completion
-status.
+COMPLETED-COURSE WRITE GUARD: a program-context write against an
+already-completed ProgramEnrollment is rejected explicitly here, mirroring
+the identical guard in shared.submission.lifecycle.check_attempt_cap /
+submit_artwork. Deliberately scoped to context == "program" only -- event
+activity must remain available even when the student's unrelated program
+track on this same PE has separately completed.
 """
 
 from __future__ import annotations
@@ -96,11 +59,9 @@ from shared.profile.sync import get_sync_payload, get_last_submission_payload
 
 def _require_course_not_completed_for_program_write(pe, context: str) -> None:
     """Rejects a program-context write against an already-completed
-    ProgramEnrollment. Deliberately a no-op for context == "event" -- see
-    module docstring's "COMPLETED-COURSE WRITE GUARD" section for why
-    event activity must remain available regardless of the enrollment's
-    own program-track completion status.
-    """
+    ProgramEnrollment. A no-op for context == "event" -- event activity
+    must remain available regardless of the enrollment's own program-track
+    completion status."""
     if context == "program" and pe.status == "completed":
         raise InvalidInput(
             "course already completed; no further program activity is accepted",
@@ -111,14 +72,14 @@ def _require_course_not_completed_for_program_write(pe, context: str) -> None:
 def _save_affected_docs(pe, result: dict) -> None:
     """Saves whichever ProgramEnrollment doc(s) an activity call actually
     mutated. `pe` (the active enrollment) is always saved, since
-    last_activity_at bookkeeping always happens on it -- this is also what
-    persists activate_if_inactive's in-memory status flip for a student's
-    first-ever program-context activity (see shared/progress/activities.py::
-    submit_video_watched), with no separate save needed for that. If the
-    activity resolved a *different* owning doc (event-context write
-    anchored to a past enrollment's existing Unit Progress row), that doc
-    is saved too, and the event enrollment's unit_progress pointer is
-    finalized now that the row has a real name."""
+    last_activity_at bookkeeping on the student's main record happens on
+    it. If the activity resolved a *different* owning doc (event-context
+    write anchored to a past enrollment's existing Unit Progress row),
+    that doc is saved too, and the event enrollment's unit_progress
+    pointer is finalized now that the row has a real name. The owning doc
+    is popped off `result` here rather than earlier, so callers that need
+    it for wire-field derivation (_resolve_updated_at below) must capture
+    it from the return value of this function."""
     owning_doc = result.pop("_owning_doc", None)
     row = result.pop("_row", None)
 
@@ -130,31 +91,32 @@ def _save_affected_docs(pe, result: dict) -> None:
     if row is not None:
         _finalize_event_enrollment_pointer(row)
 
+    return owning_doc
 
-def _resolve_updated_at(pe) -> int:
+
+def _resolve_updated_at(doc) -> int:
     """The one place `updated_at` is computed for submit_video_watched /
-    submit_quiz's wire response. pe.last_activity_at can legitimately
-    still be None after _save_affected_docs -- e.g. a "repeat" call
-    (video already watched, so award_points/bump_activity never ran) on
-    an enrollment that has never otherwise had activity recorded. Falls
+    submit_quiz's wire response. Takes the doc that actually owns the
+    write for this call (owning_doc, as returned by _save_affected_docs)
+    -- never unconditionally the caller's active `pe` -- so event-context
+    activity on a non-active enrollment reports that enrollment's own
+    last_activity_at, matching the points_total this same call already
+    reports off the identical doc.
+
+    doc.last_activity_at can legitimately still be None -- e.g. a "repeat"
+    call (video already watched, so award_points/bump_activity never ran)
+    on an enrollment that has never otherwise had activity recorded. Falls
     back to the current server time in that case rather than crashing on
-    NoneType.timestamp(). This fallback is a real, meaningful timestamp
-    for "as of now" -- it is not a sentinel the client needs to treat
-    specially."""
-    if pe.last_activity_at:
-        return int(pe.last_activity_at.timestamp())
+    NoneType.timestamp()."""
+    if doc.last_activity_at:
+        return int(doc.last_activity_at.timestamp())
     return int(frappe.utils.now_datetime().timestamp())
 
 
 def _add_completion_fields_if_present(wire_response: dict, result: dict) -> None:
     """Copies unit_completed/course_completed/next_learning_unit_id from
     result into wire_response, unchanged, only for whichever of these keys
-    are actually present on result. See module docstring -- pure plumbing,
-    no logic of its own; shared/progress/activities.py's
-    _apply_completion_fields is the only place that decides whether/which
-    of these keys exist at all (and, since the context-gating fix, never
-    adds course_completed/next_learning_unit_id for an event-context
-    result)."""
+    are actually present on result."""
     for key in ("unit_completed", "course_completed", "next_learning_unit_id"):
         if key in result:
             wire_response[key] = result[key]
@@ -166,14 +128,14 @@ def submit_video_watched(student_id: str, unit_id: str, video_id: str, watched, 
     pe = get_active_program_enrollment(student_id)
     _require_course_not_completed_for_program_write(pe, context)
     result = _submit_video_watched(pe, unit_id, video_id, watched, context)
-    _save_affected_docs(pe, result)
+    owning_doc = _save_affected_docs(pe, result)
     response = {
         "points_awarded": result["points_awarded"],
         "points_total": result["points_total"],
         "context": result["context"],
         "repeat": result["repeat"],
         "video_id": result["video_id"],
-        "updated_at": _resolve_updated_at(pe),
+        "updated_at": _resolve_updated_at(owning_doc if owning_doc is not None else pe),
     }
     _add_completion_fields_if_present(response, result)
     return response
@@ -184,7 +146,7 @@ def submit_quiz(student_id: str, unit_id: str, quiz_id: str, answers, context: s
     pe = get_active_program_enrollment(student_id)
     _require_course_not_completed_for_program_write(pe, context)
     result = _submit_quiz(pe, unit_id, quiz_id, answers, context)
-    _save_affected_docs(pe, result)
+    owning_doc = _save_affected_docs(pe, result)
     response = {
         "quiz_id": result["quiz_id"],
         "correct_count": result["correct_count"],
@@ -193,7 +155,7 @@ def submit_quiz(student_id: str, unit_id: str, quiz_id: str, answers, context: s
         "points_total": result["points_total"],
         "context": result["context"],
         "repeat": result["repeat"],
-        "updated_at": _resolve_updated_at(pe),
+        "updated_at": _resolve_updated_at(owning_doc if owning_doc is not None else pe),
     }
     _add_completion_fields_if_present(response, result)
     return response

@@ -23,117 +23,42 @@ whose D1 index call failed last night is still "not in D1," so it's
 naturally re-attempted tonight with no separate stuck-state tracking.
 
 WINDOW: fixed 26-hour rolling lookback, every night, unconditionally --
-see _resolve_sweep_window below. No anchoring to this job's own run
-history (previously anchored to the last successful Shared Logs row for
-this job, with a lookback-day ceiling as fallback). The rolling window is
-simpler to reason about and immune to being thrown off by a manual test
-run, a disabled night, or a prior failure -- "last 26 hours, every night"
-never needs run-history bookkeeping to stay correct. The 2-hour overlap
-over a plain 24h window is deliberate headroom against clock drift and
-boundary-adjacent completed_at values; re-scanning that overlap is cheap
-and side-effect-free because the known_ids diff below already drops
-anything D1 has already indexed before any R2 copy or D1 write happens.
+see _resolve_sweep_window below. The 2-hour overlap over a plain 24h
+window is deliberate headroom against clock drift and boundary-adjacent
+completed_at values; re-scanning that overlap is cheap and side-effect-
+free because the known_ids diff below already drops anything D1 has
+already indexed before any R2 copy or D1 write happens.
 
-BUGFIX (eligibility window field): _fetch_eligible_submissions and
+ELIGIBILITY WINDOW FIELD: _fetch_eligible_submissions and
 _count_eligible_submissions filter on Submission.completed_at, not
-created_at. A submission with normal creation time but UNUSUALLY SLOW
-grading (stuck in Processing for longer than the window before finally
-completing) would have a created_at that falls OUTSIDE the window by the
-time it actually becomes gallery-eligible -- filtering on completed_at
-(set exactly once, by feedback_processor.py::update_submission, at the
-moment grading actually finishes) avoids that gap. This is also the same
-field shared/jobs/analytics_daily.py already uses for its own
-submission_success_original/submission_success_flagged/submission_failed
-window queries, so the "day"/"window" definition is consistent across
-both jobs.
+created_at -- set exactly once, by feedback_processor.py::update_submission,
+at the moment grading actually finishes. This is also the field
+shared/jobs/analytics_daily.py uses for its own window queries.
 
-A submission with completed_at IS NULL (not yet graded, or a manually
-seeded/test row that bypassed the normal grading pipeline) is correctly
-excluded by the `completed_at >= since` comparison -- NULL never satisfies
-a >= comparison in SQL, so this requires no separate "IS NOT NULL" guard.
-In real traffic, completed_at is always set by update_submission the
-moment a submission finishes grading; a NULL completed_at on a Completed
-submission indicates the row was created/edited outside that normal path
-(e.g. manual testing) rather than a gap in the grading pipeline itself.
+D1 ROW SHAPE (state/district/school/assignment_id): every identifier
+written to D1's gallery_items table must satisfy two independent
+constraints at once:
+  1. The Worker's own write-path validation
+     (worker/src/handlers/internalHandlers.ts): GALLERY_ASSIGNMENT_ID_
+     PATTERN / GALLERY_SCOPE_ID_PATTERN, both relaxed id-shaped patterns
+     that allow spaces.
+  2. Agreement with the SAME value baked into this row's own object_key
+     (built by shared.submission.object_naming.build_object_key, which
+     sanitizes assignment_id/student_id via sanitize_key_segment), and
+     agreement with the Worker's READ-side scope normalization
+     (worker/src/storage/profileScope.ts::normalizeScopeValue, which only
+     trims/lowercases -- it does not collapse punctuation).
 
-v10 fix -- assignment_id sanitized before being sent to D1:
-_build_index_payload previously sent sub.get("assign_id") (or
-assignment_id_link) to D1's gallery_items.assignment_id column completely
-unmodified. A legacy/WhatsApp-sourced assignment_id can contain a space
-(e.g. "Spaceship Assignment-62591"), which the Worker's own
-ASSIGNMENT_ID_PATTERN (worker/src/handlers/galleryHandlers.ts, used to
-validate the assignment_id query param on GET /gallery) rejects outright
-with INVALID_INPUT -- meaning a client could never query the gallery by
-assignment_id for such a row, even once it was successfully indexed. This
-mirrors the same character-class mismatch already fixed in
-shared.submission.object_naming.build_object_key for the R2 object key
-itself (see that module's v10 fix note) -- the two must use the same
-sanitized value, or a row's D1 assignment_id and its embedded
-object_key's assignment_id segment disagree with each other, which is
-confusing and makes "does this row's key match its own assignment_id"
-no longer true by inspection. _build_index_payload below calls
-shared.submission.object_naming.sanitize_key_segment on assignment_id
-before including it in the payload sent to notify_worker_gallery_index_batch,
-so the D1 column's value is always queryable and always matches the
-assignment_id segment baked into the row's own object_key.
-
-v11 fix -- store ids, not display names, for state/district/school:
-_build_index_payload previously resolved school_id/state_id/district_id
-down to their human-readable display names (school.name1, state.state_name,
-district.district_name) before writing them into gallery_items. For
-state/district this happened to be harmless, because State.name and
-District.name ARE their own display strings (autoname: "field:state_name"
-/ "field:district_name" -- see tap_lms/doctype/state/state.json and
-tap_lms/doctype/district/district.json), so the id and the display name
-are the same string by construction.
-
-School is NOT the same: School.name is autonamed as
-"format:{name1}-SC{#####}" (tap_lms/doctype/school/school.json), so a
-School's own doc name/id (e.g. "Green Valley School-SC00536") is a
-DIFFERENT string from its name1 field (e.g. "Green Valley School").
-student.school_id (a Link to School) stores that doc name/id, and that is
-exactly what the Worker's own get_profile_scope
-(shared/profile/student.py) and the Worker's scope_cache_token both carry
-as `school` -- NOT the resolved name1. Resolving school_id down to name1
-before writing to D1 meant gallery_items.school could never match a
-real student's profile scope at the "school" fallback level: the Worker
-queries D1 with the student's school_id (via normalizeScopeValue), but
-the stored row held the display name instead.
-
-_build_index_payload now writes student.state_id / student.district_id /
-student.school_id directly (the Link doc-name values themselves), each
-sanitized and lowercased, matching exactly what the Worker's gallery scope
-resolution (shared/profile/student.py::get_profile_scope,
-worker/src/storage/profileScope.ts::normalizeScopeValue) stores and
-compares against. The separate State/District/School name lookups (via
-frappe.db.get_value) are removed entirely -- they are no longer needed
-anywhere in this function, since the ids themselves are now the values
-written to D1.
-
-v12 fix -- state/district/school sanitized via sanitize_scope_value, not
-just lowercased: the Worker's own gallery scope-column validation
-(GALLERY_SCOPE_FIELD_PATTERNS, worker/src/db/gallery.ts) requires each of
-state/district/school to match /^[a-z0-9-]{2,60}$/ -- lowercase
-alphanumeric and hyphen ONLY. A Student's state_id/district_id/school_id
-(Frappe Link doc-names) are not guaranteed to already be shaped that way:
-a district_id like "Mumbai Suburban" or a School autonamed as
-"Green Valley School-SC00536" both contain a literal space, which
-`.lower()` alone does nothing to fix. Sending such a value straight
-through to /internal/gallery/index caused the Worker's own validateRow to
-reject the ENTIRE batch with INVALID_INPUT (every row in that call, not
-just the offending one, since gallery_items rows are inserted
-all-or-nothing) -- uploads to R2 would succeed while the corresponding D1
-write silently failed every night.
-
-_build_index_payload now sanitizes state/district/school via
-shared.submission.object_naming.sanitize_scope_value, which collapses
-every run of disallowed characters to a single '-' and lowercases the
-result, guaranteeing a value that always matches the Worker's own
-pattern. This replaces the previous bare `.lower() or None` calls on
-these three fields entirely. See sanitize_scope_value's own docstring for
-the read-path caveat this change does not independently resolve (the
-Worker's read-side profileScope.ts::normalizeScopeValue applies a
-narrower, non-collapsing normalization rule).
+_build_index_payload below sanitizes assignment_id via
+shared.submission.object_naming.sanitize_key_segment -- the exact same
+function build_object_key already applies internally -- so the D1
+column's value and the object_key's own embedded assignment_id segment
+are always byte-identical. It sanitizes state/district/school via
+shared.submission.object_naming.sanitize_scope_value, which collapses any
+run of disallowed characters (spaces included) to a single '-' and
+lowercases the result, guaranteeing a value that always matches the
+Worker's own GALLERY_SCOPE_ID_PATTERN and is stable regardless of what a
+School/District/State doc name actually contains.
 """
 
 from __future__ import annotations
@@ -169,10 +94,6 @@ from shared.jobs._log import log_job_run
 _GCS_DOWNLOAD_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only"
 _GCS_API_TIMEOUT_SECONDS = 30
 
-# Fixed rolling lookback window, every night. 26h (not 24h) deliberately
-# overlaps the previous night's window by 2 hours as headroom against
-# clock drift or a completed_at landing right at a boundary. See module
-# docstring's "WINDOW" section for why re-scanning the overlap is safe.
 ROLLING_WINDOW_HOURS = 26
 
 
@@ -183,16 +104,9 @@ class R2PromotionResult(TypedDict):
 
 def _resolve_sweep_window() -> tuple[int, bool]:
     """Returns (since_epoch, hit_lookback_ceiling). Always a fixed
-    ROLLING_WINDOW_HOURS-hour lookback from right now -- no read of
-    Shared Logs, no dependency on whether last night's run succeeded,
-    failed, or didn't run at all.
-
-    hit_lookback_ceiling is always False now -- the ceiling concept from
-    the old anchored-window design no longer applies. Kept in the return
-    shape only so run_sweep()'s own result dict, and anything downstream
-    reading it (nightly_pipeline.py's pipeline_context, analytics_daily.py),
-    don't need a field rename.
-    """
+    ROLLING_WINDOW_HOURS-hour lookback from right now. hit_lookback_
+    ceiling is always False -- kept in the return shape only so
+    run_sweep()'s result dict doesn't need a field rename."""
     since_epoch = int(time.time()) - ROLLING_WINDOW_HOURS * 3600
     return since_epoch, False
 
@@ -200,15 +114,7 @@ def _resolve_sweep_window() -> tuple[int, bool]:
 def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
     """Submissions that are Completed + is_submission_complete-eligible
     (Success - Original or Success - Flagged), whose grading COMPLETED
-    within the window, oldest first, capped at `limit`. Mirrors exactly
-    the completion filter review_result.py uses for is_gallery_eligible,
-    just expressed as a direct SQL query here instead of an in-memory
-    boolean check.
-
-    Filters on completed_at, not created_at -- see module docstring's
-    "BUGFIX" section for why: a submission's eligibility moment is when
-    its grading finishes, not when it was first created.
-    """
+    within the window, oldest first, capped at `limit`."""
     from datetime import datetime
 
     since_dt = datetime.fromtimestamp(since_epoch)
@@ -233,9 +139,8 @@ def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
 
 def _count_eligible_submissions(since_epoch: int) -> int:
     """Unbounded count of the same filter _fetch_eligible_submissions uses,
-    for reporting remaining backlog size -- not used to drive the loop
-    itself, only to size the nightly report. Filters on completed_at, same
-    as _fetch_eligible_submissions above and for the same reason."""
+    for reporting remaining backlog size only -- not used to drive the
+    loop itself."""
     from datetime import datetime
 
     since_dt = datetime.fromtimestamp(since_epoch)
@@ -264,20 +169,14 @@ def _promote_one_submission_to_r2(
     tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}
     key shape, and returns {"r2_object_key": ..., "media_type": ...}.
 
-    build_object_key (shared.submission.object_naming) sanitizes
-    assignment_id/student_id internally before building the key, so the
-    object_key this function returns is always safe to index via
-    /internal/gallery/index regardless of what raw characters the source
-    assignment_id/student_id actually contain -- no sanitization needed
-    here on this function's own part.
+    build_object_key sanitizes assignment_id/student_id internally before
+    building the key, so the object_key this function returns is always
+    safe to index regardless of what raw characters the source
+    assignment_id/student_id actually contain.
 
     Returns None (logged at info level) for any legitimately-nothing-to-
-    promote case: missing identifiers, no usable GCS submission_url, R2
-    or GCS not configured, the source object doesn't exist, or the
-    extension isn't a recognized image/video format. Lets a genuine
-    infrastructure error (network failure, malformed credentials, an
-    unexpected R2/GCS error response) propagate -- the caller (run_sweep's
-    per-row loop) catches it, logs, and continues to the next row.
+    promote case. Lets a genuine infrastructure error propagate -- the
+    caller (run_sweep's per-row loop) catches it, logs, and continues.
 
     attempt defaults to 1 if not given or falsy.
     """
@@ -293,9 +192,7 @@ def _promote_one_submission_to_r2(
     if not parsed_source:
         frappe.logger().info(
             f"_promote_one_submission_to_r2: submission_id={submission_id} has no "
-            f"usable GCS submission_url ({gcs_submission_url!r}) -- skipping promotion "
-            f"(expected for text/emoji submissions, or a row whose async upload job "
-            f"has not populated submission_url yet)."
+            f"usable GCS submission_url ({gcs_submission_url!r}) -- skipping promotion."
         )
         return None
     source_bucket, source_object_key = parsed_source
@@ -303,9 +200,8 @@ def _promote_one_submission_to_r2(
     r2_creds = get_r2_credentials()
     if not r2_creds.get("account_id") or not r2_creds.get("bucket"):
         frappe.logger().info(
-            f"_promote_one_submission_to_r2: R2 is not configured (Shared Settings."
-            f"r2_account_id / r2_bucket missing) -- skipping promotion for "
-            f"submission_id={submission_id}."
+            f"_promote_one_submission_to_r2: R2 is not configured -- skipping "
+            f"promotion for submission_id={submission_id}."
         )
         return None
 
@@ -341,7 +237,7 @@ def _promote_one_submission_to_r2(
             f"_promote_one_submission_to_r2: source object's extension "
             f"({source_ext!r}) and content type ({content_type!r}) do not resolve to "
             f"a recognized image/video format for submission_id={submission_id} -- "
-            f"skipping promotion (this submission is not gallery-eligible media)."
+            f"skipping promotion."
         )
         return None
 
@@ -375,9 +271,8 @@ def _promote_one_submission_to_r2(
 
 def _download_from_gcs(service_account_json: str, bucket: str, object_key: str) -> Optional[tuple[bytes, str | None]]:
     """Downloads one object's bytes + Content-Type from GCS, against
-    whatever bucket is named -- never a hardcoded bucket. Returns None
-    (not an exception) for a 404; any other non-2xx raises, since that's
-    an unexpected infrastructure condition the caller should see."""
+    whatever bucket is named. Returns None for a 404; any other non-2xx
+    raises."""
     from google.cloud import storage as gcs_storage
     from google.oauth2 import service_account
     import json as _json
@@ -400,9 +295,7 @@ def _download_from_gcs(service_account_json: str, bucket: str, object_key: str) 
 
 
 def _upload_to_r2(r2_creds: dict, object_key: str, content_bytes: bytes, content_type: str | None) -> None:
-    """Uploads bytes to R2 at object_key, using the same boto3-against-the-
-    R2-S3-compatible-endpoint pattern shared/export/event_exporter.py's
-    _put_r2_json already uses."""
+    """Uploads bytes to R2 at object_key, via the S3-compatible endpoint."""
     import boto3
 
     client = boto3.client(
@@ -425,21 +318,23 @@ def _upload_to_r2(r2_creds: dict, object_key: str, content_bytes: bytes, content
 
 def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict:
     """
-    v13 fix -- store raw ids for state/district/school, not sanitized
-    display-name-style scope strings: the Worker's gallery-index write
-    path (worker/src/handlers/internalHandlers.ts) now validates these
-    three fields against a relaxed id-shaped pattern
-    (GALLERY_SCOPE_ID_PATTERN) rather than the strict lowercase-only
-    [a-z0-9-]{2,60} GALLERY_SCOPE_FIELD_PATTERNS -- so these are sent as
-    the student's raw Link-field ids (state_id/district_id/school_id),
-    trimmed and lowercased to match the Worker's own read-side
-    normalizeScopeValue, with NO character collapsing.
+    Builds the D1-bound row for one promoted submission.
 
-    assignment_id/student_id/submission_id are also sent as-is (no
-    sanitize_key_segment) -- the Worker's gallery-index write path now
-    accepts any reasonably-shaped identifier there too, matching
-    Frappe's own plain document names/autonames exactly, rather than
-    only the Worker's own stricter minted-id shapes.
+    assignment_id is sanitized via sanitize_key_segment -- the identical
+    transform build_object_key already applied to the assignment_id
+    segment baked into r2_object_key above -- so the D1 column's value
+    and the key's own embedded assignment_id segment are guaranteed to
+    match byte-for-byte, and the sanitized value always satisfies the
+    Worker's GALLERY_ASSIGNMENT_ID_PATTERN.
+
+    state/district/school are sent as the student's raw Link-field ids
+    (state_id/district_id/school_id -- matching what the Worker's own
+    get_profile_scope / normalizeScopeValue read-side compares against),
+    sanitized via sanitize_scope_value rather than a bare strip/lower: a
+    School doc name in particular can contain a space (autoname
+    "{name1}-SC#####"), and sanitize_scope_value collapses any such run
+    of disallowed characters to a single '-' so the stored value always
+    satisfies the Worker's GALLERY_SCOPE_ID_PATTERN.
     """
     student = frappe.db.get_value(
         "Student", sub["student_id"],
@@ -448,18 +343,15 @@ def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict
 
     raw_assignment_id = sub.get("assign_id") or sub.get("assignment_id_link")
 
-    def _id(value):
-        return value.strip().lower() if value else None
-
     return {
         "academic_year": (sub.get("completed_at") or sub.get("created_at") or frappe.utils.now_datetime()).year,
-        "assignment_id": raw_assignment_id,
+        "assignment_id": sanitize_key_segment(raw_assignment_id) if raw_assignment_id else raw_assignment_id,
         "student_id": sub["student_id"],
         "submission_id": sub["name"],
         "first_name": student.get("name1"),
-        "state": _id(student.get("state_id")),
-        "district": _id(student.get("district_id")),
-        "school": _id(student.get("school_id")),
+        "state": sanitize_scope_value(student.get("state_id")),
+        "district": sanitize_scope_value(student.get("district_id")),
+        "school": sanitize_scope_value(student.get("school_id")),
         "grade": int(student["grade"]) if student.get("grade") else None,
         "media_type": media_type,
         "object_key": r2_object_key,
