@@ -424,37 +424,22 @@ def _upload_to_r2(r2_creds: dict, object_key: str, content_bytes: bytes, content
 
 
 def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict:
-    """Builds one row for notify_worker_gallery_index_batch, matching the
-    exact shape the Worker's indexBatch handler expects. Mirrors
-    gallery_promotion.py::_build_index_row but operates on a plain dict
-    (from the raw SQL query above) rather than a loaded Submission doc,
-    since this sweep never loads the full doc for each row -- it's all
-    done off the lighter raw-SQL row to keep the loop cheap.
+    """
+    v13 fix -- store raw ids for state/district/school, not sanitized
+    display-name-style scope strings: the Worker's gallery-index write
+    path (worker/src/handlers/internalHandlers.ts) now validates these
+    three fields against a relaxed id-shaped pattern
+    (GALLERY_SCOPE_ID_PATTERN) rather than the strict lowercase-only
+    [a-z0-9-]{2,60} GALLERY_SCOPE_FIELD_PATTERNS -- so these are sent as
+    the student's raw Link-field ids (state_id/district_id/school_id),
+    trimmed and lowercased to match the Worker's own read-side
+    normalizeScopeValue, with NO character collapsing.
 
-    assignment_id is sanitized via sanitize_key_segment before being
-    included in the payload -- see module docstring's v10 fix note. This
-    keeps the D1 gallery_items.assignment_id column always queryable
-    through the Worker's own ASSIGNMENT_ID_PATTERN (GET /gallery's
-    assignment_id query param) and always matching the assignment_id
-    segment already embedded in this same row's own object_key.
-
-    state/district/school are the student's own Link-field VALUES
-    (state_id / district_id / school_id -- the doc names/ids themselves),
-    each run through sanitize_scope_value -- NOT merely lowercased, and
-    NOT display names resolved via a separate doctype lookup. See module
-    docstring's v11 and v12 fix notes for the full reasoning. In short:
-    (a) the id, not the display name, is what the Worker's own gallery
-    scope resolution (shared/profile/student.py::get_profile_scope,
-    worker/src/storage/profileScope.ts) stores and compares against --
-    this is the only way gallery_items.school can ever match a real
-    student's profile scope, since School.name (the id) and School.name1
-    (the display name) are two different strings by construction; and
-    (b) that id must additionally be sanitized to the Worker's
-    GALLERY_SCOPE_FIELD_PATTERNS shape (lowercase [a-z0-9-]{2,60}) before
-    being sent, because a raw Link doc-name (especially School.name,
-    autonamed as "{name1}-SC{#####}") is not guaranteed to already be
-    shaped that way and can contain a literal space, which the Worker's
-    own validateRow rejects, 400ing the entire batch.
+    assignment_id/student_id/submission_id are also sent as-is (no
+    sanitize_key_segment) -- the Worker's gallery-index write path now
+    accepts any reasonably-shaped identifier there too, matching
+    Frappe's own plain document names/autonames exactly, rather than
+    only the Worker's own stricter minted-id shapes.
     """
     student = frappe.db.get_value(
         "Student", sub["student_id"],
@@ -463,27 +448,24 @@ def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict
 
     raw_assignment_id = sub.get("assign_id") or sub.get("assignment_id_link")
 
+    def _id(value):
+        return value.strip().lower() if value else None
+
     return {
         "academic_year": (sub.get("completed_at") or sub.get("created_at") or frappe.utils.now_datetime()).year,
-        "assignment_id": sanitize_key_segment(raw_assignment_id),
+        "assignment_id": raw_assignment_id,
         "student_id": sub["student_id"],
         "submission_id": sub["name"],
         "first_name": student.get("name1"),
-        # Sanitized via sanitize_scope_value -- not a bare .lower() --
-        # so the value always matches the Worker's own
-        # GALLERY_SCOPE_FIELD_PATTERNS regardless of what characters the
-        # underlying Student Link field actually contains. See v12 fix
-        # note above.
-        "state": sanitize_scope_value(student.get("state_id")),
-        "district": sanitize_scope_value(student.get("district_id")),
-        "school": sanitize_scope_value(student.get("school_id")),
+        "state": _id(student.get("state_id")),
+        "district": _id(student.get("district_id")),
+        "school": _id(student.get("school_id")),
         "grade": int(student["grade"]) if student.get("grade") else None,
         "media_type": media_type,
         "object_key": r2_object_key,
         "score": sub.get("grade"),
         "promoted_at": int(time.time()),
     }
-
 
 def run_sweep() -> dict:
     """The main nightly gallery-promotion sweep. Returns a summary dict:
