@@ -384,26 +384,34 @@ def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
     return payload
 
 
-def _build_submission_block(last_submission: dict, pe) -> dict:
-    """Builds the last_submission wire shape. submission_id is recovered
-    via shared.submission.object_naming.resolve_wire_submission_id -- NOT
-    last_submission.name directly -- so the client sees the Worker-shaped
-    id (e.g. "k3f9a2b7x1") once imgana's async upload job has populated
-    this row's submission_url, falling back to the Frappe autoname only
-    for a row whose submission_url hasn't been populated yet or never
-    matches the expected tapapp shape. No schema change, no write -- pure
-    computation over an already-persisted field. See that module's
-    docstring for the full reasoning.
+# Change to tap_lms/shared/profile/sync.py::_build_submission_block
+#
+# What changed: this function previously built the last_submission block with
+# no "context" key at all, while tap_app/api/submission.py's
+# _submission_wire_shape (used by list_submissions/get_submission) always
+# includes it. The Worker's own resign.ts carried a doc-comment claiming
+# context was "sent on every submission-shaped response (list/get/sync/
+# last_submission)" -- true for list/get, false for sync/last_submission,
+# since both of those go through this exact function. Fixed by resolving the
+# owning Unit Progress row's unit_type the same way list/get derive context,
+# and adding it to the returned dict as "context".
+#
+# find_unit_progress_row_for_submission is already imported at the top of
+# sync.py; no new import is needed for this specific change (it's used
+# elsewhere in the same file already). row["unit_type"] is "program"|"event"
+# when a row resolves, or this block reports None when it doesn't -- an
+# unresolved context is a real, legitimate value (see resign.ts's updated
+# RawSubmission.context type), not an error.
 
-    Also threads in unit_completed/course_completed/[next_learning_unit_id]
-    via _completion_fields_for_submission -- same "compute live on read"
-    style as points_awarded/gems_awarded just below it. `pe` (the owning
-    ProgramEnrollment doc) is required here, not just a name, because
-    is_course_complete needs the live doc's course_level and
-    unit_progress table.
-    """
+def _build_submission_block(last_submission: dict, pe) -> dict:
+    """Builds the last_submission wire shape. submission_id is recovered via
+    resolve_wire_submission_id -- NOT last_submission.name directly. Also
+    threads in unit_completed/course_completed/[next_learning_unit_id] via
+    _completion_fields_for_submission, and now "context" (program|event|None),
+    matching tap_app/api/submission.py's list/get shape exactly."""
     attempt_number, attempts_remaining = attempt_info_for_submission(last_submission.name)
     points_awarded, gems_awarded = _grading_award_for_submission(last_submission)
+    row = find_unit_progress_row_for_submission(last_submission.name)
     block = {
         "submission_id": resolve_wire_submission_id(last_submission),
         "assignment_id_link": last_submission.assignment_id_link,
@@ -417,10 +425,10 @@ def _build_submission_block(last_submission: dict, pe) -> dict:
         "attempts_remaining": attempts_remaining,
         "points_awarded": points_awarded,
         "gems_awarded": gems_awarded,
+        "context": row["unit_type"] if row else None,
     }
     block.update(_completion_fields_for_submission(last_submission, pe))
     return block
-
 
 def get_last_submission_payload(student_id: str, last_updated_epoch: int) -> dict:
     pe = get_active_program_enrollment(student_id)

@@ -37,17 +37,6 @@ documents and enforces for its own event-context writes: "a Unit Progress
 row is immutably tied to whichever ProgramEnrollment it was created
 under, never to whatever enrollment happens to be active right now."
 
-Concretely, this caused real data fragmentation: if a student's active
-ProgramEnrollment rotated between watching an event's video (handled by
-activities.py, correctly anchored to wherever the row actually lives) and
-submitting artwork for that same event unit (handled here), submit_artwork
-would create a SECOND, separate Unit Progress row on the new active
-enrollment -- one with video_watched=True and no submission (on the old
-enrollment), and one with video_watched=False and the submission (on the
-new enrollment) -- and would then incorrectly reject the submission with
-"video must be completed before submitting for this unit", even though
-the student genuinely had watched it.
-
 Both check_attempt_cap and submit_artwork now call
 shared.progress.activities._resolve_event_unit_progress_row for
 context == "event", exactly as activities.py's own submit_video_watched/
@@ -56,14 +45,27 @@ submission) and the one event-context read path (check_attempt_cap)
 resolve to the exact same row, anchored to whichever enrollment actually
 owns it -- never to whatever happens to be "active" at call time.
 
-COMPLETED-COURSE WRITE GUARD: shared.enrollment.active_batch now resolves
-a "completed" ProgramEnrollment for READS (so sync/profile keep working
-after a course finishes -- see that module's docstring), but writing new
-submissions against an already-completed course must still be rejected
-explicitly, rather than silently reopened as a side effect of that read
-fix. Both check_attempt_cap and submit_artwork now check
-pe.status == "completed" immediately after resolving `pe` and raise
-InvalidInput before touching anything else.
+COMPLETED-COURSE WRITE GUARD -- PROGRAM CONTEXT ONLY (bugfix):
+shared.enrollment.active_batch now resolves a "completed" ProgramEnrollment
+for READS (so sync/profile keep working after a course finishes -- see
+that module's docstring). Writing new PROGRAM-context submissions against
+an already-completed course must still be rejected explicitly, rather than
+silently reopened as a side effect of that read fix.
+
+Previously, _require_course_not_completed(pe) was called unconditionally
+in both check_attempt_cap and submit_artwork, regardless of `context`.
+Because `pe` here is always the student's ACTIVE PROGRAM-track enrollment
+(resolved via get_active_program_enrollment_name, which keys off
+course_level, not off any particular event), an EVENT-context call for a
+student whose unrelated program course happened to be "completed" was
+incorrectly rejected too -- directly contradicting this module's own
+documented intent ("an event should remain submittable even if the
+student's unrelated PROGRAM course has separately completed").
+
+The guard is now scoped: it only ever raises when context == "program".
+An event-context call never has its event-row resolution or submission
+gated on the active program enrollment's own completion status -- only
+the program-context write path cares whether `pe.status == "completed"`.
 
 WEEKLY SUBMISSION CAP: unchanged from before -- see
 _require_weekly_submission_cap_not_reached's own docstring. Event-context
@@ -71,6 +73,11 @@ submissions are never subject to this cap (program-context only, per
 submission_this_week's own doctype field description).
 
 ATTEMPT-NUMBER INTEGRITY: unchanged -- see _validate_object_key_attempt.
+Note: that function's cross-check is a defense-in-depth layer on top of
+the Worker's own assertObjectKeyMatches; see
+shared/submission/object_naming.py's OBJECT_KEY_RE for the related fix
+that lets this check actually fire for assignment_ids containing a space
+(previously it silently no-op'd for those -- see that module's docstring).
 
 DECISION D (last_activity_at on every attempt): award_points
 (shared/progress/rewards.py) bumps enrollment_doc.last_activity_at when
@@ -201,18 +208,36 @@ def require_video_done(unit_progress_row) -> None:
 _require_video_done = require_video_done
 
 
-def _require_course_not_completed(pe) -> None:
-    """Rejects a write against an already-completed ProgramEnrollment.
+def _require_course_not_completed(pe, context: str) -> None:
+    """Rejects a write against an already-completed ProgramEnrollment --
+    PROGRAM CONTEXT ONLY.
 
     shared.enrollment.active_batch.get_active_program_enrollment_name now
     resolves a "completed" enrollment for READ paths (sync, profile) that
     previously broke entirely once a student's only enrollment finished --
     see that module's docstring. That fix is deliberately READ-only: it
     must not silently reopen check_attempt_cap / submit_artwork for a
-    finished course. This explicit guard is what keeps that boundary firm,
-    called immediately after resolving `pe` in both functions below,
-    before any other check or write happens.
+    finished course.
+
+    BUGFIX: this guard used to be called unconditionally regardless of
+    `context`. Because `pe` is always the student's ACTIVE PROGRAM-track
+    enrollment (resolved by course_level via
+    get_active_program_enrollment_name -- it has nothing to do with any
+    particular event), an EVENT-context call for a student whose unrelated
+    program course happened to already be "completed" was being rejected
+    too, contradicting this module's own documented intent: event activity
+    must remain available regardless of the student's program-track
+    completion status, since the two tracks are otherwise unrelated even
+    though they can share the same owning ProgramEnrollment document.
+
+    The guard now only raises for context == "program"; for
+    context == "event" it is a deliberate no-op, called for symmetry with
+    its own call sites rather than skipped there entirely, so a future
+    reader sees explicitly that event calls were considered and
+    intentionally excluded.
     """
+    if context != "program":
+        return
     if pe.status == "completed":
         raise InvalidInput("course already completed; no further submissions are accepted", error_code="course_completed")
 
@@ -316,6 +341,13 @@ def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) 
     different, already-handled failure mode (the Worker validates key shape
     before ever calling this route); this check only fires for a
     syntactically valid key whose attempt number disagrees with reality.
+
+    NOTE: parse_object_key's own OBJECT_KEY_RE (object_naming.py) now
+    tolerates a space inside the assignment_id/student_id segments, matching
+    the Worker's own FIELD_PATTERNS.assignment_id shape, so this check no
+    longer silently no-ops for legacy/WhatsApp-sourced assignment_ids that
+    contain a literal space -- see object_naming.py's docstring for the
+    history of that gap.
     """
     if not object_key:
         return
@@ -333,11 +365,12 @@ def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) 
 def check_attempt_cap(student_id: str, assignment_id: str, context: str = "program") -> dict:
     """Reports the student's current attempt number and how many attempts
     remain for this assignment. Read-only: enforces the completed-course
-    guard, the video prerequisite, the weekly submission cap (program
-    context only), and the per-assignment attempt cap as checks only -- it
-    does not create a Unit Progress row for program context (event context
-    may create one on first-ever activity, per _resolve_row_for_context's
-    own docstring) and does not save the ProgramEnrollment document.
+    guard (program context only -- see _require_course_not_completed), the
+    video prerequisite, the weekly submission cap (program context only),
+    and the per-assignment attempt cap as checks only -- it does not create
+    a Unit Progress row for program context (event context may create one
+    on first-ever activity, per _resolve_row_for_context's own docstring)
+    and does not save the ProgramEnrollment document.
 
     For context == "event", the Unit Progress row is resolved via the
     SAME global, by-name lookup submit_artwork and activities.py's
@@ -371,11 +404,13 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
     pair -- instead of against the pre-increment count, so both functions
     agree on attempts_remaining for the same attempt.
 
-    COMPLETED COURSE: raises InvalidInput (error_code="course_completed")
-    immediately if pe.status == "completed" -- see
-    _require_course_not_completed's own docstring for why this guard is
+    COMPLETED COURSE (program context only): raises InvalidInput
+    (error_code="course_completed") if pe.status == "completed" AND
+    context == "program" -- see _require_course_not_completed's own
+    docstring for why this guard is scoped to program context and why it is
     necessary now that `pe` itself can resolve to a completed enrollment
-    for read paths elsewhere in this codebase.
+    for read paths elsewhere in this codebase. An event-context call is
+    never gated on this.
 
     This function is read-only (no writes, no row lock beyond the implicit
     read), so it is NOT wrapped in @with_serialization_retry -- there is no
@@ -384,7 +419,7 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
     pe_name = get_active_program_enrollment_name(student_id)
     pe = frappe.get_doc("ProgramEnrollment", pe_name)
 
-    _require_course_not_completed(pe)
+    _require_course_not_completed(pe, context)
 
     unit = resolve_learning_unit_for_assignment(assignment_id, context, student_id)
     _owning_doc, row = _resolve_row_for_context(pe, student_id, unit, context, create_if_missing=False)
@@ -425,12 +460,12 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
 @with_serialization_retry
 def submit_artwork(student_id: str, assignment_id: str, submission_url: str, object_key: str | None = None,
                     context: str = "program") -> dict:
-    """Re-checks the completed-course guard, attempt cap, weekly
-    submission cap (program context only), and video prerequisite under a
-    row lock, cross-checks object_key's own attempt number against
-    reality, then hands off the actual Submission creation to imgana's
-    submit_artwork pipeline (unmodified). submission_url is a plain,
-    already-public URL the caller provides directly --
+    """Re-checks the completed-course guard (program context only), attempt
+    cap, weekly submission cap (program context only), and video
+    prerequisite under a row lock, cross-checks object_key's own attempt
+    number against reality, then hands off the actual Submission creation
+    to imgana's submit_artwork pipeline (unmodified). submission_url is a
+    plain, already-public URL the caller provides directly --
     tap_app/api/submission.py::submit_artwork is responsible for building
     this URL from the Worker's object_key before calling here.
 
@@ -465,26 +500,14 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     context, or whatever enrollment actually owns the event row for event
     context), not unconditionally `pe.name`, now that the two can differ.
 
-    COMPLETED COURSE: raises InvalidInput (error_code="course_completed")
-    immediately after resolving `pe`, if pe.status == "completed" -- see
-    _require_course_not_completed. Note this check is against `pe` (the
-    currently ACTIVE enrollment for this student's course level), which is
-    the correct thing to check for a program-context submission; for an
-    event-context submission whose owning enrollment (owning_doc) might
-    differ from `pe`, the check still applies to `pe` because
-    resolve_learning_unit_for_assignment and the weekly-cap check both
-    operate relative to the student's current active state, and an event
-    should remain submittable even if the student's unrelated PROGRAM
-    course has separately completed -- course completion on the program
-    track must never block an otherwise-valid event submission. This is
-    exactly the "let the event run even if PE completed" requirement:
-    _require_course_not_completed only ever raises when `pe.status` (the
-    active enrollment resolved for THIS call) is itself completed, and
-    even then, only blocks further PROGRAM-context submissions -- an
-    event-context call resolves its real owning doc separately via
-    _resolve_row_for_context and is never gated on `pe`'s own completion
-    status beyond the initial active-enrollment resolution needed to
-    locate the event in the first place.
+    COMPLETED COURSE (program context only -- bugfix): raises InvalidInput
+    (error_code="course_completed") only when context == "program" AND
+    pe.status == "completed" -- see _require_course_not_completed's own
+    docstring. Previously this guard fired for EVENT context too whenever
+    the student's unrelated active program enrollment happened to be
+    completed, which incorrectly blocked an otherwise-valid event
+    submission -- that was a bug, now fixed: event submissions are never
+    gated on the active program enrollment's own completion status.
 
     retried-transaction note: this function is wrapped in
     @with_serialization_retry (see shared/db_retry.py); a retry re-runs
@@ -505,7 +528,7 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     lock_program_enrollment_row(pe_name)
     pe = frappe.get_doc("ProgramEnrollment", pe_name)
 
-    _require_course_not_completed(pe)
+    _require_course_not_completed(pe, context)
 
     unit = resolve_learning_unit_for_assignment(assignment_id, context, student_id)
     owning_doc, row = _resolve_row_for_context(pe, student_id, unit, context, create_if_missing=True)

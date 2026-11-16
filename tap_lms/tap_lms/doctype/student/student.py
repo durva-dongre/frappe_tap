@@ -152,7 +152,6 @@ def register_student():
         doc = frappe.new_doc("Student")
         doc.name1 = payload.get("name1")
         doc.phone = canonical_phone
-        doc.section = payload.get("section")
         doc.grade = payload.get("grade")
         doc.gender = payload.get("gender")
         doc.level = ""

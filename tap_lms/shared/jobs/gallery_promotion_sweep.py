@@ -1,64 +1,19 @@
 """
 shared/jobs/gallery_promotion_sweep.py
+Nightly sweep: promotes eligible graded submissions from GCS to R2 and
+indexes them into the Worker's D1 gallery_items table via chunked
+/internal/gallery/index calls, using /internal/gallery/known_ids to
+compute the pending = eligible minus known set-difference.
 
-Nightly batch job that replaces the old per-submission synchronous gallery
-promotion (formerly inline in shared/submission/review_result.py). Does
-everything gallery-related for one night: finds submissions that are
-graded-and-complete but not yet in D1's gallery_items table, copies their
-media from GCS to R2, pushes the new rows to D1 in chunks, and triggers a
-cache-generation bump on the Worker so previously-cached gallery pages
-pick up the new rows.
-
-NO NEW FRAPPE DOCTYPE FIELD. "Pending" is computed purely as a set
-difference between two systems that already separately know their own
-state:
-  - Frappe-eligible set: Submission rows with status="Completed" and a
-    reward-eligible-or-flagged result_status, within a lookback window.
-  - D1-known set: whatever the Worker's /internal/gallery/known_ids route
-    reports as already indexed, in that same window.
-  pending = eligible - known
-
-This also makes the sweep self-healing: a row whose R2 copy succeeded but
-whose D1 index call failed last night is still "not in D1," so it's
-naturally re-attempted tonight with no separate stuck-state tracking.
-
-WINDOW: fixed 26-hour rolling lookback, every night, unconditionally --
-see _resolve_sweep_window below. The 2-hour overlap over a plain 24h
-window is deliberate headroom against clock drift and boundary-adjacent
-completed_at values; re-scanning that overlap is cheap and side-effect-
-free because the known_ids diff below already drops anything D1 has
-already indexed before any R2 copy or D1 write happens.
-
-ELIGIBILITY WINDOW FIELD: _fetch_eligible_submissions and
-_count_eligible_submissions filter on Submission.completed_at, not
-created_at -- set exactly once, by feedback_processor.py::update_submission,
-at the moment grading actually finishes. This is also the field
-shared/jobs/analytics_daily.py uses for its own window queries.
-
-D1 ROW SHAPE (state/district/school/assignment_id): every identifier
-written to D1's gallery_items table must satisfy two independent
-constraints at once:
-  1. The Worker's own write-path validation
-     (worker/src/handlers/internalHandlers.ts): GALLERY_ASSIGNMENT_ID_
-     PATTERN / GALLERY_SCOPE_ID_PATTERN, both relaxed id-shaped patterns
-     that allow spaces.
-  2. Agreement with the SAME value baked into this row's own object_key
-     (built by shared.submission.object_naming.build_object_key, which
-     sanitizes assignment_id/student_id via sanitize_key_segment), and
-     agreement with the Worker's READ-side scope normalization
-     (worker/src/storage/profileScope.ts::normalizeScopeValue, which only
-     trims/lowercases -- it does not collapse punctuation).
-
-_build_index_payload below sanitizes assignment_id via
-shared.submission.object_naming.sanitize_key_segment -- the exact same
-function build_object_key already applies internally -- so the D1
-column's value and the object_key's own embedded assignment_id segment
-are always byte-identical. It sanitizes state/district/school via
-shared.submission.object_naming.sanitize_scope_value, which collapses any
-run of disallowed characters (spaces included) to a single '-' and
-lowercases the result, guaranteeing a value that always matches the
-Worker's own GALLERY_SCOPE_ID_PATTERN and is stable regardless of what a
-School/District/State doc name actually contains.
+FIX (dead lookback config): _resolve_sweep_window previously ignored
+Shared Settings.gallery_sweep_lookback_days entirely and always used a
+hardcoded 26h rolling window, with hit_ceiling always False — so a sweep
+that failed for longer than the configured ceiling silently never
+widened its window, and older pending submissions were never picked up.
+It now anchors to the last successful sweep's own finished_at (read from
+Shared Logs), falling back to the full lookback ceiling only on the very
+first run or when the gap since last success exceeds that ceiling —
+hit_ceiling now reflects that real condition instead of always being False.
 """
 
 from __future__ import annotations
@@ -74,14 +29,16 @@ from shared.config.secrets_cache import (
     get_r2_credentials,
     get_r2_sweep_batch_size,
     get_gallery_index_chunk_size,
+    get_gallery_sweep_lookback_days,
 )
 from shared.submission.object_naming import (
     build_object_key,
     extract_gcs_bucket_and_key,
-    sanitize_key_segment,
+    normalize_assignment_id_for_scope,
     sanitize_scope_value,
     submission_type_from_content_type,
     submission_type_from_ext,
+    resolve_wire_submission_id,
 )
 from shared.submission.status import is_submission_complete
 from shared.progress.unit_progress import find_unit_progress_row_for_submission
@@ -94,6 +51,8 @@ from shared.jobs._log import log_job_run
 _GCS_DOWNLOAD_SCOPE = "https://www.googleapis.com/auth/devstorage.read_only"
 _GCS_API_TIMEOUT_SECONDS = 30
 
+# Small safety overlap applied on top of the last-success anchor, so nothing
+# right at the boundary is missed due to clock/commit skew between runs.
 ROLLING_WINDOW_HOURS = 26
 
 
@@ -102,19 +61,47 @@ class R2PromotionResult(TypedDict):
     media_type: str
 
 
+def _last_successful_sweep_epoch() -> Optional[int]:
+    """Reads this job's own last successful finish time from Shared Logs
+    (written by log_job_run at the bottom of run()). None if the sweep has
+    never succeeded before."""
+    rows = frappe.db.sql(
+        """
+        SELECT finished_at FROM "tabShared Logs"
+         WHERE source = 'gallery_promotion_sweep' AND status = 'success'
+         ORDER BY finished_at DESC
+         LIMIT 1
+        """,
+        as_dict=True,
+    )
+    if not rows or not rows[0].get("finished_at"):
+        return None
+    return int(rows[0]["finished_at"].timestamp())
+
+
 def _resolve_sweep_window() -> tuple[int, bool]:
-    """Returns (since_epoch, hit_lookback_ceiling). Always a fixed
-    ROLLING_WINDOW_HOURS-hour lookback from right now. hit_lookback_
-    ceiling is always False -- kept in the return shape only so
-    run_sweep()'s result dict doesn't need a field rename."""
-    since_epoch = int(time.time()) - ROLLING_WINDOW_HOURS * 3600
-    return since_epoch, False
+    """Anchors to the last successful sweep run, with a bounded safety
+    overlap, instead of a hardcoded rolling window. Falls back to the full
+    configured lookback ceiling (Shared Settings.gallery_sweep_lookback_days)
+    only on the very first-ever run, or if the gap since the last success
+    exceeds that ceiling — in which case hit_ceiling is reported True so
+    callers/analytics can see the fallback actually fired."""
+    ceiling_seconds = get_gallery_sweep_lookback_days() * 86400
+    now = int(time.time())
+    last_success = _last_successful_sweep_epoch()
+
+    if last_success is None:
+        return now - ceiling_seconds, False
+
+    gap_seconds = now - last_success
+    if gap_seconds > ceiling_seconds:
+        return now - ceiling_seconds, True
+
+    overlap_seconds = min(ROLLING_WINDOW_HOURS * 3600, ceiling_seconds)
+    return last_success - overlap_seconds, False
 
 
 def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
-    """Submissions that are Completed + is_submission_complete-eligible
-    (Success - Original or Success - Flagged), whose grading COMPLETED
-    within the window, oldest first, capped at `limit`."""
     from datetime import datetime
 
     since_dt = datetime.fromtimestamp(since_epoch)
@@ -138,9 +125,6 @@ def _fetch_eligible_submissions(since_epoch: int, limit: int) -> list[dict]:
 
 
 def _count_eligible_submissions(since_epoch: int) -> int:
-    """Unbounded count of the same filter _fetch_eligible_submissions uses,
-    for reporting remaining backlog size only -- not used to drive the
-    loop itself."""
     from datetime import datetime
 
     since_dt = datetime.fromtimestamp(since_epoch)
@@ -158,6 +142,22 @@ def _count_eligible_submissions(since_epoch: int) -> int:
     return result[0][0] if result else 0
 
 
+def _row_is_indexable(sub: dict) -> bool:
+    student = frappe.db.get_value(
+        "Student", sub["student_id"], ["grade", "state_id", "district_id", "school_id"], as_dict=True,
+    )
+    if not student or not student.get("grade"):
+        frappe.logger().info(f"gallery sweep: skipping submission_id={sub['name']} -- student has no grade set")
+        return False
+    if not (student.get("state_id") and student.get("district_id") and student.get("school_id")):
+        frappe.logger().info(f"gallery sweep: skipping submission_id={sub['name']} -- student missing state/district/school")
+        return False
+    if not (sub.get("assign_id") or sub.get("assignment_id_link")):
+        frappe.logger().info(f"gallery sweep: skipping submission_id={sub['name']} -- no assignment_id on submission")
+        return False
+    return True
+
+
 def _promote_one_submission_to_r2(
     gcs_submission_url: str | None,
     assignment_id: str | None,
@@ -165,26 +165,10 @@ def _promote_one_submission_to_r2(
     submission_id: str,
     attempt: int | None = None,
 ) -> Optional[R2PromotionResult]:
-    """Copies one submission's media from GCS to R2, under the gallery's
-    tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}
-    key shape, and returns {"r2_object_key": ..., "media_type": ...}.
-
-    build_object_key sanitizes assignment_id/student_id internally before
-    building the key, so the object_key this function returns is always
-    safe to index regardless of what raw characters the source
-    assignment_id/student_id actually contain.
-
-    Returns None (logged at info level) for any legitimately-nothing-to-
-    promote case. Lets a genuine infrastructure error propagate -- the
-    caller (run_sweep's per-row loop) catches it, logs, and continues.
-
-    attempt defaults to 1 if not given or falsy.
-    """
     if not assignment_id or not student_id or not submission_id:
         frappe.logger().info(
             f"_promote_one_submission_to_r2: missing assignment_id/student_id/"
-            f"submission_id (assignment_id={assignment_id!r}, student_id={student_id!r}, "
-            f"submission_id={submission_id!r}) -- skipping promotion for this submission."
+            f"submission_id -- skipping promotion for submission_id={submission_id!r}."
         )
         return None
 
@@ -192,40 +176,30 @@ def _promote_one_submission_to_r2(
     if not parsed_source:
         frappe.logger().info(
             f"_promote_one_submission_to_r2: submission_id={submission_id} has no "
-            f"usable GCS submission_url ({gcs_submission_url!r}) -- skipping promotion."
+            f"usable GCS submission_url ({gcs_submission_url!r}) -- skipping."
         )
         return None
     source_bucket, source_object_key = parsed_source
 
     r2_creds = get_r2_credentials()
     if not r2_creds.get("account_id") or not r2_creds.get("bucket"):
-        frappe.logger().info(
-            f"_promote_one_submission_to_r2: R2 is not configured -- skipping "
-            f"promotion for submission_id={submission_id}."
-        )
+        frappe.logger().info(f"_promote_one_submission_to_r2: R2 not configured -- skipping submission_id={submission_id}.")
         return None
 
     try:
         gcs_creds = get_gcs_credentials()
     except Exception:
-        frappe.logger().info(
-            f"_promote_one_submission_to_r2: GCS is not configured -- skipping "
-            f"promotion for submission_id={submission_id}."
-        )
+        frappe.logger().info(f"_promote_one_submission_to_r2: GCS not configured -- skipping submission_id={submission_id}.")
         return None
     if not gcs_creds.get("service_account_json"):
-        frappe.logger().info(
-            f"_promote_one_submission_to_r2: GCS service account is not configured "
-            f"-- skipping promotion for submission_id={submission_id}."
-        )
+        frappe.logger().info(f"_promote_one_submission_to_r2: GCS service account missing -- skipping submission_id={submission_id}.")
         return None
 
     downloaded = _download_from_gcs(gcs_creds["service_account_json"], source_bucket, source_object_key)
     if downloaded is None:
         frappe.logger().info(
-            f"_promote_one_submission_to_r2: source object not found on GCS "
-            f"(bucket={source_bucket!r}, object_key={source_object_key!r}) for "
-            f"submission_id={submission_id} -- skipping promotion."
+            f"_promote_one_submission_to_r2: source object not found (bucket={source_bucket!r}, "
+            f"key={source_object_key!r}) for submission_id={submission_id} -- skipping."
         )
         return None
     content_bytes, content_type = downloaded
@@ -234,20 +208,15 @@ def _promote_one_submission_to_r2(
     media_type = submission_type_from_ext(source_ext) or submission_type_from_content_type(content_type)
     if not media_type:
         frappe.logger().info(
-            f"_promote_one_submission_to_r2: source object's extension "
-            f"({source_ext!r}) and content type ({content_type!r}) do not resolve to "
-            f"a recognized image/video format for submission_id={submission_id} -- "
-            f"skipping promotion."
+            f"_promote_one_submission_to_r2: unrecognized format (ext={source_ext!r}, "
+            f"content_type={content_type!r}) for submission_id={submission_id} -- skipping."
         )
         return None
 
     resolved_ext = source_ext or mimetypes.guess_extension(content_type or "") or ""
     resolved_ext = resolved_ext.lstrip(".").lower()
     if not resolved_ext:
-        frappe.logger().info(
-            f"_promote_one_submission_to_r2: could not resolve a file extension for "
-            f"submission_id={submission_id} -- skipping promotion."
-        )
+        frappe.logger().info(f"_promote_one_submission_to_r2: could not resolve extension for submission_id={submission_id} -- skipping.")
         return None
 
     r2_object_key = build_object_key(
@@ -262,25 +231,19 @@ def _promote_one_submission_to_r2(
 
     frappe.logger().info(
         f"_promote_one_submission_to_r2: promoted submission_id={submission_id} "
-        f"from gcs://{source_bucket}/{source_object_key} to r2 key={r2_object_key}, "
-        f"media_type={media_type}."
+        f"from gcs://{source_bucket}/{source_object_key} to r2 key={r2_object_key}, media_type={media_type}."
     )
 
     return {"r2_object_key": r2_object_key, "media_type": media_type}
 
 
 def _download_from_gcs(service_account_json: str, bucket: str, object_key: str) -> Optional[tuple[bytes, str | None]]:
-    """Downloads one object's bytes + Content-Type from GCS, against
-    whatever bucket is named. Returns None for a 404; any other non-2xx
-    raises."""
     from google.cloud import storage as gcs_storage
     from google.oauth2 import service_account
     import json as _json
 
     info = _json.loads(service_account_json)
-    credentials = service_account.Credentials.from_service_account_info(
-        info, scopes=[_GCS_DOWNLOAD_SCOPE]
-    )
+    credentials = service_account.Credentials.from_service_account_info(info, scopes=[_GCS_DOWNLOAD_SCOPE])
     client = gcs_storage.Client(project=info.get("project_id"), credentials=credentials)
     bucket_ref = client.bucket(bucket)
     blob = bucket_ref.blob(object_key)
@@ -295,7 +258,6 @@ def _download_from_gcs(service_account_json: str, bucket: str, object_key: str) 
 
 
 def _upload_to_r2(r2_creds: dict, object_key: str, content_bytes: bytes, content_type: str | None) -> None:
-    """Uploads bytes to R2 at object_key, via the S3-compatible endpoint."""
     import boto3
 
     client = boto3.client(
@@ -305,64 +267,39 @@ def _upload_to_r2(r2_creds: dict, object_key: str, content_bytes: bytes, content
         aws_secret_access_key=r2_creds["secret_access_key"],
         region_name="auto",
     )
-    put_kwargs = {
-        "Bucket": r2_creds["bucket"],
-        "Key": object_key,
-        "Body": content_bytes,
-    }
+    put_kwargs = {"Bucket": r2_creds["bucket"], "Key": object_key, "Body": content_bytes}
     if content_type:
         put_kwargs["ContentType"] = content_type
-
     client.put_object(**put_kwargs)
 
 
 def _build_index_payload(sub: dict, r2_object_key: str, media_type: str) -> dict:
-    """
-    Builds the D1-bound row for one promoted submission.
-
-    assignment_id is sanitized via sanitize_key_segment -- the identical
-    transform build_object_key already applied to the assignment_id
-    segment baked into r2_object_key above -- so the D1 column's value
-    and the key's own embedded assignment_id segment are guaranteed to
-    match byte-for-byte, and the sanitized value always satisfies the
-    Worker's GALLERY_ASSIGNMENT_ID_PATTERN.
-
-    state/district/school are sent as the student's raw Link-field ids
-    (state_id/district_id/school_id -- matching what the Worker's own
-    get_profile_scope / normalizeScopeValue read-side compares against),
-    sanitized via sanitize_scope_value rather than a bare strip/lower: a
-    School doc name in particular can contain a space (autoname
-    "{name1}-SC#####"), and sanitize_scope_value collapses any such run
-    of disallowed characters to a single '-' so the stored value always
-    satisfies the Worker's GALLERY_SCOPE_ID_PATTERN.
-    """
     student = frappe.db.get_value(
         "Student", sub["student_id"],
         ["name1", "grade", "school_id", "state_id", "district_id"], as_dict=True,
     ) or {}
 
     raw_assignment_id = sub.get("assign_id") or sub.get("assignment_id_link")
+    grade = int(student["grade"]) if student.get("grade") else None
 
     return {
         "academic_year": (sub.get("completed_at") or sub.get("created_at") or frappe.utils.now_datetime()).year,
-        "assignment_id": sanitize_key_segment(raw_assignment_id) if raw_assignment_id else raw_assignment_id,
+        "assignment_id": normalize_assignment_id_for_scope(raw_assignment_id),
         "student_id": sub["student_id"],
-        "submission_id": sub["name"],
+        "submission_id": resolve_wire_submission_id(sub),
         "first_name": student.get("name1"),
         "state": sanitize_scope_value(student.get("state_id")),
         "district": sanitize_scope_value(student.get("district_id")),
         "school": sanitize_scope_value(student.get("school_id")),
-        "grade": int(student["grade"]) if student.get("grade") else None,
+        "grade": grade,
         "media_type": media_type,
         "object_key": r2_object_key,
         "score": sub.get("grade"),
         "promoted_at": int(time.time()),
     }
 
+
 def run_sweep() -> dict:
-    """The main nightly gallery-promotion sweep. Returns a summary dict:
-    attempted, r2_promoted, r2_failed, d1_chunks_total, d1_chunks_failed,
-    remaining_backlog_estimate, hit_lookback_ceiling."""
     since_epoch, hit_ceiling = _resolve_sweep_window()
     batch_size = get_r2_sweep_batch_size()
     chunk_size = get_gallery_index_chunk_size()
@@ -370,7 +307,15 @@ def run_sweep() -> dict:
     eligible = _fetch_eligible_submissions(since_epoch, batch_size)
     known_ids = set(fetch_worker_known_submission_ids(since_epoch))
 
-    pending = [s for s in eligible if s["name"] not in known_ids]
+    candidate = [s for s in eligible if s["name"] not in known_ids]
+
+    skipped_count = 0
+    pending: list[dict] = []
+    for sub in candidate:
+        if _row_is_indexable(sub):
+            pending.append(sub)
+        else:
+            skipped_count += 1
 
     attempted = len(pending)
     r2_promoted = 0
@@ -394,10 +339,7 @@ def run_sweep() -> dict:
                 r2_promoted += 1
         except Exception:
             r2_failed += 1
-            frappe.logger().warning(
-                f"run_sweep: R2 promotion failed for submission_id={sub['name']}",
-                exc_info=True,
-            )
+            frappe.logger().warning(f"run_sweep: R2 promotion failed for submission_id={sub['name']}", exc_info=True)
             continue
 
     d1_chunks_total = 0
@@ -409,10 +351,7 @@ def run_sweep() -> dict:
             notify_worker_gallery_index_batch(chunk)
         except Exception:
             d1_chunks_failed += 1
-            frappe.logger().warning(
-                f"run_sweep: D1 index chunk {d1_chunks_total} failed ({len(chunk)} rows)",
-                exc_info=True,
-            )
+            frappe.logger().warning(f"run_sweep: D1 index chunk {d1_chunks_total} failed ({len(chunk)} rows)", exc_info=True)
             continue
 
     remaining_total_eligible = _count_eligible_submissions(since_epoch)
@@ -426,6 +365,7 @@ def run_sweep() -> dict:
         "d1_chunks_failed": d1_chunks_failed,
         "remaining_backlog_estimate": remaining_backlog_estimate,
         "hit_lookback_ceiling": hit_ceiling,
+        "skipped_incomplete_profile": skipped_count,
     }
 
 

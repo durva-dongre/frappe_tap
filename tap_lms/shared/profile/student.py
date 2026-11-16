@@ -1,8 +1,22 @@
+"""
+shared/profile/student.py  
+
+get_profile_scope now runs its resolved assignment_id through the shared
+normalize_assignment_id_for_scope() before returning it, instead of returning
+the raw UnitContentItem.content value. This is the read-side fix: a client that
+never passes its own assignment_id falls back to this profile-derived value,
+and the Worker's gallery query binds it as-is into WHERE assignment_id = ?1 --
+so it must be byte-identical to whatever normalize_assignment_id_for_scope
+produced on the write side (the nightly sweep), or a space-containing
+assignment_id never matches any row even though matching rows exist.
+"""
+
 from __future__ import annotations
 
 import frappe
 
 from shared.errors import StudentNotFound
+from shared.submission.object_naming import normalize_assignment_id_for_scope
 
 
 def get_profile_fields(student_id: str) -> dict:
@@ -44,17 +58,9 @@ def get_profile_fields(student_id: str) -> dict:
 
 
 def _resolve_assignment_id_for_unit(learning_unit: str) -> str | None:
-    """Resolves a learning unit's own default assignment, for the
-    gallery's assignment-id scope level (worker/src/storage/
-    profileScope.ts's v6 assignmentId field, worker/src/handlers/
-    galleryHandlers.ts's default scope). This is the exact reverse of
-    shared.submission.lifecycle.resolve_learning_unit_for_assignment's
-    primary lookup (assignment_id -> learning_unit via UnitContentItem),
-    querying the same UnitContentItem.content_type/.content shape in the
-    other direction: given a unit, find the Assignment content item it
-    owns, if any. Returns None if the unit has no assignment content item
-    configured -- a unit backed only by a video/quiz (no submission
-    activity) legitimately has no assignment, and this is not an error."""
+    """Reverse lookup of lifecycle.resolve_learning_unit_for_assignment: given a
+    unit, find the Assignment content item it owns, if any. Returns None if the
+    unit has no assignment content item configured."""
     if not learning_unit:
         return None
     row = frappe.db.sql(
@@ -75,35 +81,10 @@ def _resolve_assignment_id_for_unit(learning_unit: str) -> str | None:
 
 def get_profile_scope(student_id: str) -> dict:
     """Returns the student's gallery-scoping fields, read by the Worker's
-    storage/profileScope.ts (GET /gallery's scope resolution, cached and
-    minted into scope_cache_token). Besides location/grade, this also
-    resolves and returns assignment_id: the student's current
-    program-track learning unit's own default Assignment, if that unit
-    has one configured.
-
-    The Worker's storage/profileScope.ts and galleryHandlers.ts's
-    default-scope logic already expect Frappe to supply assignment_id --
-    "the student's current/default assignment, resolved server-side by
-    Frappe ... from their current learning unit." Without it, the
-    Worker's gallery cascade could never start at its narrowest, most
-    relevant level (assignment_id) for any student, and would fall
-    straight through to school/district/state scoping (or an empty page)
-    regardless of whether the student actually had a current,
-    gallery-eligible assignment.
-
-    This resolves the student's current unit exactly the way auth's
-    resume payload does (via get_active_program_enrollment +
-    resolve_current_unit_for_track, using next_unit_for as the fallback
-    for a student with no in-progress unit), then looks up that unit's
-    own Assignment content item (_resolve_assignment_id_for_unit, the
-    reverse of shared.submission.lifecycle.
-    resolve_learning_unit_for_assignment's forward lookup). A student
-    with no active enrollment, no resolvable current unit, or whose
-    current unit has no Assignment content item configured gets
-    assignment_id: None here -- the gallery's own cascade already treats
-    that as "skip this level," which is the correct behavior, not an
-    error.
-    """
+    storage/profileScope.ts. assignment_id is normalized the same way the sweep
+    normalizes it on write (see module docstring) before being returned, so a
+    space-containing assignment_id never silently fails to match in the
+    gallery's D1 query."""
     student = frappe.db.get_value(
         "Student", student_id,
         ["grade", "state_id", "district_id", "school_id"], as_dict=True,
@@ -121,10 +102,6 @@ def get_profile_scope(student_id: str) -> dict:
         current_unit = resolve_current_unit_for_track(pe, "program", fallback_resolver=next_unit_for)
         assignment_id = _resolve_assignment_id_for_unit(current_unit)
     except StudentNotFound:
-        # No active enrollment -- a student in this state legitimately has
-        # no current unit to resolve an assignment from. Not an error for
-        # gallery scoping purposes: assignment_id simply stays None, and
-        # the gallery cascade moves on to its next configured level.
         pass
 
     return {
@@ -132,5 +109,5 @@ def get_profile_scope(student_id: str) -> dict:
         "district_id": student.district_id,
         "school_id": student.school_id,
         "grade": student.grade,
-        "assignment_id": assignment_id,
+        "assignment_id": normalize_assignment_id_for_scope(assignment_id),
     }
