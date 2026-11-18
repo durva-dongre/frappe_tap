@@ -24,8 +24,50 @@ whitelisted entrypoint the Worker calls for this. Do not point the Worker
 directly at tap_lms.imgana.submission.submit_artwork -- it has no
 attempt-cap or Unit Progress awareness of its own.
 
-SUBMISSION_ID -- NOT RETURNED BY submit_artwork: see this function's own
-docstring.
+SUBMISSION_ID -- NOW RETURNED, UNDER THE KEY "submission_id" ONLY:
+
+Previously this function's response carried no identifier for the newly
+created row at all. The reasoning was: imgana's own submit_artwork creates
+the Submission row with submission_url=None, and only its async job
+(process_submission_async, enqueued with enqueue_after_commit=True, which
+runs AFTER this function has already returned) populates submission_url
+with the real "https://storage.googleapis.com/{bucket}/{object_key}" URL --
+and the Worker-shaped id is recovered by parsing THAT url
+(shared.submission.object_naming.resolve_wire_submission_id). Since
+submission_url is still None at the moment this function returns, calling
+resolve_wire_submission_id here would just fall back to the Frappe autoname
+(sub.name) -- which is NOT the Worker-shaped id this API's other read paths
+(submission.list, submission.get, progress.sync,
+progress.last_submission) all report under the same key.
+
+FIX: this function (and its caller, tap_app/api/submission.py::
+submit_artwork) already has object_key in hand -- it is the exact value the
+Worker's own /submission/request_upload minted and the client's PUT
+already confirmed exists on GCS, BEFORE this function is ever called (see
+tap_app/api/submission.py's own module docstring). The Worker-shaped
+submission_id is embedded in object_key itself
+("tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}"),
+so it can be parsed out immediately, synchronously, with
+shared.submission.object_naming.parse_object_key -- with NO dependency on
+imgana's async job having run yet, and with no race condition. This is the
+exact same parse _validate_object_key_attempt already performs on this
+same object_key a few lines earlier in this same function, just keeping
+the submission_id segment too instead of only checking attempt.
+
+The returned dict's key is "submission_id" -- never "name", never
+"submission_name", never the bare Frappe document name -- matching
+_submission_wire_shape's and _build_submission_block's own key exactly, so
+every submission-shaped response in this API (list, get, sync,
+last_submission, and now submit_artwork) agrees on one vocabulary.
+
+If object_key is missing (should not normally happen -- the Worker's own
+route always supplies one; see the existing warning log a few lines below
+for that case), or fails to parse for any reason, this falls back to
+resolve_wire_submission_id(sub_name) exactly as before -- which itself
+falls back to the Frappe autoname if submission_url hasn't been populated
+yet. This preserves the previous, correct degrade-gracefully behavior for
+any caller that does not go through the documented Worker route; it never
+raises or blocks submission creation because an id could not be computed.
 
 EVENT-TRACK ROW RESOLUTION (fixed): previously, both check_attempt_cap and
 submit_artwork resolved their Unit Progress row ONLY against the
@@ -103,7 +145,7 @@ from shared.progress.rewards import (
     max_submissions_per_week,
 )
 from shared.submission.locks import lock_program_enrollment_row
-from shared.submission.object_naming import parse_object_key
+from shared.submission.object_naming import parse_object_key, resolve_wire_submission_id
 from shared.db_retry import with_serialization_retry
 
 # Narrow, DB-driver-level exception classes that genuinely indicate "this
@@ -362,6 +404,37 @@ def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) 
         )
 
 
+def _resolve_submission_id_from_object_key(object_key: str | None, sub_name: str) -> str:
+    """Returns the Worker-shaped submission_id embedded in object_key
+    itself, parsed synchronously and immediately -- with NO dependency on
+    imgana's async upload job having run yet (see this module's own
+    docstring, "SUBMISSION_ID -- NOW RETURNED" section, for the full
+    reasoning for why this is safe and correct here specifically, unlike
+    calling resolve_wire_submission_id(sub_name) right after creation).
+
+    object_key is the exact value the Worker's own /submission/
+    request_upload minted and the client's PUT already confirmed exists on
+    GCS -- by the time this function runs, _validate_object_key_attempt has
+    already confirmed its embedded attempt number matches reality, so the
+    key is known-good.
+
+    Falls back to resolve_wire_submission_id(sub_name) -- the same
+    fallback every other read path in this API already uses, which itself
+    falls back to the plain Frappe autoname if submission_url isn't
+    populated yet -- for any caller that didn't supply an object_key, or
+    supplied one that fails to parse. This never raises: a submission_id
+    that can't be resolved from object_key degrades gracefully to the
+    existing, already-correct-for-that-case lookup, exactly as it would
+    have before this function existed.
+    """
+    if object_key:
+        try:
+            return parse_object_key(object_key)["submission_id"]
+        except InvalidInput:
+            pass
+    return resolve_wire_submission_id(sub_name)
+
+
 def check_attempt_cap(student_id: str, assignment_id: str, context: str = "program") -> dict:
     """Reports the student's current attempt number and how many attempts
     remain for this assignment. Read-only: enforces the completed-course
@@ -469,6 +542,14 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     tap_app/api/submission.py::submit_artwork is responsible for building
     this URL from the Worker's object_key before calling here.
 
+    RESPONSE NOW INCLUDES "submission_id": the Worker-shaped id, parsed
+    directly out of object_key via _resolve_submission_id_from_object_key
+    -- see this module's own docstring, "SUBMISSION_ID -- NOW RETURNED"
+    section, for the full reasoning. The key is "submission_id" only --
+    never "name" or any other spelling -- matching every other
+    submission-shaped response in this API (submission.list,
+    submission.get, progress.sync, progress.last_submission).
+
     EVENT-TRACK ROW RESOLUTION (fixed): the Unit Progress row for
     context == "event" is now resolved via the SAME global, by-name lookup
     (_resolve_row_for_context -> activities._resolve_event_unit_progress_row)
@@ -488,12 +569,9 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     object_key's attempt segment is validated against
     row.submission_attempts + 1 (see _validate_object_key_attempt) BEFORE
     imgana is ever called, so a mismatched key can never create a
-    Submission row. Beyond that cross-check, object_key is used here ONLY
-    to confirm a caller supplied one (logging a warning if not) -- it is
-    NOT used to compute an identifier for the response. submit_artwork's
-    response carries no submission_id at all; a client reads a
-    submission's id/state from /progress/sync or /progress/last_submission
-    instead.
+    Submission row. Beyond that cross-check, object_key is also used (see
+    _resolve_submission_id_from_object_key) to compute the wire-shaped
+    submission_id returned to the caller.
 
     program_enrollment is stamped on the new Submission row as
     owning_doc.name (the row's TRUE owning enrollment -- `pe` for program
@@ -587,8 +665,10 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
             f"submit_artwork: no object_key supplied for newly created "
             f"Submission {sub_name}. The TapApp Worker path always supplies "
             f"one; this indicates a caller other than the documented Worker "
-            f"route. This has no effect on the response shape -- "
-            f"submit_artwork never returns an identifier for the new row."
+            f"route. The response will fall back to resolve_wire_submission_id "
+            f"for this submission's id, which may report the plain Frappe "
+            f"autoname instead of a Worker-shaped id until the async upload "
+            f"job populates submission_url."
         )
 
     # Stamp program_enrollment onto the new Submission row as the row's
@@ -641,7 +721,15 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     sub_status = frappe.db.get_value("Submission", sub_name, "status") or "Pending"
     sub_created_at = frappe.db.get_value("Submission", sub_name, "created_at")
 
+    # Resolved synchronously from object_key -- see
+    # _resolve_submission_id_from_object_key's own docstring. Falls back
+    # to resolve_wire_submission_id(sub_name) (the same fallback every
+    # other read path already uses) if object_key is missing or doesn't
+    # parse, so this never raises and never blocks the response.
+    submission_id = _resolve_submission_id_from_object_key(object_key, sub_name)
+
     return {
+        "submission_id": submission_id,
         "status": sub_status,
         "created_at": (sub_created_at or frappe.utils.now_datetime()).isoformat(),
         "assignment_id_link": assignment_id,

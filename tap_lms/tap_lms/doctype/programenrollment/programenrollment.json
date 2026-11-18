@@ -72,6 +72,7 @@
    "search_index": 1
   },
   {
+   "default": "no_response",
    "fieldname": "stage",
    "fieldtype": "Select",
    "in_standard_filter": 1,
