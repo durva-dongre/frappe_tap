@@ -24,50 +24,55 @@ whitelisted entrypoint the Worker calls for this. Do not point the Worker
 directly at tap_lms.imgana.submission.submit_artwork -- it has no
 attempt-cap or Unit Progress awareness of its own.
 
-SUBMISSION_ID -- NOW RETURNED, UNDER THE KEY "submission_id" ONLY:
+SUBMISSION_ID -- RETURNED, UNDER THE KEY "submission_id" ONLY:
 
-Previously this function's response carried no identifier for the newly
-created row at all. The reasoning was: imgana's own submit_artwork creates
-the Submission row with submission_url=None, and only its async job
-(process_submission_async, enqueued with enqueue_after_commit=True, which
-runs AFTER this function has already returned) populates submission_url
-with the real "https://storage.googleapis.com/{bucket}/{object_key}" URL --
-and the Worker-shaped id is recovered by parsing THAT url
-(shared.submission.object_naming.resolve_wire_submission_id). Since
-submission_url is still None at the moment this function returns, calling
-resolve_wire_submission_id here would just fall back to the Frappe autoname
-(sub.name) -- which is NOT the Worker-shaped id this API's other read paths
-(submission.list, submission.get, progress.sync,
-progress.last_submission) all report under the same key.
+This function's response carries the Worker-shaped id for the newly
+created row, parsed directly out of `object_key`
+(shared.submission.object_naming.parse_object_key) -- with NO dependency
+on imgana's async upload job having run yet. See
+_resolve_submission_id_from_object_key's own docstring for the full
+reasoning. The key is always "submission_id" -- never "name" or any other
+spelling -- matching every other submission-shaped response in this API
+(submission.list, submission.get, progress.sync, progress.last_submission).
 
-FIX: this function (and its caller, tap_app/api/submission.py::
-submit_artwork) already has object_key in hand -- it is the exact value the
-Worker's own /submission/request_upload minted and the client's PUT
-already confirmed exists on GCS, BEFORE this function is ever called (see
-tap_app/api/submission.py's own module docstring). The Worker-shaped
-submission_id is embedded in object_key itself
-("tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}"),
-so it can be parsed out immediately, synchronously, with
-shared.submission.object_naming.parse_object_key -- with NO dependency on
-imgana's async job having run yet, and with no race condition. This is the
-exact same parse _validate_object_key_attempt already performs on this
-same object_key a few lines earlier in this same function, just keeping
-the submission_id segment too instead of only checking attempt.
+ASSIGNMENT -> LEARNING UNIT RESOLUTION (fixed -- see
+resolve_learning_unit_for_assignment below):
 
-The returned dict's key is "submission_id" -- never "name", never
-"submission_name", never the bare Frappe document name -- matching
-_submission_wire_shape's and _build_submission_block's own key exactly, so
-every submission-shaped response in this API (list, get, sync,
-last_submission, and now submit_artwork) agrees on one vocabulary.
+An Assignment can be attached to a LearningUnit in TWO different, both
+schema-legal ways:
 
-If object_key is missing (should not normally happen -- the Worker's own
-route always supplies one; see the existing warning log a few lines below
-for that case), or fails to parse for any reason, this falls back to
-resolve_wire_submission_id(sub_name) exactly as before -- which itself
-falls back to the Frappe autoname if submission_url hasn't been populated
-yet. This preserves the previous, correct degrade-gracefully behavior for
-any caller that does not go through the documented Worker route; it never
-raises or blocks submission creation because an id could not be computed.
+  1. Directly, as a row in LearningUnit.content_items
+     (UnitContentItem.content_type == 'Assignment').
+  2. Indirectly, as a row in some VideoClass's own `assessments` child
+     table (AssessmentList.assessment_type == 'Assignment'), where that
+     VideoClass is itself attached to the unit via a UnitContentItem row
+     (content_type == 'VideoClass'). This is the shape
+     export_lms_courses.py's own export_video() already walks
+     (video.assessments -> assignment_names) when building the catalog
+     JSON -- so it is a real, intentionally-supported attachment path, not
+     an edge case.
+
+resolve_learning_unit_for_assignment previously only ever checked path 1.
+When an assignment used path 2 exclusively (no direct UnitContentItem row
+at all), the direct-link query returned nothing, and the function fell
+straight through to the vertical-based guess (any LearningUnit sharing the
+assignment's own `vertical`, ordered by `modified DESC`) -- which has no
+guarantee of landing on the unit this specific assignment actually belongs
+to. In the reported case, this guess resolved to the WRONG unit (one whose
+Unit Progress row had never been touched, so video_watched read as 0),
+even though the student had genuinely watched the video for the unit the
+assignment was actually attached to via path 2. check_attempt_cap and
+submit_artwork then raised "video must be completed before submitting for
+this unit" despite submit_video_watched having already succeeded against
+the correct unit moments earlier.
+
+The fix adds path 2 as an explicit, ordered middle step -- assignment_id
+-> owning VideoClass (via AssessmentList) -> owning LearningUnit (via
+UnitContentItem) -- checked AFTER the direct link and BEFORE the
+event-enrollment / vertical-guess fallbacks. The vertical-guess fallback
+itself is unchanged and remains a genuine last resort, now only ever
+reached when an assignment has NEITHER a direct UnitContentItem row NOR a
+VideoClass.assessments row pointing at it.
 
 EVENT-TRACK ROW RESOLUTION (fixed): previously, both check_attempt_cap and
 submit_artwork resolved their Unit Progress row ONLY against the
@@ -157,19 +162,22 @@ from shared.db_retry import with_serialization_retry
 _SCHEMA_MISMATCH_EXCEPTIONS = (frappe.db.InternalError, frappe.db.ProgrammingError)
 
 
-def resolve_learning_unit_for_assignment(assignment_id: str, context: str, student_id: str) -> str:
-    """Resolves which LearningUnit an assignment_id belongs to, for cap
-    checking and Unit Progress bookkeeping. Tries a direct UnitContentItem
-    link first (content_type == 'Assignment', content == assignment_id),
-    then falls back to event/assignment-vertical resolution. The savepoint
-    around the primary query means a genuine schema mismatch degrades to the
-    fallback paths below (and ultimately NOT_FOUND) instead of aborting the
-    whole surrounding transaction -- but any OTHER kind of exception (a
-    dropped connection, an unrelated serialization failure) is re-raised
-    after the ROLLBACK TO SAVEPOINT, rather than silently swallowed.
+def _resolve_unit_via_direct_content_item(assignment_id: str) -> str | None:
+    """Path 1: a direct UnitContentItem row
+    (content_type == 'Assignment', content == assignment_id).
+
+    Runs inside a savepoint so a genuine schema-mismatch error (a missing
+    table/column) degrades to the caller trying the next resolution path
+    instead of aborting the whole surrounding transaction. Any OTHER kind
+    of exception (a dropped connection, an unrelated serialization
+    failure) is re-raised after the ROLLBACK TO SAVEPOINT, rather than
+    silently swallowed.
+
+    Returns the owning LearningUnit's name, or None if no such row
+    exists.
     """
     try:
-        frappe.db.sql("SAVEPOINT resolve_unit_for_assignment")
+        frappe.db.sql("SAVEPOINT resolve_unit_direct_link")
         row = frappe.db.sql(
             """
             SELECT parent FROM "tabUnitContentItem"
@@ -178,46 +186,106 @@ def resolve_learning_unit_for_assignment(assignment_id: str, context: str, stude
             """,
             (assignment_id,),
         )
-        frappe.db.sql("RELEASE SAVEPOINT resolve_unit_for_assignment")
+        frappe.db.sql("RELEASE SAVEPOINT resolve_unit_direct_link")
     except _SCHEMA_MISMATCH_EXCEPTIONS:
-        frappe.db.sql("ROLLBACK TO SAVEPOINT resolve_unit_for_assignment")
+        frappe.db.sql("ROLLBACK TO SAVEPOINT resolve_unit_direct_link")
         frappe.logger().warning(
-            "resolve_learning_unit_for_assignment: tabUnitContentItem lookup "
-            "failed with a schema-mismatch error -- falling back to "
-            "event/assignment resolution",
+            "resolve_learning_unit_for_assignment: tabUnitContentItem direct-link "
+            "lookup failed with a schema-mismatch error -- falling back to the "
+            "video-assessment / event / vertical resolution paths",
             exc_info=True,
         )
-        row = None
+        return None
     except Exception:
-        frappe.db.sql("ROLLBACK TO SAVEPOINT resolve_unit_for_assignment")
+        frappe.db.sql("ROLLBACK TO SAVEPOINT resolve_unit_direct_link")
         frappe.logger().error(
-            "resolve_learning_unit_for_assignment: tabUnitContentItem lookup "
-            "failed with an unexpected (non-schema) error -- re-raising "
-            "after rolling back to savepoint so the surrounding transaction "
-            "is not left poisoned",
+            "resolve_learning_unit_for_assignment: tabUnitContentItem direct-link "
+            "lookup failed with an unexpected (non-schema) error -- re-raising "
+            "after rolling back to savepoint so the surrounding transaction is "
+            "not left poisoned",
             exc_info=True,
         )
         raise
 
-    if row:
-        return row[0][0]
+    return row[0][0] if row else None
 
-    if context == "event":
-        enrollment = frappe.db.sql(
-            """
-            SELECT ec.learning_unit
-            FROM "tabStudent Event Enrollment" see
-            JOIN "tabEvent Campaign" ec ON ec.name = see.event
-            WHERE see.parent = %s AND see.status = 'active'
-            ORDER BY see.idx DESC
-            LIMIT 1
-            """,
-            (student_id,),
-        )
-        if enrollment:
-            return enrollment[0][0]
-        raise NotFound("no active event enrollment for this student")
 
+def _resolve_unit_via_video_assessment(assignment_id: str) -> str | None:
+    """Path 2: an INDIRECT attachment, via some VideoClass's own
+    `assessments` child table (AssessmentList row with
+    assessment_type == 'Assignment', assessment == assignment_id), where
+    that VideoClass is itself attached to a unit via a UnitContentItem row
+    (content_type == 'VideoClass', content == that video's name).
+
+    This mirrors exactly what export_lms_courses.py's own export_video()
+    already walks when building the catalog JSON (video.assessments ->
+    assignment_names) -- it is a real, intentionally-supported attachment
+    shape, not a workaround. An assignment configured this way has NO
+    direct UnitContentItem row of its own at all, which is why
+    _resolve_unit_via_direct_content_item alone was missing it entirely.
+
+    Returns the owning LearningUnit's name, or None if this assignment
+    has no VideoClass.assessments row, or that video itself isn't
+    attached to any unit.
+    """
+    video_link = frappe.db.sql(
+        """
+        SELECT al.parent AS video_name
+          FROM "tabAssessmentList" al
+         WHERE al.assessment_type = 'Assignment'
+           AND al.assessment = %s
+         LIMIT 1
+        """,
+        (assignment_id,),
+    )
+    if not video_link:
+        return None
+    video_name = video_link[0][0]
+
+    unit_row = frappe.db.sql(
+        """
+        SELECT uci.parent FROM "tabUnitContentItem" uci
+        WHERE uci.content_type = 'VideoClass' AND uci.content = %s
+        LIMIT 1
+        """,
+        (video_name,),
+    )
+    return unit_row[0][0] if unit_row else None
+
+
+def _resolve_unit_via_event_enrollment(student_id: str) -> str | None:
+    """Path 3a (event context only): the learning_unit of the student's
+    currently active Event Campaign enrollment. Returns None if there is
+    no active event enrollment."""
+    enrollment = frappe.db.sql(
+        """
+        SELECT ec.learning_unit
+        FROM "tabStudent Event Enrollment" see
+        JOIN "tabEvent Campaign" ec ON ec.name = see.event
+        WHERE see.parent = %s AND see.status = 'active'
+        ORDER BY see.idx DESC
+        LIMIT 1
+        """,
+        (student_id,),
+    )
+    return enrollment[0][0] if enrollment else None
+
+
+def _resolve_unit_via_vertical_guess(assignment_id: str) -> str | None:
+    """Path 3b (program context only) -- LAST-RESORT fallback. Picks ANY
+    LearningUnit sharing the assignment's own `vertical`, ordered by
+    `modified DESC`. This has no guarantee of landing on the unit this
+    specific assignment actually belongs to -- it is only ever reached
+    once paths 1 and 2 have both failed to find a real attachment, i.e.
+    for an assignment with neither a direct UnitContentItem row nor a
+    VideoClass.assessments row pointing at it.
+
+    Raises NotFound if the assignment itself doesn't exist. Returns None
+    (never raises) if the assignment exists but no LearningUnit shares
+    its vertical -- the caller raises NotFound for that case so the
+    "assignment doesn't exist" and "no matching unit" error messages stay
+    distinct.
+    """
     assignment = frappe.db.get_value("Assignment", assignment_id, ["vertical", "level"], as_dict=True)
     if not assignment:
         raise NotFound("assignment does not exist")
@@ -231,9 +299,51 @@ def resolve_learning_unit_for_assignment(assignment_id: str, context: str, stude
         """,
         (assignment.vertical,),
     )
+    return unit[0][0] if unit else None
+
+
+def resolve_learning_unit_for_assignment(assignment_id: str, context: str, student_id: str) -> str:
+    """Resolves which LearningUnit an assignment_id belongs to, for cap
+    checking and Unit Progress bookkeeping.
+
+    Tries, in order:
+      1. A direct UnitContentItem link
+         (_resolve_unit_via_direct_content_item).
+      2. An indirect link via a VideoClass's own `assessments` child table
+         (_resolve_unit_via_video_assessment) -- see module docstring,
+         "ASSIGNMENT -> LEARNING UNIT RESOLUTION", for why this path
+         exists and what broke without it.
+      3. Only once BOTH of the above have failed to find a real
+         attachment:
+           - event context: the student's active Event Campaign
+             enrollment (_resolve_unit_via_event_enrollment). Raises
+             NotFound if there is none.
+           - program context: a vertical-based guess
+             (_resolve_unit_via_vertical_guess) -- a genuine last resort
+             with no uniqueness guarantee. Raises NotFound if the
+             assignment doesn't exist, or if no LearningUnit shares its
+             vertical at all.
+
+    Raises NotFound if no resolution path produces a unit.
+    """
+    unit = _resolve_unit_via_direct_content_item(assignment_id)
+    if unit:
+        return unit
+
+    unit = _resolve_unit_via_video_assessment(assignment_id)
+    if unit:
+        return unit
+
+    if context == "event":
+        unit = _resolve_unit_via_event_enrollment(student_id)
+        if unit:
+            return unit
+        raise NotFound("no active event enrollment for this student")
+
+    unit = _resolve_unit_via_vertical_guess(assignment_id)
     if not unit:
         raise NotFound("could not resolve a learning unit for this assignment")
-    return unit[0][0]
+    return unit
 
 
 def require_video_done(unit_progress_row) -> None:
@@ -261,22 +371,10 @@ def _require_course_not_completed(pe, context: str) -> None:
     must not silently reopen check_attempt_cap / submit_artwork for a
     finished course.
 
-    BUGFIX: this guard used to be called unconditionally regardless of
-    `context`. Because `pe` is always the student's ACTIVE PROGRAM-track
-    enrollment (resolved by course_level via
-    get_active_program_enrollment_name -- it has nothing to do with any
-    particular event), an EVENT-context call for a student whose unrelated
-    program course happened to already be "completed" was being rejected
-    too, contradicting this module's own documented intent: event activity
-    must remain available regardless of the student's program-track
-    completion status, since the two tracks are otherwise unrelated even
-    though they can share the same owning ProgramEnrollment document.
-
-    The guard now only raises for context == "program"; for
-    context == "event" it is a deliberate no-op, called for symmetry with
-    its own call sites rather than skipped there entirely, so a future
-    reader sees explicitly that event calls were considered and
-    intentionally excluded.
+    The guard only ever raises for context == "program". An event-context
+    call never has its event-row resolution or submission gated on the
+    active program enrollment's own completion status -- only the
+    program-context write path cares whether `pe.status == "completed"`.
     """
     if context != "program":
         return
@@ -310,7 +408,7 @@ def _find_existing_unit_progress_row(parent_doc, learning_unit: str, unit_type: 
 
     Only used for context == "program" -- event context is resolved via
     _resolve_event_unit_progress_row instead (see
-    _resolve_row_for_cap_check below), which already performs the
+    _resolve_row_for_context below), which already performs the
     equivalent read-only-safe lookup for an existing row (it only creates
     one when none exists at all, mirroring this function's own contract
     for the program-context case)."""
@@ -383,13 +481,6 @@ def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) 
     different, already-handled failure mode (the Worker validates key shape
     before ever calling this route); this check only fires for a
     syntactically valid key whose attempt number disagrees with reality.
-
-    NOTE: parse_object_key's own OBJECT_KEY_RE (object_naming.py) now
-    tolerates a space inside the assignment_id/student_id segments, matching
-    the Worker's own FIELD_PATTERNS.assignment_id shape, so this check no
-    longer silently no-ops for legacy/WhatsApp-sourced assignment_ids that
-    contain a literal space -- see object_naming.py's docstring for the
-    history of that gap.
     """
     if not object_key:
         return
@@ -407,10 +498,7 @@ def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) 
 def _resolve_submission_id_from_object_key(object_key: str | None, sub_name: str) -> str:
     """Returns the Worker-shaped submission_id embedded in object_key
     itself, parsed synchronously and immediately -- with NO dependency on
-    imgana's async upload job having run yet (see this module's own
-    docstring, "SUBMISSION_ID -- NOW RETURNED" section, for the full
-    reasoning for why this is safe and correct here specifically, unlike
-    calling resolve_wire_submission_id(sub_name) right after creation).
+    imgana's async upload job having run yet.
 
     object_key is the exact value the Worker's own /submission/
     request_upload minted and the client's PUT already confirmed exists on
@@ -422,10 +510,7 @@ def _resolve_submission_id_from_object_key(object_key: str | None, sub_name: str
     fallback every other read path in this API already uses, which itself
     falls back to the plain Frappe autoname if submission_url isn't
     populated yet -- for any caller that didn't supply an object_key, or
-    supplied one that fails to parse. This never raises: a submission_id
-    that can't be resolved from object_key degrades gracefully to the
-    existing, already-correct-for-that-case lookup, exactly as it would
-    have before this function existed.
+    supplied one that fails to parse. This never raises.
     """
     if object_key:
         try:
@@ -445,16 +530,19 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
     on first-ever activity, per _resolve_row_for_context's own docstring)
     and does not save the ProgramEnrollment document.
 
+    The unit this assignment belongs to is resolved via
+    resolve_learning_unit_for_assignment, which now checks BOTH the direct
+    UnitContentItem link AND the indirect VideoClass.assessments link
+    before falling back to event/vertical resolution -- see that
+    function's and this module's own docstring for why both links matter.
+
     For context == "event", the Unit Progress row is resolved via the
     SAME global, by-name lookup submit_artwork and activities.py's
     video/quiz writes use (see _resolve_row_for_context) -- previously
     this function only ever looked inside the currently-active
     enrollment's own unit_progress table, which could report a stale
     attempt_number: 1 for a student whose real event progress (and real
-    attempt count) lived on a different, prior enrollment. That mismatch
-    meant check_attempt_cap could promise an attempt budget that
-    submit_artwork would then immediately contradict once it resolved the
-    real row. Both functions now agree.
+    attempt count) lived on a different, prior enrollment.
 
     If no Unit Progress row exists yet for this (student, unit, context)
     (program context only -- event context always resolves or creates
@@ -479,11 +567,7 @@ def check_attempt_cap(student_id: str, assignment_id: str, context: str = "progr
 
     COMPLETED COURSE (program context only): raises InvalidInput
     (error_code="course_completed") if pe.status == "completed" AND
-    context == "program" -- see _require_course_not_completed's own
-    docstring for why this guard is scoped to program context and why it is
-    necessary now that `pe` itself can resolve to a completed enrollment
-    for read paths elsewhere in this codebase. An event-context call is
-    never gated on this.
+    context == "program".
 
     This function is read-only (no writes, no row lock beyond the implicit
     read), so it is NOT wrapped in @with_serialization_retry -- there is no
@@ -542,50 +626,39 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     tap_app/api/submission.py::submit_artwork is responsible for building
     this URL from the Worker's object_key before calling here.
 
-    RESPONSE NOW INCLUDES "submission_id": the Worker-shaped id, parsed
-    directly out of object_key via _resolve_submission_id_from_object_key
-    -- see this module's own docstring, "SUBMISSION_ID -- NOW RETURNED"
-    section, for the full reasoning. The key is "submission_id" only --
-    never "name" or any other spelling -- matching every other
-    submission-shaped response in this API (submission.list,
-    submission.get, progress.sync, progress.last_submission).
+    The unit this assignment belongs to is resolved via
+    resolve_learning_unit_for_assignment -- see that function's and this
+    module's own docstring for the direct-link / video-assessment-link /
+    fallback resolution order.
 
-    EVENT-TRACK ROW RESOLUTION (fixed): the Unit Progress row for
-    context == "event" is now resolved via the SAME global, by-name lookup
+    RESPONSE INCLUDES "submission_id": the Worker-shaped id, parsed
+    directly out of object_key via _resolve_submission_id_from_object_key.
+    The key is "submission_id" only -- never "name" or any other spelling
+    -- matching every other submission-shaped response in this API.
+
+    EVENT-TRACK ROW RESOLUTION: the Unit Progress row for
+    context == "event" is resolved via the SAME global, by-name lookup
     (_resolve_row_for_context -> activities._resolve_event_unit_progress_row)
     that activities.py's own submit_video_watched/submit_quiz use, instead
     of always creating/reusing a row on the currently-active enrollment.
-    Previously, this function's own get_or_create_unit_progress_row(pe, ...)
-    call for event context could create a SECOND, disconnected Unit
-    Progress row whenever the student's active enrollment had rotated
-    since they last interacted with this event -- producing a row with no
-    video_watched history, which would then incorrectly fail the video
-    prerequisite below even though the student genuinely had watched the
-    video (on the OTHER, now-orphaned row). This also means
-    points/last_activity_at for an event submission are now awarded
-    against the row's true owning enrollment (owning_doc), not
+    This also means points/last_activity_at for an event submission are
+    awarded against the row's true owning enrollment (owning_doc), not
     unconditionally against `pe` -- see award_points's call below.
 
     object_key's attempt segment is validated against
     row.submission_attempts + 1 (see _validate_object_key_attempt) BEFORE
     imgana is ever called, so a mismatched key can never create a
-    Submission row. Beyond that cross-check, object_key is also used (see
-    _resolve_submission_id_from_object_key) to compute the wire-shaped
-    submission_id returned to the caller.
+    Submission row.
 
     program_enrollment is stamped on the new Submission row as
     owning_doc.name (the row's TRUE owning enrollment -- `pe` for program
     context, or whatever enrollment actually owns the event row for event
     context), not unconditionally `pe.name`, now that the two can differ.
 
-    COMPLETED COURSE (program context only -- bugfix): raises InvalidInput
+    COMPLETED COURSE (program context only): raises InvalidInput
     (error_code="course_completed") only when context == "program" AND
-    pe.status == "completed" -- see _require_course_not_completed's own
-    docstring. Previously this guard fired for EVENT context too whenever
-    the student's unrelated active program enrollment happened to be
-    completed, which incorrectly blocked an otherwise-valid event
-    submission -- that was a bug, now fixed: event submissions are never
-    gated on the active program enrollment's own completion status.
+    pe.status == "completed". Event submissions are never gated on the
+    active program enrollment's own completion status.
 
     retried-transaction note: this function is wrapped in
     @with_serialization_retry (see shared/db_retry.py); a retry re-runs
