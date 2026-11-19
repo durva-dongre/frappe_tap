@@ -223,17 +223,25 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
         raise NotFound("no quiz configured for this unit")
     resolved_quiz_id = quiz_rows[0][0]
 
+    # NOTE: QuizQuestion has no "correct_key" field. The real field,
+    # confirmed against tap_lms/tap_lms/doctype/quizquestion/quizquestion.json,
+    # is "correct_option" (fieldtype Int). The query and lookup below were
+    # previously written against the non-existent "correct_key" column,
+    # which raised psycopg2.errors.UndefinedColumn on every call.
     correct_keys: dict[str, str] = {}
     question_rows = frappe.db.sql(
         """
-        SELECT name, correct_key FROM "tabQuizQuestion" WHERE parent = %s
+        SELECT name, correct_option FROM "tabQuizQuestion" WHERE parent = %s
         """,
         (resolved_quiz_id,),
         as_dict=True,
     )
     for q in question_rows:
-        if q.get("name") and q.get("correct_key"):
-            correct_keys[q["name"]] = str(q["correct_key"])
+        # "is not None" (not a plain truthy check) so a legitimately-stored
+        # correct_option of 0 is never silently treated as "no answer
+        # configured" the way a falsy-check would.
+        if q.get("name") and q.get("correct_option") is not None:
+            correct_keys[q["name"]] = str(q["correct_option"])
 
     correct_count = 0
     for a in answers:
@@ -269,4 +277,4 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
         "_row": row,
     }
     _apply_completion_fields(result, owning_doc, status_result["just_completed"], context, unit_id)
-    return result 
+    return result
