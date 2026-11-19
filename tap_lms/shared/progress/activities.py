@@ -223,25 +223,39 @@ def submit_quiz(program_enrollment_doc, unit_id: str, quiz_id: str, answers: lis
         raise NotFound("no quiz configured for this unit")
     resolved_quiz_id = quiz_rows[0][0]
 
-    # NOTE: QuizQuestion has no "correct_key" field. The real field,
-    # confirmed against tap_lms/tap_lms/doctype/quizquestion/quizquestion.json,
-    # is "correct_option" (fieldtype Int). The query and lookup below were
-    # previously written against the non-existent "correct_key" column,
-    # which raised psycopg2.errors.UndefinedColumn on every call.
+    # NOTE: QuizQuestion is a STANDALONE doctype, not a child table of Quiz
+    # -- confirmed directly against the live DB: every row in tabQuizQuestion
+    # has parent=None, parenttype=None (QuizQuestion.json also has no
+    # "istable": 1, unlike QuizQuestionList.json, which is the real child
+    # table). The previous query ("WHERE parent = resolved_quiz_id" against
+    # tabQuizQuestion) could never match anything, regardless of which
+    # column name it selected -- that's why correct_count was always 0 even
+    # after the correct_key -> correct_option column fix.
+    #
+    # The real relationship: Quiz.questions is a Table field
+    # (QuizQuestionList), whose own "question" field is a Link to the
+    # actual QuizQuestion doc. So resolving a quiz's questions means
+    # loading the Quiz doc and reading its questions child table, then
+    # loading each linked QuizQuestion by name -- not querying
+    # tabQuizQuestion by parent at all.
     correct_keys: dict[str, str] = {}
-    question_rows = frappe.db.sql(
-        """
-        SELECT name, correct_option FROM "tabQuizQuestion" WHERE parent = %s
-        """,
-        (resolved_quiz_id,),
-        as_dict=True,
-    )
-    for q in question_rows:
-        # "is not None" (not a plain truthy check) so a legitimately-stored
-        # correct_option of 0 is never silently treated as "no answer
-        # configured" the way a falsy-check would.
-        if q.get("name") and q.get("correct_option") is not None:
-            correct_keys[q["name"]] = str(q["correct_option"])
+    quiz_doc = frappe.get_doc("Quiz", resolved_quiz_id)
+    question_names = [q.question for q in quiz_doc.questions if q.question]
+
+    if question_names:
+        question_rows = frappe.db.sql(
+            """
+            SELECT name, correct_option FROM "tabQuizQuestion" WHERE name IN %s
+            """,
+            (tuple(question_names),),
+            as_dict=True,
+        )
+        for q in question_rows:
+            # "is not None" (not a plain truthy check) so a legitimately-stored
+            # correct_option of 0 is never silently treated as "no answer
+            # configured" the way a falsy-check would.
+            if q.get("name") and q.get("correct_option") is not None:
+                correct_keys[q["name"]] = str(q["correct_option"])
 
     correct_count = 0
     for a in answers:
