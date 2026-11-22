@@ -9,6 +9,7 @@ from shared.progress.unit_progress import (
     resolve_last_activity_type_for_track,
     attempt_info_for_submission,
     find_unit_progress_row_for_submission,
+    completed_activities_for_row,
 )
 from shared.enrollment.unit_rotation import next_unit_for, is_course_complete
 from shared.progress.rewards import points_for_submission_review_valid, gems_for_submission_review_valid
@@ -267,6 +268,31 @@ def _resolve_last_completed_unit_for_track(pe, table_fieldname: str = "unit_prog
     return rows[0].learning_unit
 
 
+def _completed_activities_for_unit(pe, learning_unit: str | None, table_fieldname: str = "unit_progress") -> list[str]:
+    """Returns completed_activities_for_row's list (see
+    shared.progress.unit_progress) for the PROGRAM-track Unit Progress row
+    on `pe` matching learning_unit -- i.e. "what's done for the unit the
+    student is currently on," for a frontend to render done/pending state
+    per activity without re-deriving it from raw fields itself.
+
+    Read-only: scans pe's own already-loaded unit_progress child table
+    (no new query). Returns [] -- never None, never raises -- when
+    learning_unit is None (e.g. course fully complete, so there is no
+    "current" unit) or when no row exists yet for that unit (student
+    hasn't started it, so nothing is legitimately complete yet).
+
+    This is purely a frontend-facing convenience field and has no effect
+    on unit_status, course_completed, or any other existing field in
+    either payload this is used from.
+    """
+    if not learning_unit:
+        return []
+    for row in getattr(pe, table_fieldname):
+        if row.unit_type == "program" and row.learning_unit == learning_unit:
+            return completed_activities_for_row(row)
+    return []
+
+
 def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
     """
     Status auto-activation: every call to this function (i.e. every
@@ -307,6 +333,12 @@ def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
     _resolve_last_completed_unit_for_track) whenever the course is fully
     complete, so a client can still show which unit the student finished
     last, even though there is no "current" unit left to report.
+
+    completed_activities: added alongside current_learning_unit, in both
+    the "changed" branch below. See _completed_activities_for_unit's own
+    docstring -- it is a purely additive, read-only derivation off the
+    same Unit Progress row current_learning_unit already resolves to, for
+    the frontend to render per-activity done/pending state for that unit.
     """
     pe = get_active_program_enrollment(student_id)
 
@@ -329,6 +361,7 @@ def get_sync_payload(student_id: str, last_updated_epoch: int) -> dict:
         "points": pe.points or 0,
         "gems": pe.gems or 0,
         "current_learning_unit": current_learning_unit,
+        "completed_activities": _completed_activities_for_unit(pe, current_learning_unit),
         "last_activity_type": resolve_last_activity_type_for_track(pe, "program"),
     }
     if course_complete:
@@ -459,7 +492,13 @@ def get_profile_select_payload(student_id: str) -> dict:
     module's docstring. Reuses the exact same resume-payload shape
     tap_app/api/auth.py::_build_resume_payload already returns from
     /auth/redeem and /auth/select_profile, so a client sees an identical
-    shape regardless of which login entrypoint it came through.
+    shape regardless of which login entrypoint it came through -- that
+    includes redeem_magic_link, since tap_app/api/auth.py::
+    redeem_magic_link builds each sibling's payload via
+    _build_resume_payload, which calls this exact function. Any field
+    added here (e.g. completed_activities below) therefore reaches
+    redeem_magic_link's roster response automatically, with no change
+    needed in tap_app/api/auth.py itself.
 
     Status auto-activation: same activation check as get_sync_payload
     above -- every call here (i.e. every /auth/redeem and
@@ -477,6 +516,14 @@ def get_profile_select_payload(student_id: str) -> dict:
     None in that case (every unit done); last_completed_unit is populated
     instead so the resume screen can still show what the student last
     finished.
+
+    completed_activities: added alongside current_learning_unit. See
+    _completed_activities_for_unit's own docstring -- it is a purely
+    additive, read-only derivation off the same Unit Progress row
+    current_unit already resolves to, for the frontend to render
+    per-activity done/pending state for that unit, the moment a student
+    logs in (redeem_magic_link / select_profile) as well as on every
+    subsequent sync call.
     """
     pe = get_active_program_enrollment(student_id)
 
@@ -493,6 +540,7 @@ def get_profile_select_payload(student_id: str) -> dict:
         "points": pe.points or 0,
         "gems": pe.gems or 0,
         "current_learning_unit": current_unit,
+        "completed_activities": _completed_activities_for_unit(pe, current_unit),
         "last_activity_type": last_activity,
         "state_id": profile["state_id"],
         "district_id": profile["district_id"],

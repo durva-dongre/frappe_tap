@@ -111,6 +111,19 @@ for any unit where the quiz happened to be graded before the (possibly
 much later) submission grading landed -- masking the more recent
 submission event indefinitely. See the function's own docstring below
 for the fix and its limits.
+
+COMPLETED ACTIVITIES (frontend convenience list)
+---------------------------------------------------
+completed_activities_for_row is a purely additive, read-only derivation
+off the exact same three completion signals unit_status is already
+computed from (video_watched / is_quiz_graded / is_submission_valid). It
+returns which of {"video", "quiz", "submission"} are currently complete
+for one Unit Progress row, as a list, so a frontend can show per-activity
+done/pending state for "the unit the student is currently on" without
+re-deriving that itself from raw fields. It has no effect on unit_status
+or course-completion logic, which are untouched and continue to be
+computed exactly as before by recompute_unit_status /
+recompute_unit_status_by_name.
 """
 
 from __future__ import annotations
@@ -257,6 +270,46 @@ def is_submission_valid(row) -> bool:
     return sub.status == "Completed" and is_submission_complete(sub.result_status)
 
 
+def completed_activities_for_row(row) -> list[str]:
+    """Returns which of the three per-unit activity signals
+    (video/quiz/submission) are currently COMPLETE for this Unit Progress
+    row, as a list of strings drawn from {"video", "quiz", "submission"},
+    in that fixed order. Purely additive, read-only derivation off the
+    exact same three signals unit_status is already computed from
+    (recompute_unit_status / recompute_unit_status_by_name) -- no new
+    field, no new write path.
+
+    - "video": row.video_watched is truthy.
+    - "quiz": is_quiz_graded(row) is True (the quiz has been graded for
+      this unit -- quiz is one-shot per unit, so "graded" and "complete"
+      are the same thing here).
+    - "submission": is_submission_valid(row) is True (the linked
+      Submission exists and its result_status counts as complete --
+      shared.submission.status.is_submission_complete).
+
+    Accepts either a Frappe Document child row (attribute access) or a
+    plain dict (e.g. a frappe.db.sql(as_dict=True) row) -- same dual-shape
+    support as infer_last_activity_type below, since both shapes are fed
+    into this function by its callers (shared/profile/sync.py's live doc
+    rows for the "current unit" case).
+
+    This is purely a frontend-facing convenience list ("what's done for
+    this unit") and has no effect on unit_status / course completion
+    logic, which continue to be computed exactly as before by
+    recompute_unit_status / recompute_unit_status_by_name.
+    """
+    video_watched = row.video_watched if hasattr(row, "video_watched") else row.get("video_watched")
+
+    completed: list[str] = []
+    if video_watched:
+        completed.append("video")
+    if is_quiz_graded(row):
+        completed.append("quiz")
+    if is_submission_valid(row):
+        completed.append("submission")
+    return completed
+
+
 def recompute_unit_status_by_name(unit_progress_row_name: str) -> UnitStatusResult:
     """Returns {"status": <resulting unit_status string>, "just_completed":
     <bool>} -- just_completed is True iff THIS call is what flipped the
@@ -400,12 +453,12 @@ def infer_last_activity_type(row) -> Optional[str]:
     concrete case (grading landing after the quiz was already recorded)
     without claiming perfect fidelity for every conceivable interleaving.
 
-    Accepts either a Frappe Document child row (attribute access,
-    row.modified present as a live field) or a plain dict such as the ones
-    find_unit_progress_row_for_submission / find_unit_progress_row_by_name_global
-    return (which now also select `modified` -- see those functions above)
-    -- both call sites that feed rows into this function rely on one or
-    the other shape.
+    Accepts either a Frappe Document child row (attribute access, with
+    row.modified present as a live field) or a plain dict such as the
+    ones find_unit_progress_row_for_submission /
+    find_unit_progress_row_by_name_global return (which also select
+    `modified` -- see those functions above) -- both call sites that feed
+    rows into this function rely on one or the other shape.
 
     Precedence is otherwise unchanged from before: quiz, then submission,
     then video, for whichever case the submission-recency check above
