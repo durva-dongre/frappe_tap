@@ -7,7 +7,24 @@ submissions into the same bucket layout reuses this unchanged.
 
 Key shape (must match the Worker's own storage/keys.ts byte-for-byte, FOR
 THE GCS KEY -- the key the Worker mints and the client uploads to):
-    tapapp/{assignment_id}/{student_id}/{submission_id}-{attempt}.{ext}
+    tapapp/{assignment_id}/{student_id}/{submission_id}.{ext}
+
+CHANGE: the key no longer embeds "-{attempt}". Two reasons converged on this:
+  1. Every reader of "attempt" in this codebase (shared/jobs/
+     gallery_promotion_sweep.py, shared/submission/lifecycle.py) already
+     reads it from Frappe's own submission_attempts counter or from the
+     in-memory request, never by parsing it back out of a stored key -- so
+     dropping it from the key costs nothing functionally as long as
+     submission_id stays unique per attempt (it does: a new submission_id is
+     minted per attempt, so two attempts never collide on this key).
+  2. Submission.submission_url (and other downstream copies of this same
+     string, e.g. a linked Feedback Request record) are length-capped
+     Data fields on the Frappe side, and a long assignment_id was blowing
+     that cap. This module also now truncates the sanitized assignment_id
+     segment at ASSIGNMENT_ID_KEY_SEGMENT_MAX_LEN, instead of only removing
+     the short "-{attempt}" suffix, since the real offender is long
+     assignment DISPLAY names (which can run 50+ characters), not the few
+     characters "-{attempt}" ever cost.
 
 OBJECT_KEY_RE tolerates a space inside assignment_id/student_id, matching the
 Worker's own GCS-side shape exactly: the Worker's storage/keys.ts::
@@ -16,12 +33,13 @@ because a legacy/WhatsApp-sourced assignment_id such as "Spaceship
 Assignment-62591" is a real, legitimate value. The GCS object key the Worker
 mints for that assignment_id contains that literal space verbatim.
 
-build_object_key always produces the SANITIZED (no-space) key shape used for
-R2 storage and the gallery's D1 index -- it sanitizes assignment_id and
-student_id via sanitize_key_segment before building the key. parse_object_key
-must still be able to parse the raw, space-tolerant GCS key shape too, which
-is why OBJECT_KEY_RE stays space-tolerant even though build_object_key never
-emits a space itself.
+build_object_key always produces the SANITIZED (no-space), LENGTH-CAPPED key
+shape used for R2 storage and the gallery's D1 index -- it sanitizes
+assignment_id and student_id via sanitize_key_segment, then truncates the
+assignment_id segment, before building the key. parse_object_key must still
+be able to parse the raw, space-tolerant, untruncated GCS key shape too,
+which is why OBJECT_KEY_RE stays space-tolerant and un-length-capped even
+though build_object_key never emits a space or an overlong segment itself.
 
 ASSIGNMENT_ID SCOPE NORMALIZATION
 -----------------------------------
@@ -36,11 +54,12 @@ calling sanitize_key_segment directly) so:
     can quietly drift apart;
   - a future change to the normalization rule only has one call site to
     update, not N.
-Without this, a real, exactly-matching assignment_id containing a space could
-be written to D1 as one sanitized string by the sweep and read back as a
-differently (or not-at-all) sanitized string by profile scope resolution --
-silently breaking the gallery's narrowest, most relevant cascade level for
-any assignment_id that isn't already punctuation-free.
+
+NOTE: normalize_assignment_id_for_scope does NOT truncate -- it is used for
+the gallery's D1 scope column (not length-capped the way Frappe's own Data
+fields are), and truncating it would risk collapsing two distinct
+assignment_ids into the same scope value. Truncation is applied only inside
+build_object_key, for the object-key segment specifically.
 
 sanitize_scope_value, separately, sanitizes the gallery's state/district/
 school D1 columns against a DIFFERENT, stricter character class (lowercase
@@ -80,14 +99,6 @@ not a bug: by the time anything actually reads that id again (sync, list,
 get, gallery promotion -- which only ever runs post-grading),
 submission_url is populated and the Worker-shaped id resolves correctly.
 
-Previously, the nightly gallery sweep's own payload builder wrote
-sub["name"] (Frappe's raw document name) directly into D1's
-gallery_items.submission_id, instead of calling resolve_wire_submission_id --
-a different, inconsistent scheme from every other read path. That mismatch
-is fixed at the sweep's own call site (shared/jobs/gallery_promotion_sweep.py),
-not in this module; this module's resolve_wire_submission_id was already
-correct and is simply the function that call site now actually uses.
-
 ANY-BUCKET GCS URL PARSING
 ----------------------------
 submission_url is not guaranteed to live under one single, hardcoded bucket.
@@ -113,10 +124,13 @@ from shared.errors import InvalidInput
 #     the former, not the latter.
 #   - ext: {1,10}, matching worker/src/storage/keys.ts's filename regex
 #     ([a-zA-Z0-9]{1,10}) and OBJECT_KEY_PATTERN's own [A-Za-z0-9]{1,10}.
+#
+# No "-{attempt}" segment anymore -- see module docstring for why it was
+# dropped from the key shape.
 OBJECT_KEY_RE = re.compile(
     r"^tapapp/(?P<assignment_id>[A-Za-z0-9_ -]{3,80})/"
     r"(?P<student_id>[A-Za-z0-9_ -]{3,80})/"
-    r"(?P<submission_id>[a-z2-7]{6,16})-(?P<attempt>[1-9][0-9]?)\.(?P<ext>[a-z0-9]{1,10})$"
+    r"(?P<submission_id>[a-z2-7]{6,16})\.(?P<ext>[a-z0-9]{1,10})$"
 )
 
 # Matches the Worker's OBJECT_KEY_PATTERN character class for the
@@ -135,6 +149,17 @@ _KEY_SEGMENT_DISALLOWED_CHARS = re.compile(r"[^A-Za-z0-9_-]")
 # scope column). A RUN of one or more disallowed characters collapses to a
 # SINGLE '-' (not one '-' per disallowed character).
 _SCOPE_VALUE_DISALLOWED_CHARS = re.compile(r"[^a-z0-9-]+")
+
+# Cap on the SANITIZED assignment_id segment length inside build_object_key's
+# output only. This is what actually prevents the 140-char Data-field
+# overflow that dropping "-{attempt}" alone could not reliably prevent --
+# a 50+ character assignment display name is the real offender, not the
+# 2-3 characters "-{attempt}" used to cost. 40 is chosen so that, combined
+# with a worst-case 80-char student_id, the full object key still comfortably
+# fits inside a 140-char field alongside the fixed "tapapp/.../..." scaffolding
+# and the GCS URL's own host+bucket prefix for any bucket name of reasonable
+# length. Raise or lower this if the real bucket/host length budget changes.
+ASSIGNMENT_ID_KEY_SEGMENT_MAX_LEN = 40
 
 EXT_FOR_SUBMISSION_TYPE = {"image": "webp", "video": "mp4"}
 CONTENT_TYPE_FOR_SUBMISSION_TYPE = {"image": "image/webp", "video": "video/mp4"}
@@ -207,6 +232,10 @@ def sanitize_key_segment(value: str) -> str:
     '-' (so "A  B" becomes "A--B", not "A-B") -- kept exactly as originally
     shipped, since object-key uniqueness/collision behavior for this
     function is already relied upon elsewhere and should not change here.
+
+    This function does NOT truncate length -- see build_object_key for where
+    length-capping is applied, and why it is scoped to the object-key segment
+    only and not applied here.
     """
     if not value:
         return value
@@ -229,12 +258,16 @@ def normalize_assignment_id_for_scope(value: str | None) -> str | None:
     "Spaceship Assignment-62591".
 
     Internally this is exactly sanitize_key_segment (collapses whitespace/
-    punctuation to '-', character-by-character). It is named and exported
-    separately purely so a reader of either call site immediately sees "this
-    is the gallery scope normalization," not "this happens to call the same
-    function the object-key builder uses." If the two transforms ever need
-    to diverge in the future, this is the one place to change for every
-    scope-related caller at once.
+    punctuation to '-', character-by-character) -- NOT truncated, unlike
+    build_object_key's own assignment_id segment. A scope value isn't
+    length-capped the way Frappe's own Data fields are, and truncating here
+    would risk two distinct assignment_ids colliding onto the same scope
+    value. It is named and exported separately purely so a reader of either
+    call site immediately sees "this is the gallery scope normalization,"
+    not "this happens to call the same function the object-key builder
+    uses." If the two transforms ever need to diverge further in the
+    future, this is the one place to change for every scope-related caller
+    at once.
 
     Returns None for an empty/falsy input -- there is nothing to normalize,
     and callers can write `normalize_assignment_id_for_scope(raw)` directly
@@ -291,40 +324,69 @@ def sanitize_scope_value(value: str | None) -> str | None:
 
 def build_object_key(assignment_id: str, student_id: str, submission_id: str, attempt: int, ext: str) -> str:
     """Builds the tapapp object key, sanitizing assignment_id and student_id
-    first (see sanitize_key_segment) so the result always matches the
-    Worker's own OBJECT_KEY_PATTERN, regardless of whether the caller's raw
-    inputs already did. submission_id and ext are not sanitized here --
-    submission_id is always Worker-minted ([a-z2-7]{6,16}) and ext is always
-    resolved from a fixed, known-safe table, so neither can contain a
-    character this function would need to clean up.
+    first (see sanitize_key_segment), THEN truncating the sanitized
+    assignment_id segment to ASSIGNMENT_ID_KEY_SEGMENT_MAX_LEN, so the
+    result always matches the Worker's own OBJECT_KEY_PATTERN character
+    class AND stays short enough that every downstream copy of this key
+    (Submission.submission_url, and anything else that stores a full
+    "https://storage.googleapis.com/{bucket}/{object_key}" URL in a
+    length-capped Data field) has real headroom, regardless of how long the
+    assignment's own display name is. submission_id and ext are not
+    sanitized or truncated here -- submission_id is always Worker-minted
+    ([a-z2-7]{6,16}) and ext is always resolved from a fixed, known-safe
+    table, so neither can contain a character or length this function would
+    need to clean up.
 
-    NOTE: this function always produces the SANITIZED (no-space) key shape,
-    used for R2 storage and for the gallery's D1 index. The raw GCS key the
-    Worker mints for the actual upload does NOT sanitize, and can
-    legitimately contain a space in assignment_id/student_id --
-    parse_object_key below (backed by OBJECT_KEY_RE) must be able to parse
-    THAT raw shape too, which is why OBJECT_KEY_RE is space-tolerant even
-    though this function never emits a space itself.
+    CHANGE: `attempt` is still accepted as a parameter (every existing
+    caller already passes it, and some callers -- e.g. the nightly gallery
+    sweep -- use it for other bookkeeping around the call), but it is no
+    longer embedded in the returned key string. See module docstring for
+    why dropping it from the key is safe: submission_id is always a fresh,
+    Worker-minted id per attempt, so two attempts for the same
+    (assignment_id, student_id) never collide on the same object key even
+    without an explicit "-{attempt}" suffix to disambiguate them.
+
+    NOTE: this function always produces the SANITIZED (no-space),
+    LENGTH-CAPPED key shape, used for R2 storage and for the gallery's D1
+    index. The raw GCS key the Worker mints for the actual upload does NOT
+    sanitize or truncate, and can legitimately contain a space and a longer
+    assignment_id segment -- parse_object_key below (backed by
+    OBJECT_KEY_RE) must be able to parse THAT raw shape too, which is why
+    OBJECT_KEY_RE stays space-tolerant and un-length-capped even though
+    this function never emits either itself.
     """
-    safe_assignment_id = sanitize_key_segment(assignment_id)
+    safe_assignment_id = sanitize_key_segment(assignment_id)[:ASSIGNMENT_ID_KEY_SEGMENT_MAX_LEN]
     safe_student_id = sanitize_key_segment(student_id)
-    return f"tapapp/{safe_assignment_id}/{safe_student_id}/{submission_id}-{attempt}.{ext}"
+    return f"tapapp/{safe_assignment_id}/{safe_student_id}/{submission_id}.{ext}"
 
 
 def parse_object_key(object_key: str) -> dict:
     """Parses a tapapp object key -- either the raw, space-tolerant shape the
-    Worker mints for a GCS upload, or the sanitized, no-space shape
-    build_object_key produces for R2/gallery storage. See OBJECT_KEY_RE's own
-    comment above for why the pattern tolerates a space: this function must
-    successfully parse BOTH shapes, since callers such as
-    shared.submission.lifecycle._validate_object_key_attempt receive the
-    client-supplied, UNSANITIZED object_key (the one the Worker actually
-    minted and the client actually uploaded to), not a sanitized copy."""
+    Worker mints for a GCS upload, or the sanitized, length-capped, no-space
+    shape build_object_key produces for R2/gallery storage. See
+    OBJECT_KEY_RE's own comment above for why the pattern tolerates a space:
+    this function must successfully parse BOTH shapes, since callers such as
+    shared.submission.lifecycle receive the client-supplied, UNSANITIZED
+    object_key (the one the Worker actually minted and the client actually
+    uploaded to), not a sanitized copy.
+
+    CHANGE: the key no longer carries its own attempt segment, so this no
+    longer returns a real "attempt" parsed out of the string. Every caller
+    that needs the true attempt number must get it from Frappe's own
+    submission_attempts counter (or from the in-memory request it already
+    has), never from this return value. "attempt" is still present in the
+    returned dict, fixed at 1, purely so existing callers that
+    destructure/type this dict by the same keys as before don't need an
+    unrelated shape change -- but reading it for anything other than "a key
+    was present" is almost certainly wrong now; callers doing an
+    attempt-number integrity check must compare against the real counter
+    directly instead.
+    """
     m = OBJECT_KEY_RE.match(object_key or "")
     if not m:
         raise InvalidInput("object_key does not match the expected shape")
     d = m.groupdict()
-    d["attempt"] = int(d["attempt"])
+    d["attempt"] = 1
     return d
 
 

@@ -117,7 +117,7 @@
   },
   {
    "fieldname": "submission_url",
-   "fieldtype": "Small Text",
+   "fieldtype": "Data",
    "label": "Submission URL"
   },
   {
