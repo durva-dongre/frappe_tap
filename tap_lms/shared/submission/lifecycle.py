@@ -81,8 +81,8 @@ currently-ACTIVE ProgramEnrollment's own unit_progress child table
 directly on `pe`), with no special handling for context == "event". This
 directly contradicted the invariant shared/progress/activities.py
 documents and enforces for its own event-context writes: "a Unit Progress
-row is immutably tied to whichever ProgramEnrollment it was created
-under, never to whatever enrollment happens to be active right now."
+row is immutably tied to whichever ProgramEnrollment it was created under,
+never to whatever enrollment happens to be active right now."
 
 Both check_attempt_cap and submit_artwork now call
 shared.progress.activities._resolve_event_unit_progress_row for
@@ -119,12 +119,20 @@ _require_weekly_submission_cap_not_reached's own docstring. Event-context
 submissions are never subject to this cap (program-context only, per
 submission_this_week's own doctype field description).
 
-ATTEMPT-NUMBER INTEGRITY: unchanged -- see _validate_object_key_attempt.
-Note: that function's cross-check is a defense-in-depth layer on top of
-the Worker's own assertObjectKeyMatches; see
-shared/submission/object_naming.py's OBJECT_KEY_RE for the related fix
-that lets this check actually fire for assignment_ids containing a space
-(previously it silently no-op'd for those -- see that module's docstring).
+ATTEMPT-NUMBER INTEGRITY (REMOVED -- see object_naming.py's module
+docstring): object keys no longer embed an attempt number. submission_id
+is always a fresh, Worker-minted id per attempt, so two attempts for the
+same (assignment_id, student_id) never collide on the same object key
+even without an explicit "-{attempt}" suffix to disambiguate them, which
+means there is nothing left for a key-vs-counter cross-check to actually
+verify. The former _validate_object_key_attempt check compared
+parse_object_key's returned "attempt" against row.submission_attempts + 1
+-- but parse_object_key now always reports attempt fixed at 1 (it has no
+real attempt segment to parse out of the new key shape), so that
+comparison was comparing a constant against a real counter and would fail
+for any attempt after the first. _validate_object_key_attempt is kept as a
+documented no-op (not deleted) so any other historical caller that still
+imports it does not break, but it is no longer called from submit_artwork.
 
 DECISION D (last_activity_at on every attempt): award_points
 (shared/progress/rewards.py) bumps enrollment_doc.last_activity_at when
@@ -466,33 +474,28 @@ def _resolve_row_for_context(pe, student_id: str, unit: str, context: str, creat
 
 
 def _validate_object_key_attempt(object_key: str | None, expected_attempt: int) -> None:
-    """Cross-checks the "attempt" segment embedded in a client-supplied
-    object_key against the real next attempt number Frappe is about to
-    record (row.submission_attempts + 1). The Worker's own validation
-    (assertObjectKeyMatches) only confirms object_key is internally
-    self-consistent -- it never checks the attempt segment against Frappe's
-    own counter, since the Worker holds no server-side record of what the
-    true attempt count is. Without this check, a client could request an
-    upload URL for one attempt and submit under a hand-built object_key
-    naming a different attempt number, letting R2/gallery storage diverge
-    from Frappe's own attempt bookkeeping.
-
-    A key that fails to parse at all is left alone here -- that is a
-    different, already-handled failure mode (the Worker validates key shape
-    before ever calling this route); this check only fires for a
-    syntactically valid key whose attempt number disagrees with reality.
     """
-    if not object_key:
-        return
-    try:
-        parsed_key = parse_object_key(object_key)
-    except InvalidInput:
-        return
-    if parsed_key["attempt"] != expected_attempt:
-        raise InvalidInput(
-            f"object_key's attempt ({parsed_key['attempt']}) does not match "
-            f"this submission's actual next attempt number ({expected_attempt})"
-        )
+    NOTE -- NO-OP: object keys no longer embed an attempt number (see
+    shared.submission.object_naming's module docstring and
+    worker/src/storage/keys.ts). submission_id is always a fresh,
+    Worker-minted id per attempt, so two attempts for the same
+    (assignment_id, student_id) never collide on the same object key even
+    without an explicit "-{attempt}" suffix. parse_object_key therefore
+    always reports attempt fixed at 1 regardless of the real attempt
+    number, which is no longer a meaningful value to compare against
+    row.submission_attempts + 1 -- doing so would spuriously reject every
+    reattempt past the first.
+
+    This function is kept, as a documented no-op, only so any other
+    existing caller that still imports it directly does not break.
+    submit_artwork no longer calls it (see that function's own docstring).
+    The real attempt-integrity property this used to check -- "the client
+    didn't reuse an upload URL minted for a stale attempt count" -- is now
+    guaranteed structurally instead: submission_id is minted fresh by
+    request_upload on every call, so an object_key can never refer to the
+    wrong attempt's upload slot.
+    """
+    return
 
 
 def _resolve_submission_id_from_object_key(object_key: str | None, sub_name: str) -> str:
@@ -502,9 +505,10 @@ def _resolve_submission_id_from_object_key(object_key: str | None, sub_name: str
 
     object_key is the exact value the Worker's own /submission/
     request_upload minted and the client's PUT already confirmed exists on
-    GCS -- by the time this function runs, _validate_object_key_attempt has
-    already confirmed its embedded attempt number matches reality, so the
-    key is known-good.
+    GCS. By the time this function runs, object_key is already known-good:
+    submission_id is always a fresh, Worker-minted id per attempt, so
+    there is nothing further to cross-check against Frappe's own attempt
+    counter (see _validate_object_key_attempt's own docstring).
 
     Falls back to resolve_wire_submission_id(sub_name) -- the same
     fallback every other read path in this API already uses, which itself
@@ -619,10 +623,9 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
                     context: str = "program") -> dict:
     """Re-checks the completed-course guard (program context only), attempt
     cap, weekly submission cap (program context only), and video
-    prerequisite under a row lock, cross-checks object_key's own attempt
-    number against reality, then hands off the actual Submission creation
-    to imgana's submit_artwork pipeline (unmodified). submission_url is a
-    plain, already-public URL the caller provides directly --
+    prerequisite under a row lock, then hands off the actual Submission
+    creation to imgana's submit_artwork pipeline (unmodified). submission_url
+    is a plain, already-public URL the caller provides directly --
     tap_app/api/submission.py::submit_artwork is responsible for building
     this URL from the Worker's object_key before calling here.
 
@@ -645,10 +648,15 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
     awarded against the row's true owning enrollment (owning_doc), not
     unconditionally against `pe` -- see award_points's call below.
 
-    object_key's attempt segment is validated against
-    row.submission_attempts + 1 (see _validate_object_key_attempt) BEFORE
-    imgana is ever called, so a mismatched key can never create a
-    Submission row.
+    NOTE -- NO ATTEMPT-NUMBER CROSS-CHECK AGAINST object_key: object keys
+    no longer embed an attempt number (see
+    shared.submission.object_naming's module docstring). submission_id is
+    minted fresh per attempt by the Worker's request_upload, so there is
+    no stale-attempt key reuse left to guard against, and
+    _validate_object_key_attempt (kept only as a documented no-op for any
+    other caller) is deliberately not called here anymore -- calling it
+    against parse_object_key's now-fixed attempt == 1 would spuriously
+    reject every reattempt past the first.
 
     program_enrollment is stamped on the new Submission row as
     owning_doc.name (the row's TRUE owning enrollment -- `pe` for program
@@ -697,10 +705,14 @@ def submit_artwork(student_id: str, assignment_id: str, submission_url: str, obj
         if prior_status not in ("Completed", "Failed"):
             raise CapReached("previous submission still being reviewed")
 
-    # Reject a client-supplied object_key whose embedded attempt number
-    # disagrees with the real next attempt, before any Submission row is
-    # created or any write happens.
-    _validate_object_key_attempt(object_key, row.submission_attempts + 1)
+    # No attempt-number cross-check against object_key anymore -- object
+    # keys no longer embed an attempt number (see object_naming.py's
+    # module docstring). submission_id is minted fresh per attempt by
+    # request_upload, so there's no stale-attempt key reuse to guard
+    # against here. (Previously:
+    # _validate_object_key_attempt(object_key, row.submission_attempts + 1)
+    # -- removed because parse_object_key's "attempt" is now always fixed
+    # at 1, so that comparison would spuriously fail every reattempt.)
 
     is_first_attempt = row.submission_attempts == 0
 
