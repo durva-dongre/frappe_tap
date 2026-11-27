@@ -10,13 +10,16 @@ Add further internal endpoints as new files in this same folder.
 This file (student_handling.py) covers student bulk-onboarding and the
 test-student reset flow. It exposes four whitelisted endpoints:
 
-  - onboard_students    : create/update Student records, their Student
-                          Enrollment child rows and ProgramEnrollment
-                          documents, in bulk, from a list of row dicts
-                          (e.g. one row per spreadsheet line). Each row may
-                          independently set School, State and District --
-                          State/District are NOT derived from the School;
-                          whatever is given in the row wins.
+  - onboard_students    : create/update Student records and their
+                          ProgramEnrollment documents, in bulk, from a list
+                          of row dicts (e.g. one row per spreadsheet line).
+                          Each row may independently set School, State and
+                          District -- State/District are NOT derived from
+                          the School; whatever is given in the row wins.
+                          There is no Student Enrollment child table in this
+                          design: batch/course_level tracking lives entirely
+                          on ProgramEnrollment, and Student carries only its
+                          own `level` field (L1/L2/L3).
 
   - reset_students      : for a list of existing Student IDs, delete their
                           Submission records and clear (not delete) the
@@ -44,6 +47,18 @@ Both endpoints accept and return plain JSON-serializable data only, and
 never raise on a per-row failure -- each row's outcome is reported back so
 the caller (a spreadsheet script) can mark successes/failures per line
 without the whole batch aborting.
+
+IMPORTANT -- level fields, two different option sets:
+  - Student.level is a Select with options exactly "L1"/"L2"/"L3", derived
+    from grade by _get_level_for_grade() below (or overridden by the row's
+    own `level` column).
+  - Course Level.level is a *different* Select, with options "Level 0",
+    "Level 1", ..., "Level 4K". That value lives only on the Course Level
+    doc itself (looked up via the row's `course_level` column) and is never
+    written here -- ProgramEnrollment links to Course Level but has no
+    `level` field of its own.
+  These two option sets must never be cross-assigned. This file only ever
+  writes the L1/L2/L3 form, and only to Student.level.
 """
 
 import json
@@ -59,7 +74,7 @@ from frappe.utils import cstr, getdate, nowdate
 @frappe.whitelist()
 def onboard_students(rows):
     """
-    Bulk create/update students with enrollment + program enrollment.
+    Bulk create/update students with a ProgramEnrollment.
 
     `rows` is a list of dicts (or a JSON string of such a list). Each row
     may contain:
@@ -80,12 +95,14 @@ def onboard_students(rows):
         language         TAP Language doc name
         preferred_day
         preferred_time
-        batch            Batch doc name, used for the Student Enrollment
-                          child row
-        course_level     Course Level doc name, used for ProgramEnrollment
+        batch            Batch doc name, used (with course_level) to
+                          create/find the student's ProgramEnrollment
+        course_level     Course Level doc name, used (with batch) to
+                          create/find the student's ProgramEnrollment
         level            Student.level override; one of L1/L2/L3. If
                           omitted, derived from grade (1-5 -> L1, 6-8 -> L2,
-                          9-12 -> L3)
+                          9-12 -> L3). This is ONLY ever "L1"/"L2"/"L3" --
+                          never the Course Level-style "Level N" values.
         status           Student.status, defaults to "active"
         joined_on        Student.joined_on, a date (e.g. "2026-04-01").
                           Optional -- only used when the Student is being
@@ -164,13 +181,17 @@ def onboard_students(rows):
 
 
 def _onboard_one_student(row):
-    """Create or update a single Student + enrollment + ProgramEnrollment.
+    """Create or update a single Student + ProgramEnrollment.
 
     School, State and District are each resolved independently from the
     row's own school_id/school_keyword, state_id and district_id -- State
     and District are NEVER inferred from the chosen School, even though
     School itself links to both. If a row wants District/State to match
     its School, the sheet must say so explicitly in those columns.
+
+    There is no Student Enrollment child table in this design -- batch and
+    course_level are tracked solely via ProgramEnrollment, not written onto
+    the Student doc itself.
 
     Returns (student_name, "created"|"updated", program_enrollment_name_or_None).
     Raises on any validation problem; caller is responsible for catching.
@@ -189,6 +210,8 @@ def _onboard_one_student(row):
     district_id = _resolve_link("District", row.get("district_id"))
 
     grade = row.get("grade")
+    # Student.level options are exactly "L1"/"L2"/"L3" -- never the Course
+    # Level-style "Level N" values. See module docstring.
     level = row.get("level") or _get_level_for_grade(grade)
 
     existing_name = frappe.db.get_value(
@@ -227,18 +250,6 @@ def _onboard_one_student(row):
     if district_id:
         doc.district_id = district_id
 
-    batch = row.get("batch")
-    if batch:
-        already_enrolled = any(
-            cstr(en.get("batch")) == cstr(batch) for en in (doc.enrollment or [])
-        )
-        if not already_enrolled:
-            doc.append("enrollment", {
-                "batch": batch,
-                "grade": grade,
-                "level": level,
-            })
-
     if action == "created":
         if not doc.joined_on:
             doc.joined_on = _resolve_joined_on(row.get("joined_on"))
@@ -247,6 +258,7 @@ def _onboard_one_student(row):
         doc.save(ignore_permissions=False)
 
     program_enrollment_name = None
+    batch = row.get("batch")
     course_level = row.get("course_level")
     if batch and course_level:
         program_enrollment_name = _get_or_create_program_enrollment(
