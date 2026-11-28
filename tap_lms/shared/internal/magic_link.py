@@ -71,6 +71,33 @@ single phone/call, not a batch of rows).
 
 from __future__ import annotations
 
+import os
+import sys
+
+# Bootstrap identical to tap_lms/tap_app/api/__init__.py's own: this file
+# lives at tap_lms/shared/internal/magic_link.py, so three dirname() calls
+# from this file's own path reach tap_lms/ (the bench app root that
+# directly contains the top-level "shared" package) -- the same directory
+# tap_app/api/__init__.py inserts into sys.path for exactly the same
+# reason.
+#
+# WHY THIS IS NEEDED HERE BUT NOT IN student_handling.py: Frappe's
+# frappe.get_attr() dispatch for a whitelisted method imports the target
+# module DIRECTLY (importlib.import_module("tap_lms.shared.internal.
+# magic_link")) -- it never goes through tap_app/__init__.py or
+# tap_app/api/__init__.py first, so neither of those modules' own
+# sys.path insertions have necessarily already run by the time this
+# file's own top-level imports execute. tap_lms/shared/internal/
+# student_handling.py never hit this because it imports nothing from the
+# "shared" package at all (only frappe + stdlib) -- this file does
+# (shared.auth, shared.config, shared.enrollment, shared.errors,
+# shared.submission), so it needs this same bootstrap tap_app/api/
+# __init__.py already carries, applied here too, independently of
+# whether anything under tap_app/ has been imported yet in this process.
+_APP_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _APP_ROOT not in sys.path:
+    sys.path.insert(0, _APP_ROOT)
+
 import frappe
 
 from shared.auth.magic_link import create_magic_link_v2
